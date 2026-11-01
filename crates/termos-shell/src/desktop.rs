@@ -114,6 +114,8 @@ pub struct DesktopOptions {
     pub pane_ids: PaneIds,
     /// Extra environment for panes (e.g. `TERMOS=<socket>,<pid>,<session>`).
     pub pane_env: Vec<(String, String)>,
+    /// Where the first shell starts (default: the server's directory).
+    pub cwd: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -332,7 +334,7 @@ impl Desktop {
     ) -> io::Result<Self> {
         let mut d = Self::blank(opts, config, pty_tx, cols, rows);
         let area = d.layout_area();
-        let first = d.spawn_term(None, (area.w, area.h))?;
+        let first = d.spawn_term(d.opts.cwd.clone(), (area.w, area.h))?;
         d.session = Session::new(d.opts.session_name.clone(), Workspace::new("shell", first));
         let marker = d.opts.paths.tutorial_marker();
         if d.config.tutorial.show_on_first_run && !marker.exists() {

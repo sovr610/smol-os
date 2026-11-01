@@ -109,6 +109,10 @@ pub struct Hello {
     /// Plugins: the token the server gave the plugin process.
     #[serde(default)]
     pub token: Option<String>,
+    /// Frontends creating a session: the directory its first shell starts
+    /// in (the client's own, like tmux).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
 }
 
 impl Hello {
@@ -120,6 +124,7 @@ impl Hello {
             session: None,
             create: false,
             token: None,
+            cwd: None,
         }
     }
 }

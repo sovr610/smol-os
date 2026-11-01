@@ -507,7 +507,11 @@ impl Server {
 
     /// Creates a session with one shell. Without a name it is `main`, or
     /// else the first free number.
-    pub fn create_session(&mut self, name: Option<&str>) -> Result<SessionKey, RpcError> {
+    pub fn create_session(
+        &mut self,
+        name: Option<&str>,
+        cwd: Option<&str>,
+    ) -> Result<SessionKey, RpcError> {
         let name = match name {
             Some(n) => {
                 valid_session_name(n)?;
@@ -521,7 +525,8 @@ impl Server {
             None => self.free_name(),
         };
         let key = self.next_session;
-        let opts = self.desktop_options(key, name);
+        let mut opts = self.desktop_options(key, name);
+        opts.cwd = cwd.map(PathBuf::from).filter(|c| c.is_dir());
         let desktop = Desktop::new(opts, self.config.clone(), self.pty_tx.clone(), 80, 24)
             .map_err(|e| {
                 RpcError::new(codes::INTERNAL_ERROR, format!("cannot start a shell: {e}"))
@@ -533,6 +538,7 @@ impl Server {
 
     fn desktop_options(&self, key: SessionKey, name: String) -> DesktopOptions {
         DesktopOptions {
+            cwd: None,
             session_name: name,
             config_path: self.opts.config_path.clone(),
             paths: self.opts.paths.clone(),
@@ -773,12 +779,12 @@ impl Server {
         match &hello.session {
             Some(name) => match self.find_session(name) {
                 Some(k) => Ok(k),
-                None if hello.create => self.create_session(Some(name)),
+                None if hello.create => self.create_session(Some(name), hello.cwd.as_deref()),
                 None => Err(RpcError::not_found(format!("no session named `{name}`"))),
             },
             None => match self.most_recent() {
                 Some(k) => Ok(k),
-                None if hello.create => self.create_session(None),
+                None if hello.create => self.create_session(None, hello.cwd.as_deref()),
                 None => Err(RpcError::not_found(
                     "there are no sessions; start one with `termos`",
                 )),
@@ -1521,7 +1527,7 @@ impl Server {
                     }
                 }
             }
-            SessionRequest::New { client } => match self.create_session(None) {
+            SessionRequest::New { client } => match self.create_session(None, None) {
                 Ok(k) => self.move_client(client, k),
                 Err(e) => self.post_to_client(client, &e.message),
             },
@@ -1789,9 +1795,11 @@ impl Server {
                 struct P {
                     #[serde(default)]
                     name: Option<String>,
+                    #[serde(default)]
+                    cwd: Option<String>,
                 }
                 let p: P = req.params_as()?;
-                let key = self.create_session(p.name.as_deref())?;
+                let key = self.create_session(p.name.as_deref(), p.cwd.as_deref())?;
                 Ok(json!({ "id": format!("${key}"), "name": self.session_name(key) }))
             }
             "session.kill" => {

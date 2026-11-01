@@ -1,27 +1,34 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! `termos`: the TermOS command-line entry point.
 //!
-//! `termos` with no subcommand starts the hosted desktop in the current
-//! terminal: the desktop server and the terminal client run in one process,
-//! connected by the in-process transport (DECISIONS.md D-007). Detaching and
-//! reattaching arrive with the socket transport in M3.
+//! Like tmux, TermOS is a server and clients (DECISIONS.md D-029 to D-031).
+//! The server is a daemon that owns the sessions and their programs; it is
+//! started on demand by the first client and stops when its last session
+//! ends. `termos` with no subcommand attaches to the session `main`,
+//! creating it (and the server) if needed. Inside a TermOS pane, commands
+//! such as `termos msg` and `termos detach` talk to the server and session
+//! the pane belongs to (`$TERMOS`).
 
 mod client;
 
 use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::time::{Duration, Instant};
 
-use anyhow::Context as _;
+use anyhow::{Context as _, bail};
 use clap::{Parser, Subcommand};
+use serde_json::{Value, json};
 use termos_core::config::{Config, DEFAULT_CONFIG};
 use termos_core::paths::Paths;
+use termos_core::transport::{ConnectError, connect_frontend, control_call};
 use termos_core::watch::ConfigWatcher;
 use termos_core::wire::{ConnKind, Hello};
 use termos_render::caps::Caps;
 use termos_shell::keys::KeyTables;
 use termos_shell::notify::Level;
 use termos_shell::server::{Server, ServerOptions};
+use termos_shell::snapshot::describe_time;
 use tokio::sync::mpsc;
 
 /// Long version string, e.g. `0.0.0 (x86_64-unknown-linux-gnu)`.
@@ -32,18 +39,28 @@ const LONG_VERSION: &str = concat!(
     ")"
 );
 
+/// The server name when neither `-L` nor `-S` is given.
+const DEFAULT_SERVER: &str = "default";
+
 /// TermOS: a terminal-first desktop environment.
 ///
-/// Run without a subcommand to start the desktop in this terminal. The
-/// prefix key is Ctrl+B (like tmux); Ctrl+Space opens the command palette.
+/// Run without a subcommand to attach to the session "main" in this
+/// terminal, starting it if needed. The prefix key is Ctrl+B (like tmux);
+/// Ctrl+B d detaches, Ctrl+Space opens the command palette.
 #[derive(Debug, Parser)]
 #[command(name = "termos", version, long_version = LONG_VERSION)]
 struct Cli {
     /// Use this config file instead of ~/.config/termos/config.toml.
     #[arg(long, value_name = "PATH", global = true)]
     config: Option<PathBuf>,
-    /// Start even inside another TermOS pane (nesting).
-    #[arg(long)]
+    /// Server name: servers with different names are independent.
+    #[arg(short = 'L', value_name = "NAME", global = true)]
+    socket_name: Option<String>,
+    /// Server socket path (overrides -L).
+    #[arg(short = 'S', value_name = "PATH", global = true)]
+    socket_path: Option<PathBuf>,
+    /// Attach even inside another TermOS pane (nesting).
+    #[arg(long, global = true)]
     force: bool,
     #[command(subcommand)]
     command: Option<Cmd>,
@@ -51,6 +68,50 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Cmd {
+    /// Create a session and attach to it.
+    #[command(alias = "new-session")]
+    New {
+        /// Session name (default: the first free number).
+        #[arg(short = 's', value_name = "NAME")]
+        name: Option<String>,
+        /// Create it without attaching.
+        #[arg(short = 'd')]
+        detached: bool,
+    },
+    /// Attach to a session (default: the most recently used one).
+    #[command(alias = "a", alias = "attach-session")]
+    Attach {
+        /// Session name or id ($N).
+        #[arg(short = 't', value_name = "SESSION")]
+        target: Option<String>,
+    },
+    /// Detach the clients of a session (default: this one, inside TermOS).
+    #[command(alias = "detach-client")]
+    Detach {
+        #[arg(short = 's', value_name = "SESSION")]
+        session: Option<String>,
+    },
+    /// List sessions, and saved sessions that can be restored.
+    #[command(alias = "list-sessions")]
+    Ls,
+    /// End a session and every program in it (default: this one).
+    KillSession {
+        #[arg(short = 't', value_name = "SESSION")]
+        target: Option<String>,
+    },
+    /// Stop the server. Its sessions are saved and can be restored.
+    KillServer,
+    /// Call a control-API method, e.g. `termos msg pane.split-right` or
+    /// `termos msg notify.send '{"text": "hi"}'`. Prints the result as JSON.
+    Msg {
+        method: String,
+        /// Parameters as a JSON object.
+        params: Option<String>,
+    },
+    /// Restore saved sessions (all, or those named).
+    Restore { names: Vec<String> },
+    /// Run the server in the foreground (clients start it as a daemon).
+    Server,
     /// Inspect the configuration.
     Config {
         #[command(subcommand)]
@@ -72,13 +133,67 @@ enum ConfigCmd {
     Path,
 }
 
+/// Which server a command talks to.
+#[derive(Debug, Clone)]
+struct Target {
+    socket: PathBuf,
+    /// The server's name (its snapshot directory).
+    name: String,
+    /// The session of the pane we run in, when it belongs to this server.
+    session: Option<String>,
+}
+
+/// `$TERMOS` inside a pane: `<socket>,<server pid>,$<session id>`.
+fn inside_termos() -> Option<(PathBuf, String)> {
+    let value = std::env::var("TERMOS").ok()?;
+    let mut parts = value.rsplitn(3, ',');
+    let session = parts.next()?;
+    let _pid = parts.next()?;
+    let socket = parts.next()?;
+    session
+        .starts_with('$')
+        .then(|| (PathBuf::from(socket), session.to_owned()))
+}
+
+fn resolve_target(cli: &Cli, paths: &Paths) -> anyhow::Result<Target> {
+    let inside = inside_termos();
+    let (socket, name) = if let Some(path) = &cli.socket_path {
+        let name = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or(DEFAULT_SERVER)
+            .to_owned();
+        (path.clone(), name)
+    } else if let Some(name) = &cli.socket_name {
+        if name.is_empty() || name.contains('/') {
+            bail!("-L takes a name, not a path (use -S for a path)");
+        }
+        (paths.socket_path(name), name.clone())
+    } else if let Some((socket, _)) = &inside {
+        let name = socket
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or(DEFAULT_SERVER)
+            .to_owned();
+        (socket.clone(), name)
+    } else {
+        (paths.socket_path(DEFAULT_SERVER), DEFAULT_SERVER.to_owned())
+    };
+    let session = inside.filter(|(s, _)| *s == socket).map(|(_, id)| id);
+    Ok(Target {
+        socket,
+        name,
+        session,
+    })
+}
+
 fn main() -> ExitCode {
     let cli = Cli::parse();
     let paths = Paths::detect();
     let config_path = cli.config.clone().unwrap_or_else(|| paths.config_file());
-    let result = match cli.command {
+    let result = match &cli.command {
         Some(Cmd::Config { action }) => config_command(action, &config_path),
-        None => run_desktop(cli.force, &paths, &config_path),
+        _ => resolve_target(&cli, &paths).and_then(|t| run(&cli, &paths, &config_path, &t)),
     };
     match result {
         Ok(code) => code,
@@ -89,7 +204,333 @@ fn main() -> ExitCode {
     }
 }
 
-fn config_command(action: ConfigCmd, active: &Path) -> anyhow::Result<ExitCode> {
+fn run(cli: &Cli, paths: &Paths, config_path: &Path, t: &Target) -> anyhow::Result<ExitCode> {
+    let cwd = std::env::current_dir()
+        .ok()
+        .map(|d| d.display().to_string());
+    match &cli.command {
+        None => {
+            let mut hello = Hello::new(ConnKind::Frontend);
+            hello.session = Some("main".into());
+            hello.create = true;
+            hello.cwd = cwd;
+            attach(cli, paths, config_path, t, hello, true)
+        }
+        Some(Cmd::New { name, detached }) => {
+            if !detached {
+                attach_checks(cli)?;
+            }
+            ensure_server(t, config_path)?;
+            let created = call(t, "session.new", Some(json!({"name": name, "cwd": cwd})))?;
+            if *detached {
+                return Ok(ExitCode::SUCCESS);
+            }
+            let mut hello = Hello::new(ConnKind::Frontend);
+            hello.session = created["name"].as_str().map(str::to_owned);
+            attach(cli, paths, config_path, t, hello, false)
+        }
+        Some(Cmd::Attach { target }) => {
+            let mut hello = Hello::new(ConnKind::Frontend);
+            hello.session.clone_from(target);
+            attach(cli, paths, config_path, t, hello, false)
+        }
+        Some(Cmd::Detach { session }) => {
+            let session = session.clone().or_else(|| t.session.clone()).context(
+                "not inside TermOS: say which session to detach with -s NAME (`termos ls` lists them)",
+            )?;
+            call(t, "client.detach", Some(json!({"session": session})))?;
+            Ok(ExitCode::SUCCESS)
+        }
+        Some(Cmd::Ls) => list(t),
+        Some(Cmd::KillSession { target }) => {
+            let session = target.clone().or_else(|| t.session.clone()).context(
+                "not inside TermOS: say which session to kill with -t NAME (`termos ls` lists them)",
+            )?;
+            call(t, "session.kill", Some(json!({"session": session})))?;
+            Ok(ExitCode::SUCCESS)
+        }
+        Some(Cmd::KillServer) => {
+            call(t, "server.kill", None)?;
+            wait_gone(&t.socket);
+            Ok(ExitCode::SUCCESS)
+        }
+        Some(Cmd::Msg { method, params }) => {
+            let mut params: Option<Value> = params
+                .as_deref()
+                .map(serde_json::from_str)
+                .transpose()
+                .context("the parameters must be JSON, e.g. '{\"text\": \"hi\"}'")?;
+            // Inside a pane, methods act on that pane's session by default.
+            if let Some(session) = &t.session {
+                match &mut params {
+                    None => params = Some(json!({"session": session})),
+                    Some(Value::Object(m)) if !m.contains_key("session") => {
+                        m.insert("session".into(), Value::from(session.as_str()));
+                    }
+                    _ => {}
+                }
+            }
+            let result = call(t, method, params)?;
+            if !result.is_null() {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            }
+            Ok(ExitCode::SUCCESS)
+        }
+        Some(Cmd::Restore { names }) => {
+            let started = ensure_server(t, config_path)?;
+            let params = (!names.is_empty()).then(|| json!({"names": names}));
+            match call(t, "session.restore", params) {
+                Ok(r) => {
+                    let restored: Vec<&str> = r["restored"]
+                        .as_array()
+                        .map(|a| a.iter().filter_map(Value::as_str).collect())
+                        .unwrap_or_default();
+                    println!("restored: {}", restored.join(", "));
+                    for f in r["failed"].as_array().into_iter().flatten() {
+                        eprintln!("termos: could not restore {}", f.as_str().unwrap_or("?"));
+                    }
+                    Ok(ExitCode::SUCCESS)
+                }
+                Err(e) => {
+                    if started {
+                        // Nothing to restore: do not leave an empty server.
+                        let _ = call(t, "server.kill", None);
+                    }
+                    Err(e)
+                }
+            }
+        }
+        Some(Cmd::Server) => run_server(paths, config_path, t),
+        Some(Cmd::Config { .. }) => Ok(ExitCode::SUCCESS),
+    }
+}
+
+fn runtime() -> anyhow::Result<tokio::runtime::Runtime> {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("cannot start the async runtime")
+}
+
+fn explain(t: &Target, e: ConnectError) -> anyhow::Error {
+    match e {
+        ConnectError::NoServer(_) => {
+            anyhow::anyhow!("no server running on {}", t.socket.display())
+        }
+        other => anyhow::anyhow!("{other}"),
+    }
+}
+
+/// One control call to the server.
+fn call(t: &Target, method: &str, params: Option<Value>) -> anyhow::Result<Value> {
+    runtime()?
+        .block_on(control_call(&t.socket, method, params))
+        .map_err(|e| explain(t, e))
+}
+
+/// Starts the server daemon unless one is running. Returns whether it
+/// started one.
+fn ensure_server(t: &Target, config_path: &Path) -> anyhow::Result<bool> {
+    if std::os::unix::net::UnixStream::connect(&t.socket).is_ok() {
+        return Ok(false);
+    }
+    let exe = std::env::current_exe().context("cannot find the termos executable")?;
+    let mut child = std::process::Command::new(exe)
+        .arg("server")
+        .arg("-S")
+        .arg(&t.socket)
+        .arg("--config")
+        .arg(config_path)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .context("cannot start the server")?;
+    // Startup takes milliseconds; this loop only runs until then.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        if std::os::unix::net::UnixStream::connect(&t.socket).is_ok() {
+            // Reap it if it exits before we do.
+            std::thread::spawn(move || child.wait());
+            return Ok(true);
+        }
+        if let Some(status) = child.try_wait()? {
+            // Another client may have started a server at the same moment.
+            if std::os::unix::net::UnixStream::connect(&t.socket).is_ok() {
+                return Ok(false);
+            }
+            bail!("the server did not start ({status}); see the logs in the state directory");
+        }
+        if Instant::now() > deadline {
+            bail!("the server did not start within 10 seconds");
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+/// Waits briefly for a stopping server to remove its socket.
+fn wait_gone(socket: &Path) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while socket.exists() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+/// Refuses to attach where a client cannot work.
+fn attach_checks(cli: &Cli) -> anyhow::Result<()> {
+    if let Ok(value) = std::env::var("TERMOS")
+        && !cli.force
+    {
+        let pid = value.split(',').nth(1).unwrap_or(&value).to_owned();
+        bail!(
+            "already running inside TermOS (server pid {pid}); nesting is usually a mistake, use --force to do it anyway"
+        );
+    }
+    if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
+        bail!("stdin and stdout must be a terminal (run `termos --help` for other commands)");
+    }
+    Ok(())
+}
+
+/// Connects this terminal to a session and runs the client until it is
+/// detached or the session ends.
+fn attach(
+    cli: &Cli,
+    paths: &Paths,
+    config_path: &Path,
+    t: &Target,
+    hello: Hello,
+    start_server: bool,
+) -> anyhow::Result<ExitCode> {
+    attach_checks(cli)?;
+    if start_server {
+        ensure_server(t, config_path)?;
+    }
+    if let Err(e) = termos_core::log::init_file_logging(&paths.log_dir(), "termos") {
+        eprintln!("termos: logging disabled: {e}");
+    }
+    let runtime = runtime()?;
+    let (_, end) = runtime
+        .block_on(connect_frontend(&t.socket, &hello))
+        .map_err(|e| explain(t, e))?;
+    let mut caps = Caps::from_env(|k| std::env::var(k).ok());
+
+    let mut stdout = std::io::stdout();
+    let guard = client::TerminalGuard::enter(&mut stdout).context("cannot set up the terminal")?;
+    caps.kitty_keyboard = guard.kitty_keyboard();
+    let kitty = guard.kitty_keyboard();
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        client::restore_terminal(kitty);
+        default_hook(info);
+    }));
+    let ended = {
+        let mut out = stdout.lock();
+        runtime.block_on(client::run(end, caps, &mut out))
+    };
+    drop(guard);
+    let mut stdout = std::io::stdout();
+    match ended.context("terminal I/O failed")? {
+        client::Ended::Detached(session) => {
+            let _ = writeln!(stdout, "[detached (from session {session})]");
+        }
+        client::Ended::Exited(reason) => {
+            let _ = writeln!(stdout, "[exited: {reason}]");
+        }
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+/// `termos ls`.
+fn list(t: &Target) -> anyhow::Result<ExitCode> {
+    let rt = runtime()?;
+    let sessions = match rt.block_on(control_call(&t.socket, "session.list", None)) {
+        Ok(v) => v,
+        Err(ConnectError::NoServer(_)) => {
+            println!("no server running on {}", t.socket.display());
+            return Ok(ExitCode::FAILURE);
+        }
+        Err(e) => return Err(explain(t, e)),
+    };
+    for s in sessions.as_array().into_iter().flatten() {
+        let n = |k: &str| s[k].as_u64().unwrap_or(0);
+        let attached = match n("clients") {
+            0 => String::new(),
+            1 => " (attached)".into(),
+            c => format!(" ({c} clients)"),
+        };
+        println!(
+            "{}: {} workspaces, {} panes (created {}){attached}",
+            s["name"].as_str().unwrap_or("?"),
+            n("workspaces"),
+            n("panes"),
+            describe_time(n("created")),
+        );
+    }
+    let saved = rt
+        .block_on(control_call(&t.socket, "session.saved", None))
+        .map_err(|e| explain(t, e))?;
+    for s in saved.as_array().into_iter().flatten() {
+        println!(
+            "{}: saved at {}, not running (`termos restore`)",
+            s["name"].as_str().unwrap_or("?"),
+            describe_time(s["saved_at"].as_u64().unwrap_or(0)),
+        );
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+/// `termos server`: the daemon (or a foreground server for debugging).
+fn run_server(paths: &Paths, config_path: &Path, t: &Target) -> anyhow::Result<ExitCode> {
+    // No controlling terminal: closing the terminal that started us must
+    // not stop the sessions. Fails only if we already lead a session.
+    let _ = rustix::process::setsid();
+    if let Err(e) = termos_core::log::init_file_logging(&paths.log_dir(), "server") {
+        eprintln!("termos: logging disabled: {e}");
+    }
+    let (config, config_error) = match Config::load(config_path) {
+        Ok(c) => (c, None),
+        Err(e) => (Config::default(), Some(e.to_string())),
+    };
+    let runtime = runtime()?;
+    let _enter = runtime.enter();
+    let mut opts = ServerOptions::new(&t.name, paths.clone(), config_path.to_owned());
+    opts.socket_path.clone_from(&t.socket);
+    opts.handle_signals = true;
+    let mut server = Server::new(opts, config);
+    if let Some(e) = config_error {
+        server.notice(Level::Error, format!("using default settings: {e}"));
+    }
+    let listener = server
+        .bind()
+        .context("cannot listen on the session socket")?;
+    let (reload_tx, reload_rx) = mpsc::unbounded_channel();
+    let watcher = match ConfigWatcher::spawn(config_path, reload_tx) {
+        Ok(w) => {
+            server.set_reload(reload_rx);
+            Some(w)
+        }
+        Err(e) => {
+            server.notice(
+                Level::Warn,
+                format!("config changes will not be picked up automatically: {e}"),
+            );
+            None
+        }
+    };
+    tracing::info!(
+        "server {} listening on {} (pid {})",
+        t.name,
+        t.socket.display(),
+        std::process::id()
+    );
+    let reason = runtime.block_on(server.run(Some(listener)));
+    tracing::info!("server stopped: {reason}");
+    drop(watcher);
+    Ok(ExitCode::SUCCESS)
+}
+
+fn config_command(action: &ConfigCmd, active: &Path) -> anyhow::Result<ExitCode> {
     match action {
         ConfigCmd::Default => {
             print!("{DEFAULT_CONFIG}");
@@ -127,83 +568,47 @@ fn config_command(action: ConfigCmd, active: &Path) -> anyhow::Result<ExitCode> 
     }
 }
 
-fn run_desktop(force: bool, paths: &Paths, config_path: &Path) -> anyhow::Result<ExitCode> {
-    if let Ok(pid) = std::env::var("TERMOS")
-        && !force
-    {
-        anyhow::bail!(
-            "already running inside TermOS (server pid {pid}); nesting is usually a mistake, use --force to do it anyway"
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_command_line_parses() {
+        <Cli as clap::CommandFactory>::command().debug_assert();
+        let cli = Cli::parse_from(["termos", "-L", "work", "new", "-s", "web", "-d"]);
+        assert_eq!(cli.socket_name.as_deref(), Some("work"));
+        assert!(matches!(
+            cli.command,
+            Some(Cmd::New { ref name, detached: true }) if name.as_deref() == Some("web")
+        ));
+        let cli = Cli::parse_from(["termos", "a", "-t", "main"]);
+        assert!(
+            matches!(cli.command, Some(Cmd::Attach { ref target }) if target.as_deref() == Some("main"))
         );
+        let cli = Cli::parse_from(["termos", "msg", "notify.send", "{\"text\":\"hi\"}"]);
+        assert!(matches!(cli.command, Some(Cmd::Msg { ref params, .. }) if params.is_some()));
     }
-    if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
-        anyhow::bail!(
-            "stdin and stdout must be a terminal (run `termos --help` for other commands)"
+
+    #[test]
+    fn targets() {
+        let paths = Paths {
+            config_dir: "/c".into(),
+            state_dir: "/s".into(),
+            runtime_dir: "/r".into(),
+        };
+        let t =
+            resolve_target(&Cli::parse_from(["termos", "-L", "x", "ls"]), &paths).expect("target");
+        assert_eq!(t.socket, PathBuf::from("/r/x.sock"));
+        assert_eq!(t.name, "x");
+        let t = resolve_target(
+            &Cli::parse_from(["termos", "-S", "/tmp/a.sock", "ls"]),
+            &paths,
+        )
+        .expect("target");
+        assert_eq!(
+            (t.socket.to_str(), t.name.as_str()),
+            (Some("/tmp/a.sock"), "a")
         );
+        assert!(resolve_target(&Cli::parse_from(["termos", "-L", "a/b", "ls"]), &paths).is_err());
     }
-    if let Err(e) = termos_core::log::init_file_logging(&paths.log_dir()) {
-        eprintln!("termos: logging disabled: {e}");
-    }
-    let (config, config_error) = match Config::load(config_path) {
-        Ok(c) => (c, None),
-        Err(e) => (Config::default(), Some(e.to_string())),
-    };
-    let mut caps = Caps::from_env(|k| std::env::var(k).ok());
-
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .context("cannot start the async runtime")?;
-    let _enter = runtime.enter();
-
-    // TODO(M3): run the server as a daemon on its socket and attach to it.
-    let opts = ServerOptions::new("default", paths.clone(), config_path.to_owned());
-    let mut server = Server::new(opts, config);
-    if let Some(e) = config_error {
-        server.notice(Level::Error, format!("using default settings: {e}"));
-    }
-    let (reload_tx, reload_rx) = mpsc::unbounded_channel();
-    let watcher = match ConfigWatcher::spawn(config_path, reload_tx) {
-        Ok(w) => {
-            server.set_reload(reload_rx);
-            Some(w)
-        }
-        Err(e) => {
-            server.notice(
-                Level::Warn,
-                format!("config changes will not be picked up automatically: {e}"),
-            );
-            None
-        }
-    };
-    let connector = server.connector();
-    let server = runtime.spawn(server.run(None));
-    let mut hello = Hello::new(ConnKind::Frontend);
-    hello.session = Some("main".into());
-    hello.create = true;
-    let (_, client_end) = runtime
-        .block_on(connector.attach(hello))
-        .map_err(|e| anyhow::anyhow!("{}", e.message))
-        .context("cannot start the session")?;
-
-    let mut stdout = std::io::stdout();
-    let guard = client::TerminalGuard::enter(&mut stdout).context("cannot set up the terminal")?;
-    caps.kitty_keyboard = guard.kitty_keyboard();
-    let kitty = guard.kitty_keyboard();
-    let default_hook = std::panic::take_hook();
-    std::panic::set_hook(Box::new(move |info| {
-        client::restore_terminal(kitty);
-        default_hook(info);
-    }));
-
-    let reason = {
-        let mut out = stdout.lock();
-        runtime.block_on(client::run(client_end, caps, &mut out))
-    };
-    drop(guard);
-    server.abort();
-    drop(watcher);
-    let reason = reason.context("terminal I/O failed")?;
-    let mut stdout = std::io::stdout();
-    let _ = writeln!(stdout, "[exited: {reason}]");
-    Ok(ExitCode::SUCCESS)
 }

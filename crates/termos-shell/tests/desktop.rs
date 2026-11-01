@@ -60,6 +60,7 @@ impl Harness {
             env_shell: None,
             pane_ids: termos_core::ids::PaneIds::new(),
             pane_env: Vec::new(),
+            cwd: None,
         };
         let mut desktop = Desktop::new(opts, config, tx, COLS, ROWS).expect("desktop starts");
         desktop.handle_client(
@@ -572,6 +573,7 @@ async fn snapshots_keep_layout_and_scrollback() {
         env_shell: None,
         pane_ids: termos_core::ids::PaneIds::new(),
         pane_env: Vec::new(),
+        cwd: None,
     };
     let config = Config::load(&h.config_path()).expect("config");
     let (mut restored, skipped) =

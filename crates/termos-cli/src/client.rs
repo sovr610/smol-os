@@ -154,13 +154,17 @@ pub(crate) fn convert(event: Event) -> Option<ClientMsg> {
     }
 }
 
-/// Runs the frontend until the server says the session ended. Returns the
-/// reason.
-pub(crate) async fn run(
-    mut end: ClientEnd,
-    caps: Caps,
-    out: &mut impl Write,
-) -> io::Result<String> {
+/// How an attached client ended.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Ended {
+    /// Detached from this session; it keeps running.
+    Detached(String),
+    /// The session or the server ended, for this reason.
+    Exited(String),
+}
+
+/// Runs the frontend until the server detaches it or the session ends.
+pub(crate) async fn run(mut end: ClientEnd, caps: Caps, out: &mut impl Write) -> io::Result<Ended> {
     let (cols, rows) = terminal::size()?;
     let send = |end: &ClientEnd, msg: ClientMsg| {
         end.tx
@@ -187,7 +191,7 @@ pub(crate) async fn run(
                     }
                 }
                 Some(Err(e)) => return Err(e),
-                None => return Ok("the terminal closed".into()),
+                None => return Ok(Ended::Exited("the terminal closed".into())),
             },
             msg = end.rx.recv() => match msg {
                 Some(ServerMsg::Frame(f)) => {
@@ -207,11 +211,9 @@ pub(crate) async fn run(
                     out.write_all(&set_title(&t))?;
                     out.flush()?;
                 }
-                Some(ServerMsg::Exit { reason }) => return Ok(reason),
-                Some(ServerMsg::Detached { session }) => {
-                    return Ok(format!("detached (from session {session})"));
-                }
-                None => return Ok("the desktop server stopped".into()),
+                Some(ServerMsg::Exit { reason }) => return Ok(Ended::Exited(reason)),
+                Some(ServerMsg::Detached { session }) => return Ok(Ended::Detached(session)),
+                None => return Ok(Ended::Exited("the server closed the connection".into())),
             },
         }
     }

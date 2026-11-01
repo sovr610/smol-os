@@ -19,10 +19,13 @@ anyhow.workspace = true
 clap.workspace = true
 crossterm.workspace = true
 futures-util.workspace = true
+rustix.workspace = true
+serde_json.workspace = true
 termos-core.workspace = true
 termos-render.workspace = true
 termos-shell.workspace = true
 tokio = { workspace = true, features = ["rt", "macros", "sync", "time"] }
+tracing.workspace = true
 
 [dev-dependencies]
 portable-pty.workspace = true

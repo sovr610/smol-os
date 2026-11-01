@@ -7,6 +7,8 @@
 
 use std::io::{Read, Write};
 use std::num::NonZeroU16;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Output};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
@@ -22,18 +24,14 @@ struct Shared {
     closed: bool,
 }
 
-pub struct Termos {
-    shared: Arc<(Mutex<Shared>, Condvar)>,
-    writer: Arc<Mutex<Box<dyn Write + Send>>>,
-    pub child: Box<dyn Child + Send + Sync>,
-    _master: Box<dyn MasterPty + Send>,
-    _dir: tempfile::TempDir,
+/// An isolated home, config, state and runtime directory. Dropping it
+/// stops the server started in it.
+pub struct Env {
+    dir: tempfile::TempDir,
 }
 
-impl Termos {
-    /// Starts `termos` with an isolated config/state directory and
-    /// `/bin/sh` as the shell.
-    pub fn start(extra_config: &str) -> Self {
+impl Env {
+    pub fn new(extra_config: &str) -> Arc<Self> {
         let dir = tempfile::tempdir().expect("tempdir");
         let cfg = dir.path().join("config").join("termos");
         std::fs::create_dir_all(&cfg).expect("mkdir");
@@ -44,6 +42,77 @@ impl Termos {
             ),
         )
         .expect("config");
+        Arc::new(Self { dir })
+    }
+
+    pub fn path(&self) -> &Path {
+        self.dir.path()
+    }
+
+    /// The default server's socket.
+    pub fn socket(&self) -> PathBuf {
+        self.path().join("run").join("termos").join("default.sock")
+    }
+
+    fn vars(&self) -> Vec<(&'static str, PathBuf)> {
+        let d = self.path();
+        vec![
+            ("HOME", d.to_owned()),
+            ("XDG_CONFIG_HOME", d.join("config")),
+            ("XDG_STATE_HOME", d.join("state")),
+            ("XDG_RUNTIME_DIR", d.join("run")),
+            ("SHELL", "/bin/sh".into()),
+            ("TERM", "xterm-256color".into()),
+            ("PS1", "$ ".into()),
+        ]
+    }
+
+    /// Runs `termos ARGS` without a terminal (`ls`, `msg`, …).
+    pub fn run(&self, args: &[&str]) -> Output {
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_termos"));
+        cmd.args(args).env_remove("TERMOS").env_remove("TMUX");
+        for (k, v) in self.vars() {
+            cmd.env(k, v);
+        }
+        cmd.output().expect("spawn termos")
+    }
+}
+
+impl Drop for Env {
+    fn drop(&mut self) {
+        if self.socket().exists() {
+            let _ = self.run(&["kill-server"]);
+        }
+    }
+}
+
+pub struct Termos {
+    shared: Arc<(Mutex<Shared>, Condvar)>,
+    writer: Arc<Mutex<Box<dyn Write + Send>>>,
+    pub child: Box<dyn Child + Send + Sync>,
+    _master: Box<dyn MasterPty + Send>,
+    pub env: Arc<Env>,
+}
+
+impl Termos {
+    /// Starts `termos` with an isolated config/state/runtime directory and
+    /// `/bin/sh` as the shell.
+    pub fn start(extra_config: &str) -> Self {
+        Self::spawn(Env::new(extra_config), &[])
+    }
+
+    /// Another client in the same environment: `termos ARGS` on a new
+    /// terminal.
+    pub fn client(&self, args: &[&str]) -> Self {
+        Self::spawn(Arc::clone(&self.env), args)
+    }
+
+    /// Runs `termos ARGS` without a terminal in the same environment.
+    pub fn run(&self, args: &[&str]) -> Output {
+        self.env.run(args)
+    }
+
+    fn spawn(env: Arc<Env>, args: &[&str]) -> Self {
         let pair = native_pty_system()
             .openpty(PtySize {
                 rows: ROWS,
@@ -53,14 +122,12 @@ impl Termos {
             })
             .expect("openpty");
         let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_termos"));
+        cmd.args(args);
         cmd.env_remove("TERMOS");
         cmd.env_remove("TMUX");
-        cmd.env("HOME", dir.path());
-        cmd.env("XDG_CONFIG_HOME", dir.path().join("config"));
-        cmd.env("XDG_STATE_HOME", dir.path().join("state"));
-        cmd.env("SHELL", "/bin/sh");
-        cmd.env("TERM", "xterm-256color");
-        cmd.env("PS1", "$ ");
+        for (k, v) in env.vars() {
+            cmd.env(k, v);
+        }
         let child = pair.slave.spawn_command(cmd).expect("spawn termos");
         drop(pair.slave);
         let mut reader = pair.master.try_clone_reader().expect("reader");
@@ -111,7 +178,7 @@ impl Termos {
             writer,
             child,
             _master: pair.master,
-            _dir: dir,
+            env,
         }
     }
 

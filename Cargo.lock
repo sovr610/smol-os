@@ -1934,11 +1934,14 @@ dependencies = [
  "crossterm",
  "futures-util",
  "portable-pty",
+ "rustix",
+ "serde_json",
  "tempfile",
  "termos-core",
  "termos-render",
  "termos-shell",
  "tokio",
+ "tracing",
  "vt100",
 ]
 

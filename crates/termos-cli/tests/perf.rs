@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//! Performance budgets (DECISIONS.md D-019), measured on the real binary:
-//! keystroke-to-screen latency, idle CPU and memory. Linux only (reads
-//! /proc). `cargo xtask perf` runs this in release mode with the full
+//! Performance budgets (DECISIONS.md D-019), measured on the real binaries
+//! (the client and the server daemon together): keystroke-to-screen
+//! latency, idle CPU and memory. Linux only (reads /proc). `cargo xtask perf` runs this in release mode with the full
 //! 60-second idle measurement.
 
 #![cfg(target_os = "linux")]
@@ -43,7 +43,15 @@ fn rss_mb(pid: u32) -> f64 {
 fn latency_idle_cpu_and_memory_budgets() {
     let t = Termos::start("");
     t.wait_ready();
-    let pid = t.child.process_id().expect("pid");
+    let client = t.child.process_id().expect("pid");
+    let info = t.run(&["msg", "server.info"]);
+    let info: serde_json::Value = serde_json::from_slice(&info.stdout).expect("server.info JSON");
+    let server = info["pid"]
+        .as_u64()
+        .and_then(|p| u32::try_from(p).ok())
+        .expect("server pid");
+    assert_ne!(client, server, "the server is a separate daemon");
+    let cpu = || cpu_seconds(client) + cpu_seconds(server);
     // `cat` keeps the pane in the foreground; the TTY echoes each key.
     t.send(b"cat\r");
     std::thread::sleep(Duration::from_millis(500));
@@ -78,15 +86,16 @@ fn latency_idle_cpu_and_memory_budgets() {
         .and_then(|v| v.parse().ok())
         .unwrap_or(10);
     std::thread::sleep(Duration::from_millis(500));
-    let before = cpu_seconds(pid);
+    let before = cpu();
     std::thread::sleep(Duration::from_secs(idle_secs));
-    let used = cpu_seconds(pid) - before;
+    let used = cpu() - before;
     let pct = used / idle_secs as f64 * 100.0;
     println!("idle CPU over {idle_secs}s: {used:.2}s = {pct:.3}%");
     assert!(pct < 1.0, "idle CPU {pct:.3}% exceeds 1%");
 
-    let rss = rss_mb(pid);
-    println!("RSS: {rss:.1} MB");
+    let (rss_client, rss_server) = (rss_mb(client), rss_mb(server));
+    let rss = rss_client + rss_server;
+    println!("RSS: client {rss_client:.1} MB + server {rss_server:.1} MB = {rss:.1} MB");
     assert!(rss < 150.0, "RSS {rss:.1} MB exceeds 150 MB");
 
     // Throughput: an output flood is parsed in full but drawn at frame

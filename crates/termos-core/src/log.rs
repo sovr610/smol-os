@@ -6,14 +6,17 @@ use std::path::Path;
 
 use tracing_subscriber::EnvFilter;
 
-/// Sends `tracing` output to `<dir>/termos.log.<date>` (daily rotation, three
-/// files kept). The level comes from `TERMOS_LOG` (default `info`), using
+/// Sends `tracing` output to `<dir>/<name>.log.<date>` (daily rotation,
+/// three files kept): `server` for the daemon, `termos` for clients. The level comes from `TERMOS_LOG` (default `info`), using
 /// `tracing` filter syntax, e.g. `TERMOS_LOG=termos_shell=debug`.
-pub fn init_file_logging(dir: &Path) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+pub fn init_file_logging(
+    dir: &Path,
+    name: &str,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     std::fs::create_dir_all(dir)?;
     let appender = tracing_appender::rolling::Builder::new()
         .rotation(tracing_appender::rolling::Rotation::DAILY)
-        .filename_prefix("termos.log")
+        .filename_prefix(format!("{name}.log"))
         .max_log_files(3)
         .build(dir)?;
     let filter = EnvFilter::try_from_env("TERMOS_LOG").unwrap_or_else(|_| EnvFilter::new("info"));
