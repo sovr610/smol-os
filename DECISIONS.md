@@ -121,7 +121,7 @@ rewrite history.
   - termion: Unix-only and less active.
 
 ## D-010: Wire protocol is postcard frames plus JSON-RPC control, on one Unix socket per server
-- **Status:** Accepted (lead) · 2026-11-01
+- **Status:** Accepted (lead), refined by D-031 · 2026-11-01
 - **Decision:**
   - **Socket:** `$XDG_RUNTIME_DIR/termos/<server>.sock`, in a 0700 directory.
   - **Peer check:** the server checks the connecting uid with `SO_PEERCRED` (Linux) or `getpeereid` (macOS) and rejects other users.
@@ -134,7 +134,7 @@ rewrite history.
   - A separate socket for control: more paths to secure for no gain.
 
 ## D-011: What "restore sessions after a reboot" means
-- **Status:** Accepted (lead) · 2026-11-01
+- **Status:** Accepted (lead), refined by D-033 · 2026-11-01
 - **Decision:**
   - **Restored:** sessions, workspaces, layout trees, window geometry and state. For each window, a restore recipe: kind, argv, working directory (from `/proc/<pid>/cwd` or OSC 7), an allowlisted environment and the title.
   - **Scrollback:** optional and off by default, because it can contain secrets. Stored with mode 0600.
@@ -152,7 +152,7 @@ rewrite history.
 - **Alternatives:** Helix as the default (its DAP support is experimental). Both first-class (twice the M5 work).
 
 ## D-013: Plugins come in two forms, out-of-process apps over JSON-RPC and WASM status-bar widgets
-- **Status:** Accepted (owner) · 2026-11-01
+- **Status:** Accepted (owner); the out-of-process part is refined by D-034 · 2026-11-01
 - **Decision:**
   - **Out-of-process (M3):** a plugin is any executable with a `plugin.toml` manifest declaring the permissions it requests. It connects to the session socket as a `plugin` client. It can create windows and draw cells, receive input, register palette commands and status widgets, and post notifications. Plugins launched by TermOS can run under the same sandbox as agents (M6). A Rust SDK, `termos-plugin`, wraps the protocol.
   - **WASM widgets (M4):** small status-bar widgets compiled to WASM components against a WIT world. The runtime sits behind a cargo feature and is instantiated only when a WASM widget is configured, so it costs nothing on a Pi that doesn't use it. Fuel/epoch and memory limits apply, and there's no filesystem or network access unless granted.
@@ -267,7 +267,7 @@ rewrite history.
 - **Consequences:** The M3 socket transport carries the same messages unchanged. Measured on the M1 build: p50 keystroke-to-screen latency is about 0.5 ms, and a 300k-line flood renders in about 0.25 s.
 
 ## D-027: Child environment and nesting
-- **Status:** Accepted (lead) · 2026-11-01
+- **Status:** Accepted (lead); the `TERMOS` value is superseded by D-029 · 2026-11-01
 - **Decision:**
   - Panes get `TERM=xterm-256color`, `COLORTERM=truecolor`, `TERMOS=<server pid>` and `TERMOS_PANE=%N`.
   - `termos` refuses to start inside a TermOS pane unless `--force` is given, as tmux does.
@@ -280,6 +280,115 @@ rewrite history.
   - An idle desktop has no timers, with one exception: the optional status-line clock wakes once per wall-clock minute.
   - Which-key, toast-expiry, key-repeat and program sync-update timers are armed only while those things are active.
 - **Consequences:** Idle CPU measured over 10 s on the M1 build is 0.000%.
+
+## D-029: `termos` attaches to or creates "main"; tmux-style session commands
+- **Status:** Accepted (owner: default command; lead: the rest) · 2026-11-01
+- **Decision:**
+  - **`termos`** with no subcommand attaches to the session `main`, creating it (and the server) if needed, like `tmux new -A -s main`.
+  - **Subcommands:**
+    - `new [-s NAME] [-d]`: the session starts in the client's directory;
+    - `attach [-t NAME]`, default: the most recently used session;
+    - `detach [-s NAME]`, `ls`, `kill-session [-t NAME]`, `kill-server`;
+    - `msg METHOD [JSON]`, `restore [NAMES]`;
+    - the internal `server`.
+    - tmux aliases: `a`, `attach-session`, `new-session`, `list-sessions`, `detach-client`.
+  - **Server selection:** `-L NAME` picks a server by name and `-S PATH` by socket path.
+  - **Session names:** 1 to 64 characters, with no `/`, `:` or control characters. Names starting with `$` are reserved for ids (`$1`). Unnamed sessions get the first free number.
+  - **Lifetime:** the server stops when its last session ends, as tmux does.
+  - **Pane environment:** panes get `TERMOS=<socket>,<server pid>,$<session id>`; this **supersedes the value in D-027**. Commands run inside a pane use it to find their server and session: `termos detach`, `termos kill-session` and `termos msg` (which adds `"session"` to its parameters) act on the pane's own session. The nesting guard applies only to commands that attach a terminal.
+  - **Keys:** `prefix d` detaches, `prefix (` / `prefix )` go to the previous/next session, `prefix $` renames the session. `session.switch NAME`, `session.new` and `session.restore` are palette commands.
+- **Alternatives:** keeping a single-process `termos` and adding the daemon behind a flag. Rejected: detach is the point of M3.
+
+## D-030: The server daemon's lifecycle
+- **Status:** Accepted (lead) · 2026-11-01
+- **Decision:**
+  - **Startup:** a client that finds no server spawns `termos server -S <socket>` with null stdio and waits up to 10 s for the socket. If two clients race, the loser's server sees a live socket and exits; the client then uses the winner.
+  - **Detaching from the terminal:** the server calls `rustix::process::setsid()` itself (safe Rust, no `pre_exec`), so it has no controlling terminal and survives the terminal that started it.
+  - **Signals:** SIGTERM, SIGINT and SIGHUP are handled with `tokio::signal`. The server writes every session's snapshot, tells clients why it stopped, removes the socket and exits. Interactive shells ignore SIGTERM, so on a reboot the server saves before its panes go away.
+  - **Logs:** `server.log.<date>` and `termos.log.<date>` (clients) in the state log directory.
+  - **Plugins** start with the first session (D-034).
+
+## D-031: Socket, handshake and framing (refines D-010)
+- **Status:** Accepted (lead) · 2026-11-01
+- **Decision:**
+  - **Socket:** `$XDG_RUNTIME_DIR/termos/<name>.sock`, falling back to `$TMPDIR/termos-<uid>/<name>.sock`.
+    - The directory is created with mode 0700; one owned by another user is refused, and wider permissions are tightened.
+    - The socket itself is chmod 0600.
+    - A stale socket (nothing listening) is replaced; a live one makes a second server refuse to start.
+  - **Peer check:** `UnixStream::peer_cred()` (SO_PEERCRED / getpeereid). Any uid but the server's is answered with JSON-RPC error `-32003` and closed.
+  - **Handshake:** every connection's first line is a JSON-RPC request `hello {version, kind: frontend|control|plugin, client, session?, create?, token?, cwd?}`.
+    - Errors: a different `version` gets `-32001` with a message telling the user to restart the server; a missing session gets `-32004`.
+    - The reply is `{version, server, pid, session}`.
+  - **Frontends:** after the reply they switch to frames: a little-endian u32 length plus a postcard body, at most 16 MiB. The first frame is the client's `Hello {caps, cols, rows}`. The server can send `Detached {session}` as well as `Exit {reason}`.
+  - **Control and plugin connections:** stay on newline-delimited JSON-RPC 2.0, with lines capped at 4 MiB.
+  - **Errors:** `-32700/-32600/-32601/-32602/-32603` standard; `-32001` version mismatch, `-32002` hello required, `-32003` forbidden, `-32004` not found.
+  - **Control API (v1):**
+    - server: `server.info`, `server.kill`, `config.reload`;
+    - sessions: `session.list/new/kill/rename/restore/saved`;
+    - clients: `client.list/detach`;
+    - panes: `pane.list/send-text/send-keys/kill`;
+    - other: `notify.send`, `command.run`, `plugin.list`.
+    - Every named desktop command, and every plugin command, also works directly as a method (`termos msg pane.split-right`).
+- **Alternatives:** a binary handshake (unreadable to scripts); a separate control socket (more to secure).
+
+## D-032: One server, many sessions, many clients
+- **Status:** Accepted (lead) · 2026-11-01
+- **Decision:**
+  - **Sessions:** the server holds many sessions, one `Desktop` each. Pane ids are allocated server-wide, so PTY events route by pane id.
+  - **What is per-client, what is per-session:**
+    - per-client (`ClientUi`): terminal size and capabilities, prefix/key-table state, which-key, palette, prompts, mouse drags and status-line hit regions;
+    - per-session: workspaces, panes, copy mode, the paste buffer and notifications.
+  - **Session size:** `[session] window-size = latest | smallest | largest` (default latest). A client whose terminal is smaller than the session sees the top-left part; frames are cropped server-side, and a wide character cut in half becomes a blank.
+  - **Backpressure:** a client gets its next frame only after its connection task has written the previous one. A slow link (SSH) gets fewer, coalesced frames instead of a growing queue; the next frame is a diff against what it last received.
+  - **Ending a session:** its clients move to the most recently used other session, or get `Exit` if there is none.
+- **Consequences:** Several terminals can show the same session; each has its own overlays and prompts.
+
+## D-033: Snapshots and restore (refines D-011)
+- **Status:** Accepted (owner: restore scope and default policy; lead: format and timing) · 2026-11-01
+- **Decision:**
+  - **File:** JSON at `$XDG_STATE_HOME/termos/sessions/<server>/<session>.json`.
+    - Mode 0600 in a 0700 directory, written atomically (temporary file, fsync, rename).
+    - Session names are percent-encoded in file names.
+    - Versioned (`version: 1`); damaged or future files are skipped with a warning.
+  - **Contents:** the wm `Session` (workspaces, layout trees, floats, focus, names). Per pane: working directory, the foreground program's name and title, and the text of the scrollback if `[session] save-scrollback = true` (default false).
+    - The foreground program's **command line is stored only if the program is on the allowlist**, so a password typed on a command line never reaches the disk.
+  - **When it's written:** after structural changes (splits, closes, renames, a new program in front, `cd` reported by OSC 7), debounced by `snapshot-delay-ms` (2000), and at shutdown. No timer runs while nothing changes.
+  - **When it's deleted:** when the session ends on purpose (its last pane exits, `kill-session`, `session.quit`). `kill-server` and crashes keep it.
+  - **Restore (owner):** each pane gets a shell in its saved directory, or the default one if the directory is gone. Programs on `[session] restore-programs` (default `vim nvim less man htop top`) are typed back into that shell, so quitting them leaves the user at a prompt. Other programs are only named in a notification. Built-in app windows are not restored. Layouts are repaired if damaged, and pane ids are renumbered.
+  - **Policy (owner):** `[session] restore = "ask"` (default), `"always"` or `"never"`.
+    - **ask:** the first client of a fresh server is asked in the status line, "Restore session main saved at 14:02? (y/n)". "y" replaces the fresh session with its saved state and restores the others beside it. "n" keeps the snapshots for `termos restore` / `session.restore`.
+    - Until the question is answered, the asking session's own snapshot is not overwritten.
+    - Restoring on demand next to a running session of the same name gives it a new name (`main-2`).
+- **Alternatives:**
+  - CRIU-style checkpointing: out of scope (D-011).
+  - Periodic snapshots: they cost wakeups (D-028).
+
+## D-034: Plugins v1 (refines the out-of-process part of D-013)
+- **Status:** Accepted (lead) · 2026-11-01
+- **Decision:**
+  - **Install and consent:** a plugin is a directory `~/.config/termos/plugins/<name>/` with a `plugin.toml`:
+    - `name` (must equal the directory name: lowercase, digits, `-`, `_`), `version`, `description`;
+    - `exec = [...]`: a program containing `/` is relative to the plugin directory; otherwise it's found in `PATH`;
+    - `[permissions] windows, status, commands, notify`, all false by default.
+    - It runs **only** while listed in `[plugins] enabled`; listing it is the user's consent.
+  - **Launch:** the server starts plugins with its first session (so they have somewhere to open windows), and on config reload.
+    - Each gets `TERMOS_SOCKET`, `TERMOS_PLUGIN_NAME` and a fresh `TERMOS_PLUGIN_TOKEN`: 128 bits from `/dev/urandom`, compared in constant time, never logged or shown in Debug output.
+    - stdout goes to `/dev/null`; stderr goes to the server log.
+    - A token admits one connection at a time.
+  - **Protocol (JSON-RPC over the session socket):**
+    - plugin → server: `window.open/draw/close`, `status.set`, `command.register`, `notify.send`;
+    - server → plugin notifications: `window.key/mouse/resize/closed`, `command.invoked`.
+    - Text is a list of lines; a line is a string or styled spans `{text, fg, bg, bold, dim, italic, underline, reverse}`, with colours written as in the config.
+    - Each request is checked against the manifest. A refusal (`-32003`) names the permission to add.
+  - **UI:**
+    - Plugin windows are floating in-process `App`s whose content the plugin draws remotely.
+    - Status widgets sit before the clock (at most 40 columns each).
+    - Commands are named `<plugin>.<name>`, cannot shadow built-ins, and appear in the palette and as control methods.
+    - Limits per plugin: 16 windows, 1000 lines of 1000 columns, 64 commands.
+  - **Failure:** a plugin that disconnects or exits loses its windows, widget and commands, and the user is notified. There's no automatic restart in v1; a config reload starts it again.
+  - **SDK:** a new leaf crate, `termos-plugin` (std, serde and serde_json only), holds the protocol types and a blocking SDK, with `examples/clock.rs`. Other languages speak JSON-RPC directly; the test suite includes a plain Python plugin.
+  - **Deferred:** running launched plugins under the agent sandbox comes with M6; the WASM widgets of D-013 are M4.
+- **Alternatives:** an async SDK (it would pull in tokio); auto-restart with backoff (to be revisited with real plugins).
 
 ---
 

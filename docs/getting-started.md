@@ -5,8 +5,8 @@ you already know most of it: a prefix key, panes, windows in a status
 line, copy mode. On top of that it adds floating windows you can drag
 around, a command palette, key hints, and a mouse that works everywhere.
 
-> **Status:** milestone M1 (hosted mode). Detaching and reattaching like
-> `tmux attach` arrive in M3. See [ROADMAP.md](../ROADMAP.md).
+> **Status:** milestone M3 (hosted mode, with sessions you can detach from
+> and restore). See [ROADMAP.md](../ROADMAP.md).
 
 ## Install and run
 
@@ -30,8 +30,12 @@ cargo run --release -p termos-cli
 The first time, a short tutorial opens. Press `→` to page through it and `q`
 to close it. Reopen it any time with `C-b F1`.
 
-TermOS exits when its last shell exits. You can also quit everything from the
-palette: `Ctrl+Space`, type `quit`, then press `Enter` and `y`.
+Like tmux, TermOS keeps running in the background: **`C-b d` detaches**, and
+`termos` again brings you back to where you were, even from another terminal
+or over SSH. A session ends when its last shell exits, or from the palette:
+`Ctrl+Space`, type `quit`, then press `Enter` and `y`. See
+[sessions.md](sessions.md) for sessions, `termos ls`, restoring after a
+reboot and scripting with `termos msg`.
 
 ## The prefix key
 
@@ -73,6 +77,9 @@ key for each command.
 | `C-b :` | Command palette (same as `Ctrl+Space`) |
 | `C-b N` | Notification center |
 | `C-b r` | Reload the config file |
+| `C-b d` | Detach (everything keeps running; `termos` reattaches) |
+| `C-b (` / `C-b )` | Previous / next session |
+| `C-b $` | Rename the session |
 
 ## Mouse
 
@@ -164,8 +171,9 @@ Every command name, such as `pane.zoom`, `layout.select tiled` or
 
 ## Differences from tmux
 
-- There is no `C-b d` (detach) yet; the session ends when TermOS exits.
-  Detach/attach and restoring sessions after a reboot are milestone M3.
+- `termos` alone attaches to the session `main`, creating it if needed (like
+  `tmux new -A -s main`). Sessions are restored after a crash or reboot
+  (asking first, by default).
 - `C-b l` is "last workspace", as in tmux. Vim-style `h j k l` focus keys are
   not bound by default; add them in `[keys.prefix]`.
 - Floating windows (`C-b f`), the palette (`Ctrl+Space`), which-key hints, the
@@ -182,4 +190,8 @@ Every command name, such as `pane.zoom`, `layout.select tiled` or
 - **Logs** are in `~/.local/state/termos/log/`. Use `TERMOS_LOG=debug termos`
   for more detail.
 - **"Already running inside TermOS":** you started `termos` in a TermOS pane.
-  Use `termos --force` if you really want to nest.
+  Use `termos --force` if you really want to nest. Commands that don't
+  attach (`termos ls`, `termos msg …`, `termos detach`) work fine in a pane.
+- **"protocol version mismatch":** you upgraded TermOS while an old server
+  was running. Stop it with `termos kill-server` (your sessions are saved
+  and offered for restore), then run `termos` again.

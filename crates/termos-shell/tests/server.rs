@@ -808,3 +808,38 @@ async fn plugins_add_windows_widgets_and_commands() {
     let list = call(&srv.socket, "plugin.list", json!({})).await;
     assert_eq!(list, json!([]));
 }
+
+#[tokio::test]
+async fn a_session_restored_in_place_keeps_plugin_widgets() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    // A first server leaves a snapshot behind.
+    let srv = start_in(dir.path(), "", |_| {});
+    let mut s = Screen::attach(&srv.socket, frontend(None, true), 100, 30).await;
+    s.ready().await;
+    kill(srv).await;
+
+    let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/hello_plugin.py");
+    write_plugin(
+        dir.path(),
+        "hello",
+        &["python3", script.to_str().expect("utf-8 path")],
+        "windows = true\nstatus = true\ncommands = true\nnotify = true",
+    );
+    let srv = start_in(
+        dir.path(),
+        "[session]\nrestore = \"ask\"\n[plugins]\nenabled = [\"hello\"]\n",
+        |_| {},
+    );
+    let mut s = Screen::attach(&srv.socket, frontend(None, true), 100, 30).await;
+    s.until("the question", |t| t.contains("Restore session main"))
+        .await;
+    until_plugin(&srv.socket, "hello", "the widget", |p| {
+        p["status"] == "py:hello"
+    })
+    .await;
+    s.key(KeyEvent::ch('y'));
+    s.until("the widget on the restored session", |t| {
+        t.contains("restored session main") && t.contains("py:hello")
+    })
+    .await;
+}

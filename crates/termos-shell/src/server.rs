@@ -724,9 +724,13 @@ impl Server {
                 ));
             }
         }
+        let (status, commands) = (self.plugins.status_widgets(), self.plugins.commands());
         if let Some(e) = self.sessions.get_mut(&key) {
             let mut old = std::mem::replace(&mut e.desktop, desktop);
             old.end("replaced by its saved state");
+            // What the server told the old desktop, the new one needs too.
+            e.desktop.set_plugin_ui(status, commands);
+            e.desktop.set_known_sessions(self.known_names.clone());
             e.last_used = Instant::now();
             for (id, hello) in hellos {
                 e.desktop.handle_client(id, hello);

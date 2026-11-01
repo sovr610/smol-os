@@ -16,7 +16,7 @@ questions (DECISIONS.md, "Open questions").
 | M0 | Plan docs, repo scaffold, CI, CLAUDE.md | ✅ |
 | M1 | tmux-style hosted desktop: renderer, PTY panes, window manager, palette, config (M1+M2 combined, D-022) | 🔍 |
 | M2 | Merged into M1 | 🔍 |
-| M3 | Session server, detach/attach, persistence, plugin API | ⏳ |
+| M3 | Session server, detach/attach, persistence, plugin API | 🔍 |
 | M4 | Graphics, themes, first built-in apps, WASM widgets | ⏳ |
 | M5 | Developer environment | ⏳ |
 | M6 | AI agents | ⏳ |
@@ -137,32 +137,84 @@ Then try: `C-b %`, `C-b "`, `C-b f`, `C-b c`, `Ctrl+Space`, `C-b [`, and the mou
 ---
 
 ## M3 — Session server, persistence, control and plugin API
-**Status:** ⏳ · **Ask first:** nothing new. Session restore (D-011) should store the tmux-style layout tree and float geometry from M1.
+**Status:** 🔍 done, awaiting review · Owner answers: plain `termos` attaches to or creates `main` (D-029); restore relaunches shells plus a safe-program allowlist, policy `ask` by default (D-033).
 
 **Deliverables**
 - **Server and socket:**
-  - `termos server` daemon and the Unix-socket `Transport`, with SO_PEERCRED/getpeereid checks;
-  - the versioned handshake;
-  - `termos attach [-t session]`, `detach`, `ls`, `kill-session`, `-L <server>`.
-- **Clients:** several clients at once, and the session size policy.
-- **Persistence:** session snapshots and restore after a reboot (D-011); restore policy `always | ask | never`.
-- **SSH:** documentation for the SSH workflow.
-- **Control API:** JSON-RPC 2.0 and `termos msg <method> [params]`.
+  - [x] `termos server` daemon: started on demand, `setsid`, signal handling, stops with its last session (D-030)
+  - [x] Unix socket in an owner-checked 0700 directory; stale-socket replacement; peer-uid check (D-031)
+  - [x] Versioned JSON-RPC `hello` handshake for frontends, control clients and plugins; clean version-mismatch and not-found errors
+  - [x] Frontends on length-prefixed postcard frames (16 MiB cap); JSON-RPC lines (4 MiB cap)
+  - [x] `termos` (attach/create `main`), `new [-s] [-d]`, `attach [-t]`, `detach`, `ls`, `kill-session`, `kill-server`, `restore`, `-L`/`-S`; tmux aliases
+  - [x] `C-b d` detach, `C-b (`/`)` session switching, `C-b $` rename; session commands in the palette
+  - [x] `$TERMOS=<socket>,<pid>,$<session>` in panes, so CLI commands inside a pane target their own server and session
+- **Clients:**
+  - [x] Several sessions per server and several clients per session, with per-client palette, prompts and which-key (D-032)
+  - [x] Session size policy `latest | smallest | largest`, with frames cropped for smaller terminals
+  - [x] Frame backpressure: one frame in flight per client, so slow links get coalesced diffs
+- **Persistence:**
+  - [x] Snapshots: layout, directories and foreground programs, plus optional scrollback text. Mode 0600, atomic writes, debounced, written at shutdown and deleted on an intentional end (D-033)
+  - [x] Restore: shells in their saved directories; allowlisted programs re-run; others named; damaged files repaired
+  - [x] Policy `always | ask | never`: the status-line question, in-place restore, `termos restore` and `session.restore` on demand
+- **SSH:**
+  - [x] [docs/sessions.md](docs/sessions.md): the SSH workflow, `-L` servers, OSC 52 over SSH, slow links
+- **Control API:**
+  - [x] JSON-RPC 2.0 methods for the server, sessions, clients, panes, notifications, commands and plugins; every named command is also a method
+  - [x] `termos msg METHOD [JSON]`
 - **Plugins:**
-  - out-of-process plugin API v1 (manifest, permissions, windows, palette commands, status widgets, notifications);
-  - the `termos-plugin` SDK crate (logged in DECISIONS.md) and an example plugin.
-- **Fuzzing:** a protocol-decoder fuzz target.
+  - [x] Plugin API v1: manifest, consent through `[plugins] enabled`, per-launch tokens, permissions, windows, palette commands, status widgets, notifications, input events (D-034)
+  - [x] `termos-plugin` SDK crate (protocol types, blocking client) and `examples/clock.rs`
+  - [x] [docs/plugins.md](docs/plugins.md), with Rust and Python examples
+- **Fuzzing:**
+  - [x] `proto_decode` target (frames in both directions, JSON-RPC and hello parsing) in the CI fuzz job
 
-**Acceptance**
-- Integration tests:
-  - detach and reattach preserves the screen and running processes;
-  - two clients attach at the same time;
-  - killing and restarting the server restores layout and working directories;
-  - foreign-uid connections are rejected;
-  - a protocol version mismatch is handled cleanly;
-  - the example plugin opens a window.
+**Acceptance (tested)**
+- `termos-shell/tests/server.rs` runs a real socket server in a temp directory and covers:
+  - **Detach and reattach:** the earlier output and the running shell are still there.
+  - **Two clients:** both see the session; keys from either reach the pane; the smaller terminal gets cropped frames.
+  - **Handshake:** a foreign uid is refused (`-32003`), and so are control connections from it. A version mismatch gets `-32001`; a missing session gets `-32004`.
+  - **Control API:** splits by command and by method, `pane.list`, `send-text`, `send-keys`, notifications, `pane.kill`, session create/rename/kill, and the error codes.
+  - **Sessions:** switching with `C-b (`/`)`; when a client's session ends, it moves to another one.
+  - **Server lifecycle:** it stops with its last session, `server.kill` works, a second server is refused on a live socket, and the socket file is removed.
+  - **Restart and restore:** a restarted server restores the layout, the directories, allowlisted `tail -f` (re-run) and a named `sleep` (not re-run). Command lines of other programs are not stored. Covered under `always`, `ask` → y (in place) and `ask` → n then on-demand restore (renamed `main-2`). Snapshots are deleted on intentional ends.
+  - **Plugins:** a raw-JSON-RPC Python plugin shows a window and a widget; its command runs from the palette and from the API; keys reach it; close notices arrive. A permission refusal, a missing plugin, the Rust SDK against the real server, one connection per token, and disabling by config reload are covered too.
+  - **Damage tracking:** one echoed key is a one-cell frame; an idle server sends nothing.
+- `termos-cli/tests/e2e.rs` runs the real binary and daemon on PTYs:
+  - split, `C-b d` (`[detached (from session main)]`), `termos ls`, `termos msg pane.list`, reattach from a second terminal with the screen intact;
+  - `msg` send-text and notify; `msg` and `detach` from inside a pane through `$TERMOS`;
+  - a missing session, `kill-server`, `ls` with no server, then `termos restore`.
+- Unit tests:
+  - the frame codec and size caps; handshake checks;
+  - snapshot round-trip, file permissions and damaged files;
+  - relaunch rules; layout remap and repair;
+  - manifests, tokens, styled text and command names; the SDK against a fake server.
+- **Budgets** (release build on the dev container, `cargo xtask perf 10`, client and daemon together):
 
-**Demo:** `termos`, detach, `termos ls`, `termos attach`; then `ssh -t host termos attach`.
+  | Metric | Measured | Budget |
+  | --- | --- | --- |
+  | Keystroke-to-screen latency, p50 | 0.7 ms | — |
+  | Keystroke-to-screen latency, p99 | 1.8 ms | < 16 ms |
+  | Idle CPU over 10 s | 0.1% (one 10 ms tick: the debounced snapshot after `cat` came to the front) | < 1% |
+  | RSS | 5.3 MB client + 6.8 MB server = 12.2 MB | < 150 MB |
+  | 300k-line flood | rendered in 0.17 s | — |
+
+**Demo** (live, in an isolated `tmux -L termos-demo` with its own TermOS home):
+1. `termos`, `C-b %`, then `C-b d` prints `[detached (from session main)]`.
+2. `termos ls` shows `main: 1 workspaces, 2 panes`. `termos attach` brings back both panes with their output.
+3. A second terminal attaches at the same time (`termos msg client.list` shows two clients). `termos msg notify.send` shows a toast in both.
+4. Enabling the example clock plugin and reloading the config opens its window and puts `⏱ 18:09` in the status line.
+5. `kill -9` the server. `termos ls` then says no server is running, and `termos` asks "Restore session main saved at 18:09? (y/n)". `y` restores the split; the plugin widget is still there.
+
+The demo found one bug, fixed with a regression test: a session restored in place lost the plugin widgets and the palette's session list.
+
+```bash
+termos            # C-b d to detach
+termos ls
+termos attach
+ssh -t host termos
+```
+
+**Not in this milestone:** sandboxing launched plugins (M6, with the agent sandbox); WASM widgets (M4); attaching a local client to a remote server through a forwarded socket (later); `subscribe` event streams on the control API (with M6 agents).
 
 ---
 
@@ -321,6 +373,7 @@ Generated from the `TODO(M<n>)` markers in the code. Don't edit by hand; run `ca
 | M5 | `crates/termos-apps/src/lib.rs` | package manager UI over mise, the dev rootfs and the host package manager. |
 | M5 | `crates/termos-devkit/src/lib.rs` | mise-backed toolchain manager, Neovim + LSP/DAP setup, dev rootfs, Git/build panels. |
 | M6 | `crates/termos-ai/src/lib.rs` | providers, streaming agent windows, sandboxed tools, permission engine, audit log, MCP, secrets. |
+| M6 | `crates/termos-shell/src/plugins.rs` | run launched plugins under the agent sandbox (bwrap + landlock). |
 | M7 | `crates/termos-models/src/lib.rs` | HF adapter, hardware-aware recommendations, llama.cpp backend, OpenAI-compatible router. |
 | M8 | `crates/termos-image/src/lib.rs` | Buildroot external tree, image build driver, QEMU boot tests for x86_64 and aarch64 virt. |
 | M8 | `crates/termos-render/src/lib.rs` | DRM/KMS backend with font rasterizer and adjustable font size. |

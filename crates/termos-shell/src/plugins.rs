@@ -479,6 +479,7 @@ impl PluginHost {
         let token = Token::generate().map_err(|e| format!("no random token: {e}"))?;
         let generation = self.next_generation;
         self.next_generation += 1;
+        // TODO(M6): run launched plugins under the agent sandbox (bwrap + landlock).
         let mut cmd = tokio::process::Command::new(program_path(&dir, &manifest.exec[0]));
         cmd.args(&manifest.exec[1..])
             .current_dir(&dir)

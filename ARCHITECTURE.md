@@ -56,7 +56,7 @@ agents and models. A frontend is only a *client* of the server (D-007).
  └──────────────────┘   Transport        │  shell/Desktop ─ wm ─ compositor ─ per-client │
  ┌──────────────────┐   M1: in-process   │        │          │                  diffs    │
  │ KMS client       │◀─ channel          │      apps       term: PTY + VT ──────────────┼──▶ child processes
- │ (bare metal)     │   M3: Unix socket  │   (in-process)                               │    (shells, nvim,
+ │ (bare metal)     │   or Unix socket   │   (in-process)                               │    (shells, nvim,
  └──────────────────┘                    │      ai: agent loops ─ permission engine ────┼──▶  CLI agents …)
  ┌──────────────────┐                    │                                               │
  │ headless client  │◀───────────────────│  JSON-RPC control API ◀── termos CLI, scripts │
@@ -72,8 +72,10 @@ agents and models. A frontend is only a *client* of the server (D-007).
 ```
 
 **Processes**
-- **`termos`:** with no arguments it connects to the default server, spawning one if needed, and attaches a terminal client. Until M3 the server and client run as two tasks in one process.
-- **`termos server`:** the daemon, one per user per socket name (like tmux `-L`). It owns all state.
+- **`termos`:** with no arguments it connects to the default server, spawning one if needed, and attaches a terminal client to the session `main` (D-029). Other subcommands (`new`, `attach`, `ls`, `msg`, …) are short-lived clients of the same server.
+- **`termos server`:** the daemon, one per user per socket name (like tmux `-L`). It owns all sessions, panes and their programs (D-030, D-032).
+  - It is started on demand with null stdio, calls `setsid`, and stops when its last session ends or on `kill-server` / SIGTERM, saving snapshots first (D-033).
+  - One server holds many sessions (one `Desktop` each). Each session can be shown by many clients; each client has its own overlays (palette, prompts, which-key).
 - **PTY children:** anything that runs in a terminal window.
 - **`termos models serve`:** a separate process (D-021) so inference can't crash or bloat the desktop. It manages backend worker processes.
 - **MCP servers and agent tool executions:** spawned inside the sandbox (§11).
@@ -89,14 +91,14 @@ agents and models. A frontend is only a *client* of the server (D-007).
 | `termos-core` | tokio event loop and frame scheduler, in-process bus, `Transport`, protocol, config, paths | M1 |
 | `termos-term` | PTY spawning/resizing, `VtBackend` over alacritty_terminal, blitting VT cells into the grid | M1 |
 | `termos-wm` | Window tree, floating + tiling layouts, workspaces, z-order, hit testing, composition of window chrome | M1 |
-| `termos-shell` | `Desktop` state and server loop, key tables, command palette, which-key, status bar, copy mode, notifications, tutorial, plugin host (M3) | M1 |
+| `termos-shell` | `Desktop` state, the session server (socket, sessions, clients, control API), key tables, command palette, which-key, status bar, copy mode, notifications, tutorial, snapshots, plugin host | M1 |
 | `termos-apps` | Built-in apps on the in-process `App` trait | M4 |
 | `termos-devkit` | mise-backed toolchains, Neovim/Helix + LSP/DAP, dev rootfs, Git/build panels | M5 |
 | `termos-ai` | Providers, agent loop, tools, permission engine, sandbox, audit, MCP, secrets | M6 |
 | `termos-models` | HF adapter, fit estimation, inference backends, OpenAI-compatible router | M7 |
 | `termos-image` | Buildroot external tree, image build driver, QEMU boot tests | M8 |
 | `termos-cli` | The `termos` binary: server, clients, every subcommand | M0 |
-| `termos-plugin` *(planned)* | Plugin SDK (Rust) and WIT definitions for widgets | M3 |
+| `termos-plugin` | Plugin protocol types and a blocking Rust SDK (D-034); WIT definitions for widgets later (M4) | M3 |
 | `termos-hw` *(planned)* | CPU/GPU/accelerator/RAM/thermal probing, shared by the system monitor and models | M4 |
 | `xtask` | Repo automation: `ci`, `check-todos`, `todos` | M0 |
 
@@ -106,7 +108,7 @@ crate never depends on one listed above it.
 | Crate | May depend on |
 | --- | --- |
 | `termos-cli` | everything below. It wires the window factories from apps, ai and devkit into the shell. |
-| `termos-shell` | wm, term, apps, core, render |
+| `termos-shell` | wm, term, apps, plugin, core, render |
 | `termos-ai` | term (PTY-backed `run_command`), core, render. It reaches `termos-models` only over HTTP. |
 | `termos-devkit` | term, core, render |
 | `termos-apps` | hw, core, render |
@@ -115,6 +117,7 @@ crate never depends on one listed above it.
 | `termos-hw` | (system crates only) |
 | `termos-core` | render |
 | `termos-render` | (leaf) |
+| `termos-plugin` | (leaf: serde only, so plugins stay small) |
 | `termos-image` | build tooling; not linked into `termos` |
 
 The in-process `App` trait (§9) lives in `termos-core`. That lets apps,
@@ -236,7 +239,7 @@ Window = { id, title, source: Pty | App | Plugin | Agent, state: normal | minimi
   - Hit tests run top-down. Dragging a title bar moves the window; dragging an edge or corner resizes it; clicking focuses; the wheel scrolls scrollback.
   - When a child has enabled mouse reporting, events inside its content are forwarded with translated coordinates, in the child's encoding.
 - **Snapping:** drag a window to a screen edge or corner to get halves or quarters; snap commands do the same from the keyboard. Minimized windows go to a task strip in the status bar.
-- **Commands:** every action is a named command, such as `pane.split-right`, `pane.resize-left 5` or `layout.select tiled`. Commands can be bound in config, run from the palette (Ctrl+Space or prefix `:`, fuzzy-matched) and, from M3, called over JSON-RPC. The which-key overlay lists the bindings available after the prefix.
+- **Commands:** every action is a named command, such as `pane.split-right`, `pane.resize-left 5` or `layout.select tiled`. Commands can be bound in config, run from the palette (Ctrl+Space or prefix `:`, fuzzy-matched) and called over JSON-RPC (`termos msg pane.split-right`). The which-key overlay lists the bindings available after the prefix.
 - **tmux-style keys (D-023):** prefix `C-b`, then tmux's default keys (`%`, `"`, arrows, `z`, `x`, `c`, `n`, `p`, `0`–`9`, `[`, `]`, …), plus TermOS keys for floats (`f`, `F`, `m`, `M`). Resize keys repeat without the prefix for `repeat-time-ms`. A TermOS *workspace* is a tmux *window* (a tab in the status line); a *pane* is a tmux *pane*.
 - **Tiling (D-024):** tmux-style panes separated by one-cell lines, sized by weights that respect each subtree's minimum extent. Presets are even-horizontal, even-vertical, main-vertical (master-stack), main-horizontal and tiled (grid). Splits that wouldn't fit are refused.
 - **Copy mode:** vi motions over the scrollback, selection, search, and yank to the paste buffer and the system clipboard (OSC 52). The mouse wheel and drag-select use it too.
@@ -245,18 +248,31 @@ Window = { id, title, source: Pty | App | Plugin | Agent, state: normal | minimi
 
 ---
 
-## 7. IPC and protocol (D-007, D-010)
+## 7. IPC and protocol (D-007, D-010, D-031)
 
-- **Transport:** a `Transport` trait. M1 uses an in-memory channel; M3 adds a Unix socket at `$XDG_RUNTIME_DIR/termos/<server>.sock`, in a 0700 directory, falling back to `$TMPDIR/termos-$UID/`.
-- **Authentication:** the server checks the peer's uid (`SO_PEERCRED` / `getpeereid`) and rejects anyone else.
-- **Handshake:** the client sends `Hello { proto_version, kind: frontend | control | plugin, caps, size, env }`. The server replies `Welcome` or `Incompatible { supported }`, and supports the current and the previous major protocol version.
-- **Frontend stream:** length-prefixed postcard messages. As of M1 these are the serde types in `termos-core::proto`:
-  - Server → client: `Frame(FrameUpdate { cols, rows, clear, spans, cursor })`, `Clipboard`, `Bell`, `Title`, `Exit`.
-  - Client → server: `Hello { version, caps, cols, rows }`, `Key`, `Mouse`, `Paste`, `Resize`, `Focus`.
-  - Planned for M3 and M4: `Image(op)`, `Detach`.
-- **Control stream:** newline-delimited JSON-RPC 2.0, with methods such as `window.new`, `session.list`, `notify.send` and `subscribe`. It's used by `termos msg …`, scripts and plugins.
-- **In-process bus:** typed events, with tokio broadcast for fan-out and mpsc for commands.
-- **Over SSH:** `ssh -t host termos attach` runs a client on the remote host. Later, a local client could attach to a remote server through a forwarded socket so that local capabilities such as Kitty graphics apply; the protocol is transport-agnostic.
+- **Transport:** frontends see a `ClientEnd` (two channels). It is backed either by the server directly, in-process (tests, embedding), or by a Unix socket at `$XDG_RUNTIME_DIR/termos/<server>.sock`.
+  - The socket lives in a 0700 directory that is owner-checked, falling back to `$TMPDIR/termos-<uid>/`, and is itself mode 0600.
+  - `-L NAME` picks the server by name and `-S PATH` by path.
+- **Authentication:** the server checks the peer's uid (`SO_PEERCRED` / `getpeereid` through `UnixStream::peer_cred`) and rejects anyone else with error `-32003`.
+- **Handshake:** every connection's first line is a JSON-RPC request:
+  - `hello {version, kind: frontend | control | plugin, client, session?, create?, token?, cwd?}`.
+  - The reply is `{version, server, pid, session}`, or an error: `-32001` version mismatch, `-32004` no such session, `-32003` forbidden.
+- **Frontend stream:** after the reply, frames are a little-endian u32 length plus a postcard body (at most 16 MiB). These are the serde types in `termos-core::proto`:
+  - Server → client: `Frame(FrameUpdate { cols, rows, clear, spans, cursor })`, `Clipboard`, `Bell`, `Title`, `Detached { session }`, `Exit { reason }`.
+  - Client → server: `Hello { version, caps, cols, rows }` (first), `Key`, `Mouse`, `Paste`, `Resize`, `Focus`.
+  - **Backpressure:** a client gets its next frame only after the previous one was written to it (D-032).
+  - Planned for M4: `Image(op)`.
+- **Control stream:** newline-delimited JSON-RPC 2.0 (lines up to 4 MiB). It's used by `termos msg …`, `termos ls` and the other subcommands, and by scripts. The v1 methods:
+  - server: `server.info`, `server.kill`, `config.reload`;
+  - sessions: `session.list/new/kill/rename/restore/saved`;
+  - clients: `client.list/detach`;
+  - panes: `pane.list/send-text/send-keys/kill`;
+  - other: `notify.send`, `command.run`, `plugin.list`.
+  - Every named command and plugin command is also a method of its own name.
+  - Event subscriptions (`subscribe`) are planned for when agents need them (M6).
+- **Plugin stream:** JSON-RPC as well; see §9 and D-034.
+- **Inside panes:** `TERMOS=<socket>,<server pid>,$<session id>` lets CLI commands run in a pane find their server and session.
+- **Over SSH:** `ssh -t host termos` runs a client on the remote host and attaches to (or starts) that host's server; detaching leaves everything running there. Later, a local client could attach to a remote server through a forwarded socket so that local capabilities such as Kitty graphics apply; the protocol is transport-agnostic.
 
 ---
 
@@ -267,7 +283,11 @@ Window = { id, title, source: Pty | App | Plugin | Agent, state: normal | minimi
   - Hot reload uses `notify` with debouncing. An invalid edit keeps the last good config and posts a notification with the error.
   - `termos config check` validates without running.
 - **Themes:** semantic tokens such as `bg`, `fg`, `accent`, `border.active`, `shadow` and `status.*`, plus the 16-colour ANSI palette given to child terminals. Built-in themes are dark, light and high-contrast (M4). The default follows the terminal background (OSC 11).
-- **Session persistence (M3, D-011):** snapshots are written, debounced, to `$XDG_STATE_HOME/termos/sessions/<name>.json` with a versioned schema, on every change and at shutdown. A fresh server restores them according to a policy: `always | ask | never`. Scrollback persistence is opt-in, and files are mode 0600.
+- **Session persistence (D-011, D-033):**
+  - **Where:** snapshots go to `$XDG_STATE_HOME/termos/sessions/<server>/<session>.json`, with a versioned schema, mode 0600, written atomically.
+  - **What:** the layout of every workspace and, per pane, the directory, the foreground program, and optionally (`save-scrollback`) the text. Command lines are kept only for allowlisted programs.
+  - **When:** debounced after structural changes and at shutdown. They are deleted when a session ends on purpose.
+  - **Restore:** a fresh server restores them by policy, `always | ask | never` (default ask). Shells restart in their directories and allowlisted programs (`restore-programs`) are re-run.
 - **Logs:** `$XDG_STATE_HOME/termos/log/` (D-017).
 
 ---
@@ -278,10 +298,15 @@ Window = { id, title, source: Pty | App | Plugin | Agent, state: normal | minimi
   `App { title, handle(event) -> effects, render(area, &mut ratatui::Buffer), wants_tick, save_state, restore_state }`.
   They run on the server loop and push heavy work to tasks.
 - **Plain TUI programs** are first-class without any integration: they run in PTY windows.
-- **Out-of-process plugins (M3):** an executable plus a `plugin.toml` manifest (name, version, exec, requested permissions).
-  - The plugin connects with `kind = plugin` and can create windows and draw cells, receive input, register palette commands and status widgets, and post notifications.
-  - Plugins TermOS launches can run under the agent sandbox. If one crashes, its window shows the error and a restart policy applies.
-  - `termos-plugin` is the Rust SDK; other languages speak JSON-RPC directly.
+- **Out-of-process plugins (D-034):** a directory under `~/.config/termos/plugins/<name>/` with an executable and a `plugin.toml` (name, version, exec, `[permissions] windows/status/commands/notify`). Plugins run only while listed in `[plugins] enabled`.
+  - **Launch:** the server launches them with its first session, passing `TERMOS_SOCKET`, `TERMOS_PLUGIN_NAME` and a per-launch `TERMOS_PLUGIN_TOKEN`.
+  - **Connection:** the plugin connects with `kind = plugin` and its token.
+    - It can open, draw and close floating windows, set a status widget, register `<plugin>.<name>` commands (palette and control API), and post notifications, each only with the matching permission.
+    - Keys, mouse, resizes and closes in its windows, and command invocations, come back as notifications.
+  - **Windows:** plugin windows are in-process `App`s whose content the plugin draws remotely.
+  - **Failure:** a plugin that exits or disconnects loses its UI and the user is notified. There's no automatic restart in v1.
+  - **Later:** sandboxing launched plugins comes with the agent sandbox (M6).
+  - **Languages:** `termos-plugin` is the Rust SDK; other languages speak JSON-RPC directly (the tests include a plain Python plugin).
 - **WASM widgets (M4):** status-bar widgets implementing a WIT world (`render(width) -> styled spans`, `on-event`, tick interval).
   - The runtime is behind the `wasm-widgets` cargo feature and loads lazily, only when such a widget is configured.
   - Fuel/epoch and memory limits apply. There's no filesystem or network access unless granted.
@@ -402,8 +427,12 @@ Window = { id, title, source: Pty | App | Plugin | Agent, state: normal | minimi
 
 ## 14. Security model
 
-- **Socket:** one server per user, with a 0700 socket directory and peer-uid checks.
-- **No plaintext secrets** anywhere: config, logs, snapshots or audit records. Scrollback persistence is opt-in.
+- **Socket:** one server per user, with an owner-checked 0700 socket directory, a 0600 socket and peer-uid checks.
+- **Plugins:** they run only when enabled in the config. Each identifies itself with a per-launch token and gets only the permissions its manifest asks for (D-034).
+- **No plaintext secrets** anywhere: config, logs, snapshots or audit records.
+  - Scrollback persistence is opt-in.
+  - Snapshots keep command lines only for allowlisted programs.
+  - Plugin tokens are never logged.
 - **Agents and plugins:** least privilege, sandboxing, confirmation for destructive or network actions, and a tamper-evident audit log.
 - **Listeners:** nothing listens on the network by default. The model router binds localhost or a Unix socket and needs a token.
 - **Supply chain:** cargo-deny checks licenses, advisories and sources (crates.io only); `Cargo.lock` is committed; Actions are pinned to major versions (SHA pinning to be reconsidered in M9).
@@ -426,12 +455,12 @@ Window = { id, title, source: Pty | App | Plugin | Agent, state: normal | minimi
 
 - **Unit tests** in each crate, next to the code.
 - **Snapshot tests** (`insta`): a `Grid` renders to text plus a style layer. The headless client drives the full desktop: inject input, then snapshot the screen. These cover chrome, layouts, apps and overlays.
-- **Integration tests:** real PTYs (`sh -c …`), client/server over the socket (M3), config hot reload, and recorded provider fixtures with mock servers. CI never uses live API keys.
+- **Integration tests:** real PTYs (`sh -c …`), client/server over the socket (sessions, detach, snapshots and restore, plugins), the real daemon driven through its CLI, config hot reload, and recorded provider fixtures with mock servers. CI never uses live API keys.
 - **Property tests** (`proptest`) for layout invariants: no overlaps or gaps, and sizes always sum to the parent.
 - **Fuzzing** with `cargo-fuzz` (on a nightly toolchain, separate from the pinned one):
   - VT input (M1);
   - config parsing (M2);
-  - protocol decoding (M3);
+  - protocol decoding (`proto_decode`: frames and JSON-RPC);
   - capability-reply parsing (M4).
   
   CI runs a timed smoke pass on every push and longer scheduled runs.
