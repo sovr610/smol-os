@@ -12,6 +12,8 @@
 //!   in-process or bridged to the socket, and control calls.
 //! - [`config`] and [`watch`]: `config.toml` with precise errors and hot
 //!   reload.
+//! - [`local`]: local IPC endpoints (Unix sockets, Windows named pipes)
+//!   with peer identity.
 //! - [`paths`]: XDG directories. [`log`]: file logging.
 //! - [`app`]: the in-process [`app::App`] trait for windows drawn by Rust
 //!   code with ratatui widgets.
@@ -23,6 +25,7 @@ pub mod app;
 pub mod config;
 pub mod ids;
 pub mod input;
+pub mod local;
 pub mod log;
 pub mod paths;
 pub mod proto;

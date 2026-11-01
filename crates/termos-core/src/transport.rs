@@ -12,10 +12,9 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
-use tokio::net::UnixStream;
-use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::sync::mpsc;
 
+use crate::local::{LocalRead, LocalStream, LocalWrite};
 use crate::proto::{ClientMsg, ServerMsg};
 use crate::wire::{
     self, ConnKind, FrameDecoder, Hello, HelloReply, MAX_LINE, Message, Request, RpcError,
@@ -85,12 +84,12 @@ pub async fn read_line<R: AsyncBufRead + Unpin>(r: &mut R) -> io::Result<Option<
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "line is not UTF-8"))
 }
 
-/// Connects to the socket and performs the `hello` handshake.
+/// Connects to the server's endpoint and performs the `hello` handshake.
 pub async fn handshake(
     path: &Path,
     hello: &Hello,
-) -> Result<(HelloReply, BufReader<OwnedReadHalf>, OwnedWriteHalf), ConnectError> {
-    let stream = match UnixStream::connect(path).await {
+) -> Result<(HelloReply, BufReader<LocalRead>, LocalWrite), ConnectError> {
+    let stream = match LocalStream::connect(path).await {
         Ok(s) => s,
         Err(e)
             if matches!(

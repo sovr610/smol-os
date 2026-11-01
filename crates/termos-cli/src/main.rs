@@ -331,7 +331,7 @@ fn call(t: &Target, method: &str, params: Option<Value>) -> anyhow::Result<Value
 /// Starts the server daemon unless one is running. Returns whether it
 /// started one.
 fn ensure_server(t: &Target, config_path: &Path) -> anyhow::Result<bool> {
-    if std::os::unix::net::UnixStream::connect(&t.socket).is_ok() {
+    if termos_core::local::probe(&t.socket) {
         return Ok(false);
     }
     let exe = std::env::current_exe().context("cannot find the termos executable")?;
@@ -349,14 +349,14 @@ fn ensure_server(t: &Target, config_path: &Path) -> anyhow::Result<bool> {
     // Startup takes milliseconds; this loop only runs until then.
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
-        if std::os::unix::net::UnixStream::connect(&t.socket).is_ok() {
+        if termos_core::local::probe(&t.socket) {
             // Reap it if it exits before we do.
             std::thread::spawn(move || child.wait());
             return Ok(true);
         }
         if let Some(status) = child.try_wait()? {
             // Another client may have started a server at the same moment.
-            if std::os::unix::net::UnixStream::connect(&t.socket).is_ok() {
+            if termos_core::local::probe(&t.socket) {
                 return Ok(false);
             }
             bail!("the server did not start ({status}); see the logs in the state directory");
@@ -371,7 +371,7 @@ fn ensure_server(t: &Target, config_path: &Path) -> anyhow::Result<bool> {
 /// Waits briefly for a stopping server to remove its socket.
 fn wait_gone(socket: &Path) {
     let deadline = Instant::now() + Duration::from_secs(5);
-    while socket.exists() && Instant::now() < deadline {
+    while termos_core::local::exists(socket) && Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(10));
     }
 }

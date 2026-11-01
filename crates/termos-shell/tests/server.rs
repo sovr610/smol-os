@@ -9,7 +9,8 @@ use std::time::Duration;
 use serde_json::{Value, json};
 use termos_core::config::Config;
 use termos_core::input::{KeyCode, KeyEvent};
-use termos_core::paths::{Paths, current_uid};
+use termos_core::local::PeerId;
+use termos_core::paths::Paths;
 use termos_core::proto::{ClientMsg, PROTOCOL_VERSION, ServerMsg};
 use termos_core::transport::{ClientEnd, ConnectError, connect_frontend, control_call};
 use termos_core::wire::{ConnKind, Hello, codes};
@@ -289,7 +290,7 @@ async fn two_clients_share_a_session() {
 
 #[tokio::test]
 async fn handshake_rejects_other_users_bad_versions_and_missing_sessions() {
-    let srv = start_with("", |o| o.allowed_uid = current_uid().wrapping_add(1)).await;
+    let srv = start_with("", |o| o.allowed_peer = PeerId::nobody()).await;
     let err = connect_frontend(&srv.socket, &frontend(None, true))
         .await
         .expect_err("a foreign uid must be refused");

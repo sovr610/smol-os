@@ -20,7 +20,8 @@ use serde_json::{Value, json};
 use termos_core::config::{Config, RestorePolicy};
 use termos_core::ids::{ClientId, PaneId, PaneIds};
 use termos_core::input::KeyEvent;
-use termos_core::paths::{Paths, current_uid, ensure_private_dir};
+use termos_core::local::{self, LocalListener, LocalRead, LocalStream, LocalWrite, PeerId};
+use termos_core::paths::Paths;
 use termos_core::proto::{ClientMsg, FrameUpdate, PROTOCOL_VERSION, ServerMsg};
 use termos_core::transport::{ClientEnd, read_line};
 use termos_core::wire::{
@@ -34,8 +35,6 @@ use termos_render::encode::CursorState;
 use termos_render::grid::Grid;
 use termos_term::pty::PtyEvent;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
-use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
-use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::{mpsc, oneshot};
 
 use crate::commands::{Command, CommandError};
@@ -65,7 +64,7 @@ pub struct ServerOptions {
     /// `$SHELL` from the environment.
     pub env_shell: Option<String>,
     /// The only uid allowed to connect (normally our own).
-    pub allowed_uid: u32,
+    pub allowed_peer: PeerId,
     /// Stop when the last session ends, as tmux does.
     pub exit_when_empty: bool,
     /// Handle SIGTERM, SIGINT and SIGHUP (the daemon does; tests do not).
@@ -82,7 +81,8 @@ impl ServerOptions {
             paths,
             config_path,
             env_shell: std::env::var("SHELL").ok(),
-            allowed_uid: current_uid(),
+            // Nobody can connect if our own identity is unknown.
+            allowed_peer: PeerId::current().unwrap_or_else(|_| PeerId::nobody()),
             exit_when_empty: true,
             handle_signals: false,
         }
@@ -438,24 +438,8 @@ impl Server {
 
     /// Binds the session socket (mode 0600 in a 0700 directory), replacing a
     /// stale socket file but refusing to start beside a live server.
-    pub fn bind(&self) -> io::Result<UnixListener> {
-        use std::os::unix::fs::PermissionsExt as _;
-        let path = &self.opts.socket_path;
-        if let Some(dir) = path.parent() {
-            ensure_private_dir(dir)?;
-        }
-        if path.exists() {
-            if std::os::unix::net::UnixStream::connect(path).is_ok() {
-                return Err(io::Error::new(
-                    io::ErrorKind::AddrInUse,
-                    format!("a TermOS server is already running at {}", path.display()),
-                ));
-            }
-            std::fs::remove_file(path)?;
-        }
-        let listener = UnixListener::bind(path)?;
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
-        Ok(listener)
+    pub fn bind(&self) -> io::Result<LocalListener> {
+        LocalListener::bind(&self.opts.socket_path)
     }
 
     // ----- sessions ---------------------------------------------------
@@ -861,16 +845,16 @@ impl Server {
     /// Runs until stopped (`server.kill`, a signal, or the last session
     /// ending when `exit_when_empty`). Serves `listener` if given and
     /// removes the socket file on the way out. Returns why it stopped.
-    pub async fn run(mut self, listener: Option<UnixListener>) -> String {
+    pub async fn run(mut self, listener: Option<LocalListener>) -> String {
         let owns_socket = listener.is_some();
-        let accept = listener.map(|l| {
+        let accept = listener.map(|mut l| {
             let connector = self.connector();
-            let uid = self.opts.allowed_uid;
+            let allowed = self.opts.allowed_peer.clone();
             tokio::spawn(async move {
                 loop {
                     match l.accept().await {
-                        Ok((stream, _)) => {
-                            tokio::spawn(handle_conn(stream, connector.clone(), uid));
+                        Ok(stream) => {
+                            tokio::spawn(handle_conn(stream, connector.clone(), allowed.clone()));
                         }
                         Err(e) => {
                             // Out of descriptors and the like: back off
@@ -948,7 +932,7 @@ impl Server {
             a.abort();
         }
         if owns_socket {
-            let _ = std::fs::remove_file(&self.opts.socket_path);
+            local::remove_endpoint(&self.opts.socket_path);
         }
         // Let connection tasks flush the last messages.
         tokio::time::sleep(Duration::from_millis(50)).await;
@@ -2077,16 +2061,14 @@ async fn recv_reload(rx: &mut Option<mpsc::UnboundedReceiver<()>>) -> Option<()>
     }
 }
 
-async fn write_response(write: &mut OwnedWriteHalf, resp: &Response) -> io::Result<()> {
+async fn write_response(write: &mut LocalWrite, resp: &Response) -> io::Result<()> {
     write.write_all(wire::to_line(resp).as_bytes()).await
 }
 
 /// One socket connection: peer check, handshake, then the frontend frame
 /// pump or the control request loop.
-async fn handle_conn(stream: UnixStream, connector: Connector, allowed_uid: u32) {
-    let peer_ok = stream
-        .peer_cred()
-        .is_ok_and(|cred| cred.uid() == allowed_uid);
+async fn handle_conn(stream: LocalStream, connector: Connector, allowed: PeerId) {
+    let peer_ok = stream.peer().is_ok_and(|p| p == allowed);
     let (read, mut write) = stream.into_split();
     if !peer_ok {
         let e = RpcError::forbidden("connections from other users are not allowed");
@@ -2171,8 +2153,8 @@ async fn handle_conn(stream: UnixStream, connector: Connector, allowed_uid: u32)
 
 /// Frames to the frontend, input from it.
 async fn frontend_pump(
-    mut reader: BufReader<OwnedReadHalf>,
-    mut write: OwnedWriteHalf,
+    mut reader: BufReader<LocalRead>,
+    mut write: LocalWrite,
     att: Attached,
     connector: Connector,
 ) {
@@ -2230,8 +2212,8 @@ async fn frontend_pump(
 /// A plugin's requests in, its responses and the server's notifications
 /// out, until either side hangs up.
 async fn plugin_loop(
-    mut reader: BufReader<OwnedReadHalf>,
-    mut write: OwnedWriteHalf,
+    mut reader: BufReader<LocalRead>,
+    mut write: LocalWrite,
     name: &str,
     mut notes: mpsc::UnboundedReceiver<String>,
     connector: &Connector,
@@ -2270,8 +2252,8 @@ async fn plugin_loop(
 
 /// Newline-delimited JSON-RPC requests until the peer hangs up.
 async fn control_loop(
-    mut reader: BufReader<OwnedReadHalf>,
-    mut write: OwnedWriteHalf,
+    mut reader: BufReader<LocalRead>,
+    mut write: LocalWrite,
     connector: Connector,
 ) {
     while let Ok(Some(line)) = read_line(&mut reader).await {
