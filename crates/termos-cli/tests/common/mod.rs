@@ -17,6 +17,12 @@ use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system}
 pub const COLS: u16 = 80;
 pub const ROWS: u16 = 24;
 
+/// The screen as text, one line per row. (`Screen::contents` joins rows
+/// that wrapped, and ConPTY repaints full-width rows that way.)
+fn text(screen: &vt100::Screen) -> String {
+    screen.rows(0, COLS).collect::<Vec<_>>().join("\n")
+}
+
 struct Shared {
     parser: vt100::Parser,
     raw: Vec<u8>,
@@ -221,7 +227,7 @@ impl Termos {
 
     pub fn screen(&self) -> String {
         let (lock, _) = &*self.shared;
-        lock.lock().expect("lock").parser.screen().contents()
+        text(lock.lock().expect("lock").parser.screen())
     }
 
     pub fn generation(&self) -> u64 {
@@ -240,7 +246,7 @@ impl Termos {
         let (lock, cv) = &*self.shared;
         let mut guard = lock.lock().expect("lock");
         loop {
-            let screen = guard.parser.screen().contents();
+            let screen = text(guard.parser.screen());
             if pred(&screen) {
                 return screen;
             }
