@@ -1,0 +1,214 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+//! The in-process app API: windows drawn by Rust code instead of a PTY.
+//!
+//! Apps draw with ratatui widgets into a ratatui `Buffer`; the desktop blits
+//! that buffer into the compositor grid. Built-in apps (tutorial,
+//! notification center, later the file manager etc.), agent windows and
+//! devkit panels all implement [`App`] (ARCHITECTURE.md §9).
+
+use ratatui_core::buffer::{Buffer, CellDiffOption};
+use ratatui_core::layout::Rect as TuiRect;
+use ratatui_core::style::{Color as TuiColor, Modifier};
+use termos_render::cell::{Attrs, Style};
+use termos_render::color::Color;
+use termos_render::grid::{Grid, Rect};
+use termos_render::theme::Theme;
+use unicode_width::UnicodeWidthStr;
+
+use crate::input::{KeyEvent, MouseEvent};
+
+/// What an app wants the desktop to do after handling an event.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AppEffect {
+    /// Nothing visible changed.
+    None,
+    /// Redraw the app.
+    Redraw,
+    /// Close the app's window.
+    Close,
+    /// Show a status-line message.
+    Notify(String),
+    /// Run a named desktop command (as if chosen in the palette).
+    Command(String),
+}
+
+/// An in-process window.
+pub trait App: Send {
+    /// Window title.
+    fn title(&self) -> String;
+    /// A key press while the app has focus.
+    fn handle_key(&mut self, key: KeyEvent) -> AppEffect;
+    /// A mouse event with coordinates relative to the app's area.
+    fn handle_mouse(&mut self, event: MouseEvent) -> AppEffect {
+        let _ = event;
+        AppEffect::None
+    }
+    /// Draws the app into `buf`, which covers `area` (origin 0,0).
+    fn render(&mut self, area: TuiRect, buf: &mut Buffer, theme: &Theme);
+}
+
+/// Renders `app` into `grid` at `at`.
+pub fn render_app(app: &mut dyn App, theme: &Theme, grid: &mut Grid, at: Rect) {
+    if at.is_empty() {
+        return;
+    }
+    let area = TuiRect::new(0, 0, at.w, at.h);
+    let mut buf = Buffer::empty(area);
+    app.render(area, &mut buf, theme);
+    blit_buffer(&buf, grid, at);
+}
+
+/// Copies a ratatui buffer into the grid at `at` (clipped to `at`).
+pub fn blit_buffer(buf: &Buffer, grid: &mut Grid, at: Rect) {
+    let area = buf.area;
+    let mut skip_next = false;
+    for (i, cell) in buf.content().iter().enumerate() {
+        let Ok(i) = u16::try_from(i) else { break };
+        let (cx, cy) = (i % area.width.max(1), i / area.width.max(1));
+        if cx == 0 {
+            skip_next = false;
+        }
+        if skip_next {
+            skip_next = false;
+            continue;
+        }
+        if cell.diff_option == CellDiffOption::Skip || cx >= at.w || cy >= at.h {
+            continue;
+        }
+        let style = convert_style(cell.fg, cell.bg, cell.modifier);
+        let symbol = cell.symbol();
+        let x = at.x + cx;
+        let y = at.y + cy;
+        if symbol.is_empty() {
+            grid.put_str(x, y, " ", style, at.right());
+        } else {
+            grid.put_str(x, y, symbol, style, at.right());
+            if UnicodeWidthStr::width(symbol) >= 2 {
+                skip_next = true;
+            }
+        }
+    }
+}
+
+fn convert_color(c: TuiColor) -> Color {
+    match c {
+        TuiColor::Reset => Color::Default,
+        TuiColor::Black => Color::Indexed(0),
+        TuiColor::Red => Color::Indexed(1),
+        TuiColor::Green => Color::Indexed(2),
+        TuiColor::Yellow => Color::Indexed(3),
+        TuiColor::Blue => Color::Indexed(4),
+        TuiColor::Magenta => Color::Indexed(5),
+        TuiColor::Cyan => Color::Indexed(6),
+        TuiColor::Gray => Color::Indexed(7),
+        TuiColor::DarkGray => Color::Indexed(8),
+        TuiColor::LightRed => Color::Indexed(9),
+        TuiColor::LightGreen => Color::Indexed(10),
+        TuiColor::LightYellow => Color::Indexed(11),
+        TuiColor::LightBlue => Color::Indexed(12),
+        TuiColor::LightMagenta => Color::Indexed(13),
+        TuiColor::LightCyan => Color::Indexed(14),
+        TuiColor::White => Color::Indexed(15),
+        TuiColor::Rgb(r, g, b) => Color::rgb(r, g, b),
+        TuiColor::Indexed(i) => Color::Indexed(i),
+    }
+}
+
+fn convert_style(fg: TuiColor, bg: TuiColor, m: Modifier) -> Style {
+    let mut attrs = Attrs::empty();
+    for (from, to) in [
+        (Modifier::BOLD, Attrs::BOLD),
+        (Modifier::DIM, Attrs::DIM),
+        (Modifier::ITALIC, Attrs::ITALIC),
+        (Modifier::UNDERLINED, Attrs::UNDERLINE),
+        (Modifier::SLOW_BLINK, Attrs::BLINK),
+        (Modifier::RAPID_BLINK, Attrs::BLINK),
+        (Modifier::REVERSED, Attrs::REVERSE),
+        (Modifier::HIDDEN, Attrs::HIDDEN),
+        (Modifier::CROSSED_OUT, Attrs::STRIKE),
+    ] {
+        if m.contains(from) {
+            attrs |= to;
+        }
+    }
+    let mut s = Style::new().fg(convert_color(fg)).bg(convert_color(bg));
+    s.attrs = attrs;
+    s
+}
+
+/// Converts a TermOS style to a ratatui style, for apps drawing with theme
+/// colours.
+pub fn tui_style(s: Style) -> ratatui_core::style::Style {
+    let conv = |c: Color| match c {
+        Color::Default => TuiColor::Reset,
+        Color::Indexed(i) => TuiColor::Indexed(i),
+        Color::Rgb(rgb) => TuiColor::Rgb(rgb.r, rgb.g, rgb.b),
+    };
+    let mut m = Modifier::empty();
+    for (from, to) in [
+        (Attrs::BOLD, Modifier::BOLD),
+        (Attrs::DIM, Modifier::DIM),
+        (Attrs::ITALIC, Modifier::ITALIC),
+        (Attrs::UNDERLINE, Modifier::UNDERLINED),
+        (Attrs::REVERSE, Modifier::REVERSED),
+    ] {
+        if s.attrs.contains(from) {
+            m |= to;
+        }
+    }
+    ratatui_core::style::Style::default()
+        .fg(conv(s.fg))
+        .bg(conv(s.bg))
+        .add_modifier(m)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui_core::text::Line;
+    use ratatui_core::widgets::Widget;
+
+    struct Hello;
+
+    impl App for Hello {
+        fn title(&self) -> String {
+            "hello".into()
+        }
+        fn handle_key(&mut self, _key: KeyEvent) -> AppEffect {
+            AppEffect::Close
+        }
+        fn render(&mut self, area: TuiRect, buf: &mut Buffer, _theme: &Theme) {
+            Line::from("hi 界!")
+                .style(ratatui_core::style::Style::default().fg(TuiColor::Red))
+                .render(area, buf);
+        }
+    }
+
+    #[test]
+    fn app_output_lands_in_the_grid() {
+        let mut grid = Grid::new(12, 3);
+        render_app(
+            &mut Hello,
+            &Theme::default(),
+            &mut grid,
+            Rect::new(2, 1, 8, 1),
+        );
+        assert_eq!(grid.to_text(), "\n  hi 界!\n\n");
+        assert_eq!(grid.get(2, 1).map(|c| c.style.fg), Some(Color::Indexed(1)));
+    }
+
+    #[test]
+    fn style_conversion_round_trips_colours() {
+        let s = Style::new()
+            .fg(Color::rgb(1, 2, 3))
+            .bg(Color::Indexed(4))
+            .bold();
+        let t = tui_style(s);
+        let back = convert_style(
+            t.fg.unwrap_or(TuiColor::Reset),
+            t.bg.unwrap_or(TuiColor::Reset),
+            t.add_modifier,
+        );
+        assert_eq!(back, s);
+    }
+}

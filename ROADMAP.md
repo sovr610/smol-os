@@ -297,12 +297,11 @@ Generated from the `TODO(M<n>)` markers in the code. Don't edit by hand; run `ca
 | Milestone | Where | What |
 | --- | --- | --- |
 | M1 | `crates/termos-cli/src/main.rs` | run the hosted desktop (server + terminal client) when invoked without a subcommand. |
-| M1 | `crates/termos-core/src/lib.rs` | event loop, in-memory Transport and the frame/input protocol types. |
 | M1 | `crates/termos-term/src/lib.rs` | PTY spawning, VtBackend over alacritty_terminal, blitting into the grid, VT fuzz target. |
-| M2 | `crates/termos-core/src/lib.rs` | the `App` trait, TOML config loading with span-accurate errors, hot reload via `notify`. |
 | M2 | `crates/termos-shell/src/lib.rs` | Desktop state, command palette, which-key, status bar, notifications, first-run tutorial. |
 | M2 | `crates/termos-wm/src/lib.rs` | window tree, floating + tiled layouts, workspaces, mouse move/resize, compositor. |
-| M3 | `crates/termos-core/src/lib.rs` | Unix-socket transport with SO_PEERCRED checks and the JSON-RPC control API. |
+| M3 | `crates/termos-core/src/paths.rs` | runtime directory for server sockets ($XDG_RUNTIME_DIR/termos, 0700, with a per-uid fallback). |
+| M3 | `crates/termos-core/src/transport.rs` | Unix-socket adapter (postcard frames, SO_PEERCRED/getpeereid checks, handshake versioning). |
 | M3 | `crates/termos-shell/src/lib.rs` | out-of-process plugin host over the JSON-RPC control API. |
 | M4 | `crates/termos-apps/src/lib.rs` | file manager, system monitor, image viewer, markdown viewer, settings, clipboard manager. |
 | M4 | `crates/termos-render/src/caps.rs` | active capability queries (DA1, XTVERSION, Kitty graphics, DECRQM 2026, OSC 11, cell size). |
