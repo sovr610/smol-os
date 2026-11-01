@@ -383,6 +383,7 @@ fn spawn_daemon(cmd: &mut std::process::Command) -> std::io::Result<std::process
     const CREATE_BREAKAWAY_FROM_JOB: u32 = 0x0100_0000;
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
     let flags = CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP;
+    keep_std_handles_to_ourselves();
     match cmd
         .creation_flags(flags | CREATE_BREAKAWAY_FROM_JOB)
         .spawn()
@@ -392,6 +393,37 @@ fn spawn_daemon(cmd: &mut std::process::Command) -> std::io::Result<std::process
             cmd.creation_flags(flags).spawn()
         }
         other => other,
+    }
+}
+
+/// Stops the daemon from inheriting our standard handles. A Windows child
+/// inherits every inheritable handle, whatever its own stdio is; a server
+/// holding the write end of a pipe our caller reads (`$out = termos
+/// restore`) would keep that caller waiting for end of file for as long as
+/// the server runs. We start no other children, so nothing else needs them
+/// to be inheritable.
+#[cfg(windows)]
+#[allow(unsafe_code)]
+fn keep_std_handles_to_ourselves() {
+    use windows_sys::Win32::Foundation::{
+        HANDLE_FLAG_INHERIT, INVALID_HANDLE_VALUE, SetHandleInformation,
+    };
+    use windows_sys::Win32::System::Console::{
+        GetStdHandle, STD_ERROR_HANDLE, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE,
+    };
+    for which in [STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE] {
+        // SAFETY: GetStdHandle has no preconditions; it returns null or
+        // INVALID_HANDLE_VALUE when there is no such handle (checked below).
+        let handle = unsafe { GetStdHandle(which) };
+        if handle.is_null() || handle == INVALID_HANDLE_VALUE {
+            continue;
+        }
+        // SAFETY: `handle` is one of our own standard handles, valid for
+        // the life of the process; this only clears its inherit flag. A
+        // failure leaves the flag as it was, which is no worse than before.
+        unsafe {
+            SetHandleInformation(handle, HANDLE_FLAG_INHERIT, 0);
+        }
     }
 }
 

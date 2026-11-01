@@ -20,6 +20,8 @@ jobs:
   lint:
     name: Lint (fmt, repo checks, cargo-deny)
     runs-on: ubuntu-24.04
+    # A hang must not hold a runner for the default six hours.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v5
       # Reads rust-toolchain.toml (pinned 1.97.0 + rustfmt/clippy), enables the
@@ -48,6 +50,8 @@ jobs:
   test:
     name: Clippy + test (${{ matrix.name }})
     runs-on: ${{ matrix.os }}
+    # A hang must not hold a runner for the default six hours.
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -83,6 +87,8 @@ jobs:
   cross:
     name: Cross-build (${{ matrix.target }})
     runs-on: ubuntu-24.04
+    # A hang must not hold a runner for the default six hours.
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -135,6 +141,8 @@ jobs:
     name: Test build smoke (linux-${{ matrix.arch }})
     needs: cross
     runs-on: ${{ matrix.os }}
+    # A hang must not hold a runner for the default six hours.
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -162,6 +170,8 @@ jobs:
   package-macos:
     name: Test build (macos-arm64)
     runs-on: macos-latest
+    # A hang must not hold a runner for the default six hours.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v5
       - uses: actions-rust-lang/setup-rust-toolchain@v1
@@ -190,6 +200,8 @@ jobs:
   package-windows:
     name: Test build (windows-x86_64)
     runs-on: windows-latest
+    # A hang must not hold a runner for the default six hours.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v5
       - uses: actions-rust-lang/setup-rust-toolchain@v1
@@ -223,6 +235,8 @@ jobs:
   fuzz:
     name: Fuzz smoke (nightly, 60 s per target)
     runs-on: ubuntu-24.04
+    # A hang must not hold a runner for the default six hours.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v5
       # cargo-fuzz needs nightly; the pinned stable toolchain is overridden
@@ -247,6 +261,8 @@ jobs:
   perf:
     name: Performance budgets (release)
     runs-on: ubuntu-24.04
+    # A hang must not hold a runner for the default six hours.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v5
       - uses: actions-rust-lang/setup-rust-toolchain@v1
