@@ -15,7 +15,19 @@ name = "termos"
 path = "src/main.rs"
 
 [dependencies]
+anyhow.workspace = true
 clap.workspace = true
+crossterm.workspace = true
+futures-util.workspace = true
+termos-core.workspace = true
+termos-render.workspace = true
+termos-shell.workspace = true
+tokio = { workspace = true, features = ["rt", "macros", "sync", "time"] }
+
+[dev-dependencies]
+portable-pty.workspace = true
+tempfile.workspace = true
+vt100.workspace = true
 
 [lints]
 workspace = true

@@ -41,14 +41,59 @@ fn help_describes_termos() {
     let stdout = String::from_utf8(out.stdout).expect("help output is UTF-8");
     assert!(stdout.contains("terminal-first desktop environment"));
     assert!(stdout.contains("Usage: termos"));
+    assert!(stdout.contains("config"));
 }
 
 #[test]
-fn no_arguments_prints_usage_and_fails() {
-    let out = termos(&[]);
+fn desktop_needs_a_terminal() {
+    // Without arguments termos starts the desktop, which needs a TTY.
+    let out = Command::new(env!("CARGO_BIN_EXE_termos"))
+        .env_remove("TERMOS")
+        .output()
+        .expect("spawn");
     assert!(!out.status.success());
-    let stderr = String::from_utf8(out.stderr).expect("usage output is UTF-8");
-    assert!(stderr.contains("Usage: termos"));
+    let stderr = String::from_utf8(out.stderr).expect("UTF-8");
+    assert!(stderr.contains("must be a terminal"), "{stderr}");
+}
+
+#[test]
+fn refuses_to_nest_without_force() {
+    let out = Command::new(env!("CARGO_BIN_EXE_termos"))
+        .env("TERMOS", "123")
+        .output()
+        .expect("spawn");
+    assert!(!out.status.success());
+    let stderr = String::from_utf8(out.stderr).expect("UTF-8");
+    assert!(stderr.contains("already running inside TermOS"), "{stderr}");
+}
+
+#[test]
+fn config_default_is_valid_and_check_reports_locations() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let out = termos(&["config", "default"]);
+    assert!(out.status.success());
+    let good = dir.path().join("good.toml");
+    std::fs::write(&good, &out.stdout).expect("write");
+    let out = termos(&["config", "check", good.to_str().expect("utf-8 path")]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+    assert!(String::from_utf8_lossy(&out.stdout).ends_with(": ok\n"));
+
+    let bad = dir.path().join("bad.toml");
+    std::fs::write(&bad, "mouse = true\nprefix = \"C-\"\n").expect("write");
+    let out = termos(&["config", "check", bad.to_str().expect("utf-8 path")]);
+    assert!(!out.status.success());
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(text.contains("bad.toml:2:"), "{text}");
+
+    let unknown = dir.path().join("unknown.toml");
+    std::fs::write(&unknown, "[keys.prefix]\n\"v\" = \"pane.explode\"\n").expect("write");
+    let out = termos(&["config", "check", unknown.to_str().expect("utf-8 path")]);
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stdout).contains("pane.explode"));
 }
 
 #[test]

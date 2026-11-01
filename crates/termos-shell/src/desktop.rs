@@ -162,6 +162,8 @@ pub struct Desktop {
     dirty: bool,
     quit: Option<String>,
     title_sent: String,
+    /// Bytes of visible pane output since the last render.
+    output_since_render: usize,
 }
 
 impl std::fmt::Debug for Desktop {
@@ -226,6 +228,7 @@ impl Desktop {
             dirty: true,
             quit: None,
             title_sent: String::new(),
+            output_since_render: 0,
             config,
         };
         let area = d.layout_area();
@@ -311,6 +314,13 @@ impl Desktop {
     /// Whether a redraw is needed (and clears the flag).
     pub fn take_dirty(&mut self) -> bool {
         std::mem::take(&mut self.dirty)
+    }
+
+    /// Bytes of visible pane output since the last render. The server
+    /// renders small updates (typing echo) immediately and coalesces large
+    /// ones (output floods) to the frame rate.
+    pub fn pending_output(&self) -> usize {
+        self.output_since_render
     }
 
     /// Set when the session ended.
@@ -429,6 +439,11 @@ impl Desktop {
         }
         self.drag = None;
         self.dirty = true;
+    }
+
+    /// Shows a notification (e.g. a startup problem found by the caller).
+    pub fn post(&mut self, level: Level, text: impl Into<String>) {
+        self.notify(level, text);
     }
 
     fn notify(&mut self, level: Level, text: impl Into<String>) {
@@ -1401,6 +1416,7 @@ impl Desktop {
                     }
                 }
                 if visible {
+                    self.output_since_render += bytes.len();
                     self.dirty = true;
                 }
             }
@@ -1584,6 +1600,7 @@ impl Desktop {
             grid.resize(self.cols, self.rows);
         }
         grid.clear(Style::new());
+        self.output_since_render = 0;
         self.refresh_names();
         let area = self.layout_area();
         let placement = self.placement();

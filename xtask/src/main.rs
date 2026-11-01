@@ -6,6 +6,8 @@
 //! - `check-todos` — repo checks only: work-marker format, ROADMAP sync, SPDX headers.
 //! - `todos`       — print the open work markers as the ROADMAP table
 //!   (`--write` updates ROADMAP.md in place).
+//! - `perf [secs]`  — performance budgets on an optimized build (Linux):
+//!   keystroke latency, idle CPU over `secs` (default 60), memory, floods.
 
 mod markers;
 mod repo;
@@ -24,6 +26,8 @@ Commands:
   ci              Run fmt, clippy, tests, check-todos and cargo-deny (as CI does)
   check-todos     Check work-marker format, ROADMAP.md sync and SPDX headers
   todos [--write] Print the open-work table; --write updates ROADMAP.md
+  perf [SECS]     Check the performance budgets on a release build (Linux);
+                  idle CPU is measured over SECS seconds (default 60)
   help            Show this message
 ";
 
@@ -33,6 +37,7 @@ fn main() -> ExitCode {
         Some("ci") => ci(),
         Some("check-todos") => check_repo(),
         Some("todos") => todos(&args[1..]),
+        Some("perf") => perf(args.get(1).map(String::as_str)),
         Some("help" | "-h" | "--help") | None => {
             print!("{HELP}");
             Ok(())
@@ -164,6 +169,40 @@ fn todos(args: &[String]) -> Result<()> {
         return Err(format!("{} malformed work marker(s)", scan.violations.len()).into());
     }
     Ok(())
+}
+
+/// The performance budgets (DECISIONS.md D-019) on an optimized build.
+fn perf(idle_secs: Option<&str>) -> Result<()> {
+    let secs = idle_secs.unwrap_or("60");
+    if secs.parse::<u64>().map_or(true, |s| s == 0) {
+        return Err(format!("`{secs}` is not a number of seconds").into());
+    }
+    let root = repo::root();
+    let args = [
+        "test",
+        "--release",
+        "--locked",
+        "-p",
+        "termos-cli",
+        "--test",
+        "perf",
+        "--",
+        "--nocapture",
+    ];
+    println!(
+        "xtask: $ TERMOS_PERF_IDLE_SECS={secs} cargo {}",
+        args.join(" ")
+    );
+    let status = Command::new(cargo())
+        .args(args)
+        .env("TERMOS_PERF_IDLE_SECS", secs)
+        .current_dir(root)
+        .status()?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("performance budgets not met ({status})").into())
+    }
 }
 
 fn cargo() -> String {

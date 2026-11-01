@@ -3,9 +3,9 @@
 //!
 //! Event-driven: the loop sleeps until a client message, PTY output, a
 //! config change, or the desktop's next deadline. When something changed it
-//! renders, at most once per [`FRAME_INTERVAL`] (output floods are parsed
-//! continuously but drawn at frame rate), and sends the client only the
-//! cells that differ from its last frame (D-026).
+//! renders right away, except during output floods, which are parsed
+//! continuously but drawn at most once per [`FRAME_INTERVAL`]. The client
+//! gets only the cells that differ from its last frame (D-026).
 
 use std::time::{Duration, Instant};
 
@@ -19,8 +19,12 @@ use tokio::sync::mpsc;
 
 use crate::desktop::Desktop;
 
-/// Minimum time between frames (~120 fps cap).
+/// Minimum time between frames during output floods (~120 fps cap).
 pub const FRAME_INTERVAL: Duration = Duration::from_millis(8);
+
+/// Below this much pane output since the last frame (typing echo, prompts,
+/// small updates) a frame is drawn immediately, even within the interval.
+pub const SMALL_OUTPUT: usize = 4096;
 
 /// Event sources for the loop.
 #[derive(Debug)]
@@ -110,8 +114,14 @@ pub async fn run(mut desktop: Desktop, mut ch: ServerChannels) -> String {
 
         let now = Instant::now();
         if desktop.take_dirty() {
-            // Draw now, unless the last frame was less than an interval ago.
-            let due = last_frame.map_or(now, |t| (t + FRAME_INTERVAL).max(now));
+            // Draw now, unless this is a flood and the last frame was less
+            // than an interval ago.
+            let due = match last_frame {
+                Some(t) if desktop.pending_output() >= SMALL_OUTPUT => {
+                    (t + FRAME_INTERVAL).max(now)
+                }
+                _ => now,
+            };
             frame_due = Some(frame_due.map_or(due, |d| d.min(due)));
         }
         if frame_due.is_some_and(|d| d <= now) {
