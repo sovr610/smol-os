@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//! The session server over a real Unix socket: attach, detach and reattach,
+//! The session server over its real endpoint (a Unix socket, or a named
+//! pipe on Windows): attach, detach and reattach,
 //! several clients, the handshake checks, the control API, session
 //! switching, incremental frames and a silent idle server.
+
+mod common;
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -20,8 +23,12 @@ use termos_render::grid::Grid;
 use termos_shell::server::{Server, ServerOptions};
 use tokio::task::JoinHandle;
 
-const BASE_CONFIG: &str =
-    "shell = \"/bin/sh\"\n[tutorial]\nshow-on-first-run = false\n[status]\nclock = false\n";
+fn base_config() -> String {
+    format!(
+        "{}[tutorial]\nshow-on-first-run = false\n[status]\nclock = false\n",
+        common::shell_config()
+    )
+}
 
 struct TestServer {
     socket: PathBuf,
@@ -43,9 +50,10 @@ fn start_in(dir: &Path, extra_config: &str, tweak: impl FnOnce(&mut ServerOption
     let paths = paths_in(dir);
     let config_path = paths.config_file();
     let config =
-        Config::parse(&format!("{BASE_CONFIG}{extra_config}"), &config_path).expect("config");
+        Config::parse(&format!("{}{extra_config}", base_config()), &config_path).expect("config");
     let mut opts = ServerOptions::new("test", paths, config_path);
     opts.env_shell = None;
+    opts.pane_env = common::pane_env();
     tweak(&mut opts);
     let server = Server::new(opts, config);
     let socket = server.options().socket_path.clone();
@@ -220,7 +228,7 @@ async fn frames_are_incremental_and_idle_is_silent() {
     let mut s = Screen::attach(&srv.socket, frontend(None, true), 80, 24).await;
     assert_eq!(s.session, "main");
     s.ready().await;
-    run_shell(&mut s, "echo rea''dy", "ready").await;
+    run_shell(&mut s, &common::echo_split("rea", "dy"), "ready").await;
     // Let the prompt settle, then make sure nothing else arrives: no
     // timers, no redraws while idle.
     tokio::time::sleep(Duration::from_millis(300)).await;
@@ -246,9 +254,13 @@ async fn detach_and_reattach_keep_the_screen_and_the_shell() {
     let srv = start().await;
     let mut s = Screen::attach(&srv.socket, frontend(None, true), 80, 24).await;
     s.ready().await;
-    run_shell(&mut s, "echo mark''er-1", "marker-1").await;
-    // Panes learn where the server is.
-    run_shell(&mut s, "echo T=${TERMOS##*,}", "T=$1").await;
+    run_shell(&mut s, &common::echo_split("mark", "er-1"), "marker-1").await;
+    // Panes learn where the server is (and which session they are in).
+    if cfg!(windows) {
+        run_shell(&mut s, "echo T=%TERMOS%", ",$1").await;
+    } else {
+        run_shell(&mut s, "echo T=${TERMOS##*,}", "T=$1").await;
+    }
     // C-b d detaches.
     s.key(KeyEvent::ctrl('b'));
     s.key(KeyEvent::ch('d'));
@@ -265,7 +277,7 @@ async fn detach_and_reattach_keep_the_screen_and_the_shell() {
     assert_eq!(s.session, "main");
     s.until("the earlier output", |t| t.contains("marker-1"))
         .await;
-    run_shell(&mut s, "echo mark''er-2", "marker-2").await;
+    run_shell(&mut s, &common::echo_split("mark", "er-2"), "marker-2").await;
     assert!(s.text().contains("marker-1"));
 }
 
@@ -281,7 +293,7 @@ async fn two_clients_share_a_session() {
     assert!(!b.text().contains("[main]"));
     assert_eq!((b.grid.cols(), b.grid.rows()), (60, 20));
     // Keys from the second client reach the pane; both see the output.
-    run_shell(&mut b, "echo sha''red", "shared").await;
+    run_shell(&mut b, &common::echo_split("sha", "red"), "shared").await;
     a.until("output typed by the other client", |t| t.contains("shared"))
         .await;
     let clients = call(&srv.socket, "client.list", json!({})).await;
@@ -343,7 +355,7 @@ async fn control_api_drives_sessions_and_panes() {
     call(
         &srv.socket,
         "pane.send-text",
-        json!({"pane": target, "text": "echo via''-api\r"}),
+        json!({"pane": target, "text": format!("{}\r", common::echo_split("via", "-api"))}),
     )
     .await;
     s.until("text sent through the API", |t| in_a_pane(t, "via-api"))
@@ -420,7 +432,7 @@ async fn clients_switch_sessions_and_move_when_one_ends() {
     s.key(KeyEvent::ch(')'));
     s.until("the work session", |t| t.contains("[work]")).await;
     s.ready().await;
-    run_shell(&mut s, "echo in-wo''rk", "in-work").await;
+    run_shell(&mut s, &common::echo_split("in-wo", "rk"), "in-work").await;
     // Back with C-b (.
     s.key(KeyEvent::ctrl('b'));
     s.key(KeyEvent::ch('('));
@@ -451,7 +463,10 @@ async fn the_server_stops_with_its_last_session_and_removes_the_socket() {
         .expect("server stops")
         .expect("server task");
     assert_eq!(reason, "no sessions are left");
-    assert!(!srv.socket.exists(), "socket file left behind");
+    assert!(
+        !termos_core::local::exists(&srv.socket),
+        "endpoint left behind"
+    );
 }
 
 #[tokio::test]
@@ -494,7 +509,7 @@ async fn server_kill_and_resize() {
         .expect("server stops")
         .expect("server task");
     assert_eq!(reason, "killed by request");
-    assert!(!srv.socket.exists());
+    assert!(!termos_core::local::exists(&srv.socket));
 }
 
 /// Asks the server to stop and waits until it has.
@@ -683,24 +698,34 @@ async fn plugins_add_windows_widgets_and_commands() {
     let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/hello_plugin.py");
     let script = script.to_str().expect("utf-8 path");
     let all = "windows = true\nstatus = true\ncommands = true\nnotify = true";
-    write_plugin(dir.path(), "hello", &["python3", script], all);
-    write_plugin(dir.path(), "limited", &["python3", script], "notify = true");
-    // Stands in for a plugin process so the test can drive the Rust SDK
-    // with its token.
+    write_plugin(dir.path(), "hello", &[common::PYTHON, script], all);
     write_plugin(
         dir.path(),
-        "rusty",
+        "limited",
+        &[common::PYTHON, script],
+        "notify = true",
+    );
+    // Stands in for a plugin process so the test can drive the Rust SDK
+    // with its token.
+    let stand_in: &[&str] = if cfg!(windows) {
+        &[
+            "powershell.exe",
+            "-NoProfile",
+            "-Command",
+            "Set-Content -NoNewline -Path token.tmp -Value $env:TERMOS_PLUGIN_TOKEN; Move-Item -Force token.tmp token; Start-Sleep -Seconds 600",
+        ]
+    } else {
         &[
             "/bin/sh",
             "-c",
             "printf %s \"$TERMOS_PLUGIN_TOKEN\" > token.tmp && mv token.tmp token && exec sleep 600",
-        ],
-        all,
-    );
+        ]
+    };
+    write_plugin(dir.path(), "rusty", stand_in, all);
     let enabled = "[plugins]\nenabled = [\"hello\", \"limited\", \"rusty\", \"missing\"]\n";
     let config_file = paths_in(dir.path()).config_file();
     std::fs::create_dir_all(config_file.parent().expect("dir")).expect("mkdir");
-    std::fs::write(&config_file, format!("{BASE_CONFIG}{enabled}")).expect("config");
+    std::fs::write(&config_file, format!("{}{enabled}", base_config())).expect("config");
     let srv = start_in(dir.path(), enabled, |_| {});
     let mut s = Screen::attach(&srv.socket, frontend(None, true), 120, 40).await;
 
@@ -744,7 +769,7 @@ async fn plugins_add_windows_widgets_and_commands() {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
     let token = loop {
         if let Ok(t) = std::fs::read_to_string(&token_file) {
-            break t;
+            break t.trim().to_owned();
         }
         assert!(tokio::time::Instant::now() < deadline, "no token file");
         tokio::time::sleep(Duration::from_millis(50)).await;
@@ -775,7 +800,8 @@ async fn plugins_add_windows_widgets_and_commands() {
     let (socket, again) = (srv.socket.clone(), token_file.clone());
     let err = tokio::task::spawn_blocking(move || {
         let token = std::fs::read_to_string(again).expect("token");
-        termos_plugin::Plugin::connect(&socket, &token, "again")
+        let token = token.trim();
+        termos_plugin::Plugin::connect(&socket, token, "again")
     })
     .await
     .expect("thread")
@@ -811,7 +837,7 @@ async fn plugins_add_windows_widgets_and_commands() {
     s.key(KeyEvent::ch('q'));
 
     // Disabling plugins (config reload) stops them and removes their UI.
-    std::fs::write(&config_file, BASE_CONFIG).expect("config");
+    std::fs::write(&config_file, base_config()).expect("config");
     call(&srv.socket, "config.reload", json!({})).await;
     s.until("the widgets gone", |t| !t.contains("py:hello"))
         .await;
@@ -832,7 +858,7 @@ async fn a_session_restored_in_place_keeps_plugin_widgets() {
     write_plugin(
         dir.path(),
         "hello",
-        &["python3", script.to_str().expect("utf-8 path")],
+        &[common::PYTHON, script.to_str().expect("utf-8 path")],
         "windows = true\nstatus = true\ncommands = true\nnotify = true",
     );
     let srv = start_in(

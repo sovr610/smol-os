@@ -14,15 +14,25 @@ import socket
 import sys
 
 name = os.environ["TERMOS_PLUGIN_NAME"]
-sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-sock.connect(os.environ["TERMOS_SOCKET"])
-incoming = sock.makefile("rb")
+endpoint = os.environ["TERMOS_SOCKET"]
+if endpoint.startswith("\\\\.\\pipe\\"):
+    # Windows: the server's named pipe, opened like a file. One thread
+    # reads and writes in turn, which a synchronous pipe handles fine.
+    pipe = open(endpoint, "r+b", buffering=0)
+    incoming = pipe
+
+    def send(obj):
+        pipe.write((json.dumps(obj) + "\n").encode())
+else:
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    sock.connect(endpoint)
+    incoming = sock.makefile("rb")
+
+    def send(obj):
+        sock.sendall((json.dumps(obj) + "\n").encode())
+
 queued = []
 next_id = 0
-
-
-def send(obj):
-    sock.sendall((json.dumps(obj) + "\n").encode())
 
 
 def read():

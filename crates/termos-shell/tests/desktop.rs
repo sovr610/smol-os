@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//! End-to-end tests of the desktop with real `/bin/sh` panes, driven
-//! headlessly (no terminal involved).
+//! End-to-end tests of the desktop with real shell panes (`/bin/sh`, or
+//! `cmd.exe` on Windows), driven headlessly (no terminal involved).
+
+mod common;
 
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -31,7 +33,7 @@ struct Harness {
 }
 
 fn base_config(extra: &str) -> String {
-    format!("shell = \"/bin/sh\"\n{extra}\n")
+    format!("{}{extra}\n", common::shell_config())
 }
 
 impl Harness {
@@ -59,7 +61,7 @@ impl Harness {
             paths,
             env_shell: None,
             pane_ids: termos_core::ids::PaneIds::new(),
-            pane_env: Vec::new(),
+            pane_env: common::pane_env(),
             cwd: None,
         };
         let mut desktop = Desktop::new(opts, config, tx, COLS, ROWS).expect("desktop starts");
@@ -162,7 +164,7 @@ impl Harness {
 #[tokio::test]
 async fn starts_with_a_shell_and_a_status_line() {
     let mut h = Harness::new("");
-    h.type_text("echo he''llo\n");
+    h.type_text(&format!("{}\n", common::echo_split("he", "llo")));
     let screen = h.wait_text("hello\n").await;
     let status = screen.lines().last().unwrap_or("");
     assert!(status.starts_with("[test]  0:"), "{status:?}");
@@ -176,7 +178,7 @@ async fn split_right_type_and_see_separator() {
     assert_eq!(h.panes().len(), 2);
     let focused = h.desktop.focused();
     assert_eq!(focused, Some(h.panes()[1]));
-    h.type_text("echo ri''ght\n");
+    h.type_text(&format!("{}\n", common::echo_split("ri", "ght")));
     // The output line in the right-hand pane ends with "right" (it may
     // follow a prompt when the keys were typed before the shell printed
     // it); the echoed command line contains "echo".
@@ -244,7 +246,7 @@ async fn workspaces_new_switch_rename() {
 #[tokio::test]
 async fn copy_mode_search_select_yank() {
     let mut h = Harness::new("");
-    h.type_text("echo cop''ytext\n");
+    h.type_text(&format!("{}\n", common::echo_split("cop", "ytext")));
     h.wait_for("output line", |s, _| {
         s.lines()
             .any(|l| l.trim_end().ends_with("copytext") && !l.contains("echo"))
@@ -411,7 +413,7 @@ async fn mouse_focus_resize_and_float_drag() {
 #[tokio::test]
 async fn mouse_wheel_scrolls_into_copy_mode_and_drag_copies() {
     let mut h = Harness::new("");
-    h.type_text("for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32 33 34 35; do echo line$i; done\n");
+    h.type_text(&format!("{}\n", common::print_lines(35)));
     h.wait_text("line35").await;
     h.mouse(MouseKind::ScrollUp, 5, 5);
     assert!(h.desktop.in_copy_mode());
@@ -535,7 +537,7 @@ async fn window_size_policies() {
 #[tokio::test]
 async fn snapshots_keep_layout_and_scrollback() {
     let mut h = Harness::new("[session]\nsave-scrollback = true\n");
-    h.type_text("echo hist''ory-line\r");
+    h.type_text(&format!("{}\r", common::echo_split("hist", "ory-line")));
     h.wait_for("the output", |s, _| {
         s.lines()
             .any(|l| l.trim_end().ends_with("history-line") && !l.contains("echo"))
@@ -572,7 +574,7 @@ async fn snapshots_keep_layout_and_scrollback() {
         },
         env_shell: None,
         pane_ids: termos_core::ids::PaneIds::new(),
-        pane_env: Vec::new(),
+        pane_env: common::pane_env(),
         cwd: None,
     };
     let config = Config::load(&h.config_path()).expect("config");

@@ -10,11 +10,21 @@ use common::Termos;
 
 const T: Duration = Duration::from_secs(20);
 
+/// An `echo` of `a` and `b` joined whose command line does not contain the
+/// joined word.
+fn echo_split(a: &str, b: &str) -> String {
+    if cfg!(windows) {
+        format!("echo {a}^{b}\r")
+    } else {
+        format!("echo {a}''{b}\r")
+    }
+}
+
 #[test]
 fn split_type_close_and_exit() {
     let mut t = Termos::start("");
     t.wait_ready();
-    t.send(b"echo e2''e-ok\r");
+    t.send(echo_split("e2", "e-ok").as_bytes());
     t.wait_for("command output", T, |s| {
         s.lines()
             .any(|l| l.trim_end().ends_with("e2e-ok") && !l.contains("echo"))
@@ -29,7 +39,7 @@ fn split_type_close_and_exit() {
             .last()
             .is_some_and(|l| l.starts_with("[main]"))
     );
-    t.send(b"echo ri''ght\r");
+    t.send(echo_split("ri", "ght").as_bytes());
     // The output is in the right-hand cell of a row (after the separator).
     t.wait_for("output in the right pane", T, |s| {
         s.lines().any(|l| {
@@ -55,7 +65,10 @@ fn split_type_close_and_exit() {
     assert!(status.success(), "{status:?}");
     let out = t.wait_output(T, "[exited: the last pane was closed]");
     // Alternate screen left, raw mode off: the restore sequences were sent.
-    assert!(out.contains("\x1b[?1049l"), "alternate screen not left");
+    // (A ConPTY renders the screen itself instead of passing them on.)
+    if cfg!(unix) {
+        assert!(out.contains("\x1b[?1049l"), "alternate screen not left");
+    }
 }
 
 /// Whether some pane has a line that is `text`, possibly after a prompt
@@ -83,7 +96,7 @@ fn stdout(out: &std::process::Output) -> String {
 fn detach_ls_attach_msg_and_kill_server() {
     let mut t = Termos::start("");
     t.wait_ready();
-    t.send(b"echo befo''re-detach\r");
+    t.send(echo_split("befo", "re-detach").as_bytes());
     t.wait_for("command output", T, |s| s.contains("before-detach"));
     t.send(b"\x02%");
     t.wait_for("the split", T, |s| s.contains('│'));
@@ -113,7 +126,8 @@ fn detach_ls_attach_msg_and_kill_server() {
     assert!(stdout(&t.run(&["ls"])).contains("(attached)"));
 
     // Scripts drive it.
-    let sent = t.run(&["msg", "pane.send-text", r#"{"text": "echo via-m''sg\r"}"#]);
+    let text = serde_json::json!({ "text": echo_split("via-m", "sg") }).to_string();
+    let sent = t.run(&["msg", "pane.send-text", &text]);
     assert!(sent.status.success(), "{sent:?}");
     t2.wait_for("text typed by msg", T, |s| in_a_pane(s, "via-msg"));
     t.run(&["msg", "notify.send", r#"{"text": "hello from msg"}"#]);
@@ -123,13 +137,12 @@ fn detach_ls_attach_msg_and_kill_server() {
     assert!(String::from_utf8_lossy(&bad.stderr).contains("unknown method"));
 
     // Inside a pane, termos finds its server and session through $TERMOS.
-    t2.send(
-        format!(
-            "{} msg session.rename '{{\"name\": \"work\"}}'\r",
-            env!("CARGO_BIN_EXE_termos")
-        )
-        .as_bytes(),
-    );
+    let rename = if cfg!(windows) {
+        r#"msg session.rename "{\"name\": \"work\"}""#
+    } else {
+        r#"msg session.rename '{"name": "work"}'"#
+    };
+    t2.send(format!("{} {rename}\r", env!("CARGO_BIN_EXE_termos")).as_bytes());
     t2.wait_for("the renamed session", T, |s| {
         s.lines().last().is_some_and(|l| l.starts_with("[work]"))
     });
@@ -143,7 +156,7 @@ fn detach_ls_attach_msg_and_kill_server() {
     t3.wait_output(T, "no session named `nope`");
     let killed = t.run(&["kill-server"]);
     assert!(killed.status.success(), "{killed:?}");
-    assert!(!t.env.socket().exists(), "socket left behind");
+    assert!(!t.env.server_alive(), "endpoint left behind");
     let ls = t.run(&["ls"]);
     assert!(!ls.status.success());
     assert!(stdout(&ls).contains("no server running"));

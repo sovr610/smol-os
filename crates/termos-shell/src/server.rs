@@ -69,6 +69,8 @@ pub struct ServerOptions {
     pub exit_when_empty: bool,
     /// Handle SIGTERM, SIGINT and SIGHUP (the daemon does; tests do not).
     pub handle_signals: bool,
+    /// Extra environment for every pane (tests set a predictable prompt).
+    pub pane_env: Vec<(String, String)>,
 }
 
 impl ServerOptions {
@@ -87,6 +89,7 @@ impl ServerOptions {
             allowed_peer: PeerId::current().unwrap_or_else(|_| PeerId::nobody()),
             exit_when_empty: true,
             handle_signals: false,
+            pane_env: Vec::new(),
         }
     }
 }
@@ -532,14 +535,16 @@ impl Server {
             pane_ids: self.pane_ids.clone(),
             // Lets `termos msg`, `ls` and `detach` inside a pane find us
             // (D-029; supersedes D-027's pid-only value).
-            pane_env: vec![(
+            pane_env: std::iter::once((
                 "TERMOS".into(),
                 format!(
                     "{},{},${key}",
                     self.opts.socket_path.display(),
                     std::process::id()
                 ),
-            )],
+            ))
+            .chain(self.opts.pane_env.iter().cloned())
+            .collect(),
         }
     }
 

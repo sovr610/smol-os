@@ -35,10 +35,16 @@ impl Env {
         let dir = tempfile::tempdir().expect("tempdir");
         let cfg = dir.path().join("config").join("termos");
         std::fs::create_dir_all(&cfg).expect("mkdir");
+        // The server ignores $SHELL on Windows; name the shell explicitly.
+        let shell = if cfg!(windows) {
+            "shell = \"cmd.exe\"\n"
+        } else {
+            ""
+        };
         std::fs::write(
             cfg.join("config.toml"),
             format!(
-                "[tutorial]\nshow-on-first-run = false\n[status]\nclock = false\n{extra_config}\n"
+                "{shell}[tutorial]\nshow-on-first-run = false\n[status]\nclock = false\n{extra_config}\n"
             ),
         )
         .expect("config");
@@ -49,9 +55,20 @@ impl Env {
         self.dir.path()
     }
 
-    /// The default server's socket.
+    /// The default server's endpoint (a socket, or a pipe on Windows).
     pub fn socket(&self) -> PathBuf {
-        self.path().join("run").join("termos").join("default.sock")
+        let vars = self.vars();
+        termos_core::paths::Paths::from_env(|k| {
+            vars.iter()
+                .find(|(n, _)| *n == k)
+                .map(|(_, v)| v.to_string_lossy().into_owned())
+        })
+        .socket_path("default")
+    }
+
+    /// Whether the default server's endpoint still exists.
+    pub fn server_alive(&self) -> bool {
+        termos_core::local::exists(&self.socket())
     }
 
     fn vars(&self) -> Vec<(&'static str, PathBuf)> {
@@ -64,6 +81,8 @@ impl Env {
             ("SHELL", "/bin/sh".into()),
             ("TERM", "xterm-256color".into()),
             ("PS1", "$ ".into()),
+            // cmd's prompt, `$ ` like the POSIX shell's.
+            ("PROMPT", "$$$S".into()),
         ]
     }
 
@@ -80,7 +99,7 @@ impl Env {
 
 impl Drop for Env {
     fn drop(&mut self) {
-        if self.socket().exists() {
+        if self.server_alive() {
             let _ = self.run(&["kill-server"]);
         }
     }
