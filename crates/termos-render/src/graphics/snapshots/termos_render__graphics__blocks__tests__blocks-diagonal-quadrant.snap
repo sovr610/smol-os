@@ -1,0 +1,14 @@
+---
+source: crates/termos-render/src/graphics/blocks.rs
+expression: "draw(&cells, 4, 2).to_styled_text()"
+---
+▝▀
+  ▝▀
+--- styles
+abcc
+ddab
+--- legend
+a: fg=#8f8f9e bg=#1e1e3c
+b: fg=#ffffff bg=#57576d
+c: fg=default bg=#ffffff
+d: fg=default bg=#1e1e3c

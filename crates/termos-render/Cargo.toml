@@ -14,11 +14,14 @@ publish.workspace = true
 base64.workspace = true
 bitflags = { workspace = true, features = ["serde"] }
 compact_str = { workspace = true, features = ["serde"] }
+image.workspace = true
+thiserror.workspace = true
 serde.workspace = true
 unicode-segmentation.workspace = true
 unicode-width.workspace = true
 
 [dev-dependencies]
+insta.workspace = true
 criterion.workspace = true
 proptest.workspace = true
 toml.workspace = true

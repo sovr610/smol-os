@@ -53,3 +53,10 @@ path = "fuzz_targets/caps_reply.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "sixel_decode"
+path = "fuzz_targets/sixel_decode.rs"
+test = false
+doc = false
+bench = false

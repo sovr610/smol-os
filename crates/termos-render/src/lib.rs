@@ -19,6 +19,7 @@ pub mod cell;
 pub mod color;
 pub mod diff;
 pub mod encode;
+pub mod graphics;
 pub mod grid;
 pub mod probe;
 pub mod theme;

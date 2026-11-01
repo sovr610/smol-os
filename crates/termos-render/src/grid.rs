@@ -60,6 +60,38 @@ impl Rect {
         !self.intersect(other).is_empty()
     }
 
+    /// The parts of `self` not covered by `other`: at most four disjoint
+    /// rectangles (the bands above and below the overlap, then the pieces
+    /// left and right of it). Empty when `other` covers `self`.
+    pub fn subtract(&self, other: &Rect) -> Vec<Rect> {
+        if self.is_empty() {
+            return Vec::new();
+        }
+        let i = self.intersect(other);
+        if i.is_empty() {
+            return vec![*self];
+        }
+        let mut out = Vec::with_capacity(4);
+        if i.y > self.y {
+            out.push(Rect::new(self.x, self.y, self.w, i.y - self.y));
+        }
+        if i.bottom() < self.bottom() {
+            out.push(Rect::new(
+                self.x,
+                i.bottom(),
+                self.w,
+                self.bottom() - i.bottom(),
+            ));
+        }
+        if i.x > self.x {
+            out.push(Rect::new(self.x, i.y, i.x - self.x, i.h));
+        }
+        if i.right() < self.right() {
+            out.push(Rect::new(i.right(), i.y, self.right() - i.right(), i.h));
+        }
+        out
+    }
+
     /// Shrinks by `n` cells on every side.
     pub fn inset(&self, n: u16) -> Rect {
         let w = self.w.saturating_sub(n.saturating_mul(2));
@@ -367,6 +399,21 @@ impl Grid {
             .collect()
     }
 
+    /// Makes every cell of `rect` differ from anything a frame can
+    /// contain, so the next diff against this grid redraws the area. Used
+    /// on a client's copy of what it last showed, where a pixel image
+    /// (Sixel, iTerm2) painted over cells the grid knows nothing about.
+    pub fn poison(&mut self, rect: Rect) {
+        let r = rect.intersect(&self.area());
+        for y in r.y..r.bottom() {
+            for x in r.x..r.right() {
+                if let Some(i) = self.idx(x, y) {
+                    self.cells[i] = Cell::poisoned();
+                }
+            }
+        }
+    }
+
     /// The whole grid as text, one line per row, trailing spaces trimmed.
     /// Used by snapshot tests.
     pub fn to_text(&self) -> String {
@@ -426,6 +473,47 @@ impl Grid {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use proptest::{prop_assert, prop_assert_eq};
+
+    #[test]
+    fn poisoned_cells_differ_from_anything_drawn() {
+        let mut g = Grid::new(4, 2);
+        let clean = g.clone();
+        g.poison(Rect::new(1, 0, 2, 9));
+        assert_ne!(g, clean);
+        assert_eq!(g.get(0, 0), clean.get(0, 0));
+        assert_ne!(g.get(1, 1), clean.get(1, 1));
+        // Drawing never stores a control character, so a frame drawn over
+        // the area always differs from the poisoned copy.
+        let mut drawn = Grid::new(4, 2);
+        drawn.put_str(0, 0, "\u{0}ab", Style::new(), 4);
+        assert_ne!(drawn.get(1, 0), g.get(1, 0));
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn subtract_partitions_the_rest(
+            ax in 0u16..30, ay in 0u16..30, aw in 0u16..30, ah in 0u16..30,
+            bx in 0u16..40, by in 0u16..40, bw in 0u16..40, bh in 0u16..40,
+        ) {
+            let a = Rect::new(ax, ay, aw, ah);
+            let b = Rect::new(bx, by, bw, bh);
+            let pieces = a.subtract(&b);
+            prop_assert!(pieces.len() <= 4);
+            let mut area = 0u32;
+            for (i, p) in pieces.iter().enumerate() {
+                prop_assert!(!p.is_empty());
+                prop_assert_eq!(p.intersect(&a), *p, "inside a");
+                prop_assert!(!p.intersects(&b), "outside b");
+                for q in &pieces[i + 1..] {
+                    prop_assert!(!p.intersects(q), "disjoint");
+                }
+                area += p.area();
+            }
+            prop_assert_eq!(area, a.area() - a.intersect(&b).area());
+        }
+    }
 
     #[test]
     fn rect_math() {

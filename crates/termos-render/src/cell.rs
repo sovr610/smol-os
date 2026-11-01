@@ -110,6 +110,16 @@ impl Cell {
         }
     }
 
+    /// A cell no frame ever contains (see [`crate::grid::Grid::poison`]).
+    /// Its symbol is a control character, which drawing never stores.
+    pub fn poisoned() -> Self {
+        Self {
+            symbol: CompactString::const_new("\u{0}"),
+            width: 1,
+            style: Style::new(),
+        }
+    }
+
     /// The trailing half of a double-width character.
     pub fn continuation(style: Style) -> Self {
         Self {
