@@ -32,8 +32,10 @@
 //! # Ok::<(), termos_plugin::Error>(())
 //! ```
 //!
-//! The crate depends only on serde, so plugins stay small.
+//! The crate depends only on serde (and windows-sys on Windows), so
+//! plugins stay small.
 
+mod conn;
 pub mod proto;
 mod sdk;
 

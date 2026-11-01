@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//! A blocking plugin client over the session socket.
+//! A blocking plugin client over the session socket (a Windows named pipe
+//! on Windows).
 
 use std::collections::VecDeque;
 use std::fmt;
-use std::io::{self, BufRead, BufReader, Write};
-use std::os::unix::net::UnixStream;
+use std::io;
 use std::path::Path;
 use std::time::Duration;
 
@@ -12,6 +12,7 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 
+use crate::conn::Conn;
 use crate::proto::{
     CommandInvoked, CommandRegister, Line, NotifySend, PROTOCOL_VERSION, StatusSet, WindowDraw,
     WindowKey, WindowMouse, WindowOpen, WindowRef, WindowResize, env, methods,
@@ -138,8 +139,7 @@ fn parse_event(msg: &Value) -> Event {
 /// A connected plugin.
 pub struct Plugin {
     name: String,
-    reader: BufReader<UnixStream>,
-    writer: UnixStream,
+    conn: Box<dyn Conn>,
     /// Bytes of a line not complete yet (kept across read timeouts).
     partial: Vec<u8>,
     next_id: u64,
@@ -166,12 +166,9 @@ impl Plugin {
 
     /// Connects to `socket` and says hello with `token`.
     pub fn connect(socket: &Path, token: &str, name: &str) -> Result<Self, Error> {
-        let stream = UnixStream::connect(socket)?;
-        let writer = stream.try_clone()?;
         let mut p = Self {
             name: name.to_owned(),
-            reader: BufReader::new(stream),
-            writer,
+            conn: crate::conn::connect(socket)?,
             partial: Vec::new(),
             next_id: 0,
             queued: VecDeque::new(),
@@ -200,10 +197,9 @@ impl Plugin {
         let req = json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params});
         let mut line = serde_json::to_vec(&req)?;
         line.push(b'\n');
-        self.writer.write_all(&line)?;
-        self.set_timeout(None)?;
+        self.conn.write_all(&line)?;
         loop {
-            let msg = self.read_message()?.ok_or(Error::Closed)?;
+            let msg = self.read_message(None)?.ok_or(Error::Closed)?;
             if msg.get("method").is_some() {
                 self.queued.push_back(parse_event(&msg));
                 continue;
@@ -225,20 +221,11 @@ impl Plugin {
         }
     }
 
-    fn set_timeout(&self, timeout: Option<Duration>) -> Result<(), Error> {
-        match self.reader.get_ref().set_read_timeout(timeout) {
-            // macOS refuses socket options once the server has hung up;
-            // reading then returns what is left, then end of stream.
-            Err(e) if e.kind() == io::ErrorKind::InvalidInput => Ok(()),
-            other => other.map_err(Error::from),
-        }
-    }
-
     /// One JSON message; `None` at end of stream. A read timeout leaves a
     /// partial line buffered for the next call.
-    fn read_message(&mut self) -> Result<Option<Value>, Error> {
+    fn read_message(&mut self, timeout: Option<Duration>) -> Result<Option<Value>, Error> {
         loop {
-            let n = self.reader.read_until(b'\n', &mut self.partial)?;
+            let n = self.conn.read_line(&mut self.partial, timeout)?;
             if n == 0 || !self.partial.ends_with(b"\n") {
                 return Ok(None);
             }
@@ -257,8 +244,7 @@ impl Plugin {
         if let Some(e) = self.queued.pop_front() {
             return Ok(Some(e));
         }
-        self.set_timeout(None)?;
-        match self.read_message()? {
+        match self.read_message(None)? {
             Some(msg) => Ok(Some(parse_event(&msg))),
             None => Ok(None),
         }
@@ -271,8 +257,7 @@ impl Plugin {
         if let Some(e) = self.queued.pop_front() {
             return Ok(Some(e));
         }
-        self.set_timeout(Some(timeout.max(Duration::from_millis(1))))?;
-        match self.read_message() {
+        match self.read_message(Some(timeout.max(Duration::from_millis(1)))) {
             Ok(Some(msg)) => Ok(Some(parse_event(&msg))),
             Ok(None) => Err(Error::Closed),
             Err(Error::Io(e))
@@ -388,10 +373,16 @@ impl Plugin {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
+    use std::io::{BufRead as _, BufReader, Write as _};
+    #[cfg(unix)]
     use std::os::unix::net::UnixListener;
 
     /// A fake server: answers every request with its id, sends one
     /// notification before answering the second request, then a late one.
+    /// (On Windows the SDK is tested against the real server, in
+    /// termos-shell's server tests.)
+    #[cfg(unix)]
     #[test]
     fn requests_responses_and_events() {
         let dir = tempfile::tempdir().expect("tempdir");
