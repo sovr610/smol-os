@@ -1,140 +1,213 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//! The server loop over the in-process transport: frames are incremental
-//! (only changed cells are sent) and an idle desktop sends nothing.
+//! The session server over a real Unix socket: attach, detach and reattach,
+//! several clients, the handshake checks, the control API, session
+//! switching, incremental frames and a silent idle server.
 
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use serde_json::{Value, json};
 use termos_core::config::Config;
-use termos_core::input::KeyEvent;
-use termos_core::paths::Paths;
+use termos_core::input::{KeyCode, KeyEvent};
+use termos_core::paths::{Paths, current_uid};
 use termos_core::proto::{ClientMsg, PROTOCOL_VERSION, ServerMsg};
-use termos_core::transport::{ClientEnd, in_process};
+use termos_core::transport::{ClientEnd, ConnectError, connect_frontend, control_call};
+use termos_core::wire::{ConnKind, Hello, codes};
 use termos_render::caps::Caps;
 use termos_render::diff::{apply, cell_count};
 use termos_render::grid::Grid;
-use termos_shell::server::{ServerChannels, run};
-use termos_shell::{Desktop, DesktopOptions};
-use tokio::sync::mpsc;
+use termos_shell::server::{Server, ServerOptions};
+use tokio::task::JoinHandle;
 
-const COLS: u16 = 80;
-const ROWS: u16 = 24;
+const BASE_CONFIG: &str =
+    "shell = \"/bin/sh\"\n[tutorial]\nshow-on-first-run = false\n[status]\nclock = false\n";
 
-fn start() -> (ClientEnd, tempfile::TempDir) {
+struct TestServer {
+    socket: PathBuf,
+    handle: JoinHandle<String>,
+    _dir: tempfile::TempDir,
+}
+
+async fn start_with(extra_config: &str, tweak: impl FnOnce(&mut ServerOptions)) -> TestServer {
     let dir = tempfile::tempdir().expect("tempdir");
     let paths = Paths {
         config_dir: dir.path().join("config"),
         state_dir: dir.path().join("state"),
         runtime_dir: dir.path().join("run"),
     };
-    let config = Config::parse(
-        "shell = \"/bin/sh\"\n[tutorial]\nshow-on-first-run = false\n[status]\nclock = false\n",
-        &paths.config_file(),
-    )
-    .expect("config");
-    let (pty_tx, pty_rx) = mpsc::channel(1024);
-    let desktop = Desktop::new(
-        DesktopOptions {
-            session_name: "srv".into(),
-            config_path: paths.config_file(),
-            paths,
-            env_shell: None,
-            pane_ids: termos_core::ids::PaneIds::new(),
-            pane_env: Vec::new(),
-        },
-        config,
-        pty_tx,
-        COLS,
-        ROWS,
-    )
-    .expect("desktop");
-    let (client, server) = in_process();
-    tokio::spawn(run(
-        desktop,
-        ServerChannels {
-            client: server,
-            pty_rx,
-            reload_rx: None,
-        },
-    ));
-    client
-        .tx
-        .send(ClientMsg::Hello {
-            version: PROTOCOL_VERSION,
-            caps: Caps::default(),
-            cols: COLS,
-            rows: ROWS,
-        })
-        .expect("server alive");
-    (client, dir)
+    let config_path = paths.config_file();
+    let config =
+        Config::parse(&format!("{BASE_CONFIG}{extra_config}"), &config_path).expect("config");
+    let mut opts = ServerOptions::new("test", paths, config_path);
+    opts.env_shell = None;
+    tweak(&mut opts);
+    let server = Server::new(opts, config);
+    let socket = server.options().socket_path.clone();
+    let listener = server.bind().expect("bind");
+    let handle = tokio::spawn(server.run(Some(listener)));
+    TestServer {
+        socket,
+        handle,
+        _dir: dir,
+    }
 }
 
-/// Applies frames until `pred(screen)` holds; returns the cells sent.
-async fn until(
-    client: &mut ClientEnd,
-    mirror: &mut Grid,
-    what: &str,
-    pred: impl Fn(&str) -> bool,
-) -> usize {
-    let mut cells = 0;
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
-    loop {
-        if pred(&mirror.to_text()) {
-            return cells;
-        }
-        let msg = tokio::time::timeout_at(deadline, client.rx.recv())
-            .await
-            .unwrap_or_else(|_| panic!("timed out waiting for {what}:\n{}", mirror.to_text()));
-        match msg {
-            Some(ServerMsg::Frame(f)) => {
-                if f.clear {
-                    mirror.resize(f.cols, f.rows);
-                }
-                cells += cell_count(&f.spans);
-                apply(mirror, &f.spans);
-            }
-            Some(_) => {}
-            None => panic!("server ended"),
+async fn start() -> TestServer {
+    start_with("", |_| {}).await
+}
+
+fn frontend(session: Option<&str>, create: bool) -> Hello {
+    let mut h = Hello::new(ConnKind::Frontend);
+    h.session = session.map(str::to_owned);
+    h.create = create;
+    h
+}
+
+/// An attached client with a mirror of its screen.
+struct Screen {
+    client: ClientEnd,
+    grid: Grid,
+    session: String,
+}
+
+impl Screen {
+    async fn attach(socket: &Path, hello: Hello, cols: u16, rows: u16) -> Self {
+        let (reply, client) = connect_frontend(socket, &hello).await.expect("attach");
+        client
+            .tx
+            .send(ClientMsg::Hello {
+                version: PROTOCOL_VERSION,
+                caps: Caps::default(),
+                cols,
+                rows,
+            })
+            .expect("server alive");
+        Self {
+            client,
+            grid: Grid::new(cols, rows),
+            session: reply.session.unwrap_or_default(),
         }
     }
+
+    fn text(&self) -> String {
+        self.grid.to_text()
+    }
+
+    fn key(&self, k: KeyEvent) {
+        self.client
+            .tx
+            .send(ClientMsg::Key(k))
+            .expect("server alive");
+    }
+
+    fn type_text(&self, text: &str) {
+        for c in text.chars() {
+            self.key(match c {
+                '\r' => KeyEvent::plain(KeyCode::Enter),
+                c => KeyEvent::ch(c),
+            });
+        }
+    }
+
+    /// Applies frames until `pred(screen)` holds; returns the cells sent.
+    async fn until(&mut self, what: &str, pred: impl Fn(&str) -> bool) -> usize {
+        let mut cells = 0;
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+        loop {
+            if pred(&self.text()) {
+                return cells;
+            }
+            let msg = tokio::time::timeout_at(deadline, self.client.rx.recv())
+                .await
+                .unwrap_or_else(|_| panic!("timed out waiting for {what}:\n{}", self.text()));
+            match msg {
+                Some(ServerMsg::Frame(f)) => {
+                    if f.clear {
+                        self.grid.resize(f.cols, f.rows);
+                    }
+                    cells += cell_count(&f.spans);
+                    apply(&mut self.grid, &f.spans);
+                }
+                Some(_) => {}
+                None => panic!("server hung up while waiting for {what}:\n{}", self.text()),
+            }
+        }
+    }
+
+    /// Applies frames until the server ends the connection (`Detached`,
+    /// `Exit`, or hanging up) and returns that.
+    async fn next_event(&mut self, what: &str) -> Option<ServerMsg> {
+        loop {
+            let msg = tokio::time::timeout(Duration::from_secs(15), self.client.rx.recv())
+                .await
+                .unwrap_or_else(|_| panic!("timed out waiting for {what}:\n{}", self.text()));
+            match msg {
+                Some(ServerMsg::Frame(f)) => {
+                    if f.clear {
+                        self.grid.resize(f.cols, f.rows);
+                    }
+                    apply(&mut self.grid, &f.spans);
+                }
+                Some(ServerMsg::Title(_) | ServerMsg::Bell | ServerMsg::Clipboard(_)) => {}
+                other => return other,
+            }
+        }
+    }
+
+    /// Waits until a shell prompt is on screen.
+    async fn ready(&mut self) {
+        self.until("a shell prompt", |s| {
+            s.lines().any(|l| l.trim_end().ends_with(['$', '#']))
+        })
+        .await;
+    }
+}
+
+/// Runs `cmd` in the shell and waits for its output line.
+async fn run_shell(screen: &mut Screen, cmd: &str, expect: &str) {
+    screen.type_text(&format!("{cmd}\r"));
+    screen
+        .until(expect, |s| {
+            s.lines()
+                .any(|l| l.trim_end().ends_with(expect) && !l.contains("echo"))
+        })
+        .await;
+}
+
+fn rpc_code(err: ConnectError) -> i64 {
+    match err {
+        ConnectError::Rpc(e) => e.code,
+        other => panic!("expected an RPC error, got {other}"),
+    }
+}
+
+async fn call(socket: &Path, method: &str, params: Value) -> Value {
+    control_call(socket, method, Some(params))
+        .await
+        .unwrap_or_else(|e| panic!("{method} failed: {e}"))
 }
 
 #[tokio::test]
 async fn frames_are_incremental_and_idle_is_silent() {
-    let (mut client, _dir) = start();
-    let mut mirror = Grid::new(COLS, ROWS);
-    for c in "echo rea''dy\r".chars() {
-        let key = if c == '\r' {
-            KeyEvent::plain(termos_core::input::KeyCode::Enter)
-        } else {
-            KeyEvent::ch(c)
-        };
-        client.tx.send(ClientMsg::Key(key)).expect("alive");
-    }
-    until(&mut client, &mut mirror, "ready", |s| {
-        s.lines()
-            .any(|l| l.trim_end().ends_with("ready") && !l.contains("echo"))
-    })
-    .await;
+    let srv = start().await;
+    let mut s = Screen::attach(&srv.socket, frontend(None, true), 80, 24).await;
+    assert_eq!(s.session, "main");
+    s.ready().await;
+    run_shell(&mut s, "echo rea''dy", "ready").await;
     // Let the prompt settle, then make sure nothing else arrives: no
     // timers, no redraws while idle.
     tokio::time::sleep(Duration::from_millis(300)).await;
-    while let Ok(m) = client.rx.try_recv() {
+    while let Ok(m) = s.client.rx.try_recv() {
         if let ServerMsg::Frame(f) = m {
-            apply(&mut mirror, &f.spans);
+            apply(&mut s.grid, &f.spans);
         }
     }
-    let idle = tokio::time::timeout(Duration::from_millis(500), client.rx.recv()).await;
-    assert!(idle.is_err(), "idle desktop sent {idle:?}");
+    let idle = tokio::time::timeout(Duration::from_millis(500), s.client.rx.recv()).await;
+    assert!(idle.is_err(), "idle server sent {idle:?}");
 
     // One keystroke echoed by the shell changes exactly one cell.
-    client
-        .tx
-        .send(ClientMsg::Key(KeyEvent::ch('Q')))
-        .expect("alive");
-    let cells = until(&mut client, &mut mirror, "echoed Q", |s| {
-        s.lines().last().is_some_and(|_| s.contains('Q'))
-    })
-    .await;
+    s.key(KeyEvent::ch('Q'));
+    let cells = s.until("echoed Q", |t| t.contains('Q')).await;
     assert_eq!(
         cells, 1,
         "a single echoed character should be a one-cell frame"
@@ -142,54 +215,263 @@ async fn frames_are_incremental_and_idle_is_silent() {
 }
 
 #[tokio::test]
-async fn resize_sends_a_full_frame_and_quit_ends_the_session() {
-    let (mut client, _dir) = start();
-    let mut mirror = Grid::new(COLS, ROWS);
-    until(&mut client, &mut mirror, "status line", |s| {
-        s.contains("[srv]")
+async fn detach_and_reattach_keep_the_screen_and_the_shell() {
+    let srv = start().await;
+    let mut s = Screen::attach(&srv.socket, frontend(None, true), 80, 24).await;
+    s.ready().await;
+    run_shell(&mut s, "echo mark''er-1", "marker-1").await;
+    // Panes learn where the server is.
+    run_shell(&mut s, "echo T=${TERMOS##*,}", "T=$1").await;
+    // C-b d detaches.
+    s.key(KeyEvent::ctrl('b'));
+    s.key(KeyEvent::ch('d'));
+    match s.next_event("detach").await {
+        Some(ServerMsg::Detached { session }) => assert_eq!(session, "main"),
+        other => panic!("expected Detached, got {other:?}"),
+    }
+    let list = call(&srv.socket, "session.list", json!({})).await;
+    assert_eq!(list[0]["name"], "main");
+    assert_eq!(list[0]["clients"], 0);
+
+    // Reattach (no session named, no create): the same shell and screen.
+    let mut s = Screen::attach(&srv.socket, frontend(None, false), 80, 24).await;
+    assert_eq!(s.session, "main");
+    s.until("the earlier output", |t| t.contains("marker-1"))
+        .await;
+    run_shell(&mut s, "echo mark''er-2", "marker-2").await;
+    assert!(s.text().contains("marker-1"));
+}
+
+#[tokio::test]
+async fn two_clients_share_a_session() {
+    let srv = start_with("[session]\nwindow-size = \"largest\"\n", |_| {}).await;
+    let mut a = Screen::attach(&srv.socket, frontend(Some("main"), true), 80, 24).await;
+    a.ready().await;
+    let mut b = Screen::attach(&srv.socket, frontend(Some("main"), false), 60, 20).await;
+    // The session stays at the largest size; the small client sees it
+    // cropped to its terminal (so without the status line at row 23).
+    b.ready().await;
+    assert!(!b.text().contains("[main]"));
+    assert_eq!((b.grid.cols(), b.grid.rows()), (60, 20));
+    // Keys from the second client reach the pane; both see the output.
+    run_shell(&mut b, "echo sha''red", "shared").await;
+    a.until("output typed by the other client", |t| t.contains("shared"))
+        .await;
+    let clients = call(&srv.socket, "client.list", json!({})).await;
+    assert_eq!(clients.as_array().map(Vec::len), Some(2));
+}
+
+#[tokio::test]
+async fn handshake_rejects_other_users_bad_versions_and_missing_sessions() {
+    let srv = start_with("", |o| o.allowed_uid = current_uid().wrapping_add(1)).await;
+    let err = connect_frontend(&srv.socket, &frontend(None, true))
+        .await
+        .expect_err("a foreign uid must be refused");
+    assert_eq!(rpc_code(err), codes::FORBIDDEN);
+    let err = control_call(&srv.socket, "server.info", None)
+        .await
+        .expect_err("control connections too");
+    assert_eq!(rpc_code(err), codes::FORBIDDEN);
+
+    let srv = start().await;
+    let mut old = frontend(None, true);
+    old.version = PROTOCOL_VERSION + 1;
+    let err = connect_frontend(&srv.socket, &old)
+        .await
+        .expect_err("version mismatch");
+    assert_eq!(rpc_code(err), codes::VERSION_MISMATCH);
+    let err = connect_frontend(&srv.socket, &frontend(Some("nope"), false))
+        .await
+        .expect_err("no such session");
+    assert_eq!(rpc_code(err), codes::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn control_api_drives_sessions_and_panes() {
+    let srv = start().await;
+    let mut s = Screen::attach(&srv.socket, frontend(None, true), 100, 30).await;
+    s.ready().await;
+
+    let info = call(&srv.socket, "server.info", json!({})).await;
+    assert_eq!(info["pid"], std::process::id());
+    assert_eq!(info["sessions"], 1);
+
+    // Named commands work through command.run and directly as methods.
+    call(
+        &srv.socket,
+        "command.run",
+        json!({"command": "pane.split-right"}),
+    )
+    .await;
+    call(&srv.socket, "pane.split-down", json!({"session": "main"})).await;
+    let panes = call(&srv.socket, "pane.list", json!({"session": "main"})).await;
+    let panes = panes.as_array().expect("array");
+    assert_eq!(panes.len(), 3);
+    assert!(panes.iter().all(|p| p["session"] == "main"));
+    let focused: Vec<&Value> = panes.iter().filter(|p| p["focused"] == true).collect();
+    assert_eq!(focused.len(), 1);
+    let target = focused[0]["id"].as_u64().expect("pane id");
+
+    // Text typed into a pane by id.
+    call(
+        &srv.socket,
+        "pane.send-text",
+        json!({"pane": target, "text": "echo via''-api\r"}),
+    )
+    .await;
+    s.until("text sent through the API", |t| {
+        t.lines()
+            .any(|l| l.contains("via-api") && !l.contains("echo"))
     })
     .await;
-    client
+    call(
+        &srv.socket,
+        "pane.send-keys",
+        json!({"pane": target, "keys": ["e", "c", "h", "o", "Space", "k", "e", "y", "s", "Enter"]}),
+    )
+    .await;
+    s.until("keys sent through the API", |t| {
+        t.lines()
+            .any(|l| l.trim_end().ends_with("keys") && !l.contains("echo"))
+    })
+    .await;
+
+    call(
+        &srv.socket,
+        "notify.send",
+        json!({"text": "hello from a script"}),
+    )
+    .await;
+    s.until("the toast", |t| t.contains("hello from a script"))
+        .await;
+
+    call(&srv.socket, "pane.kill", json!({"pane": target})).await;
+    let panes = call(&srv.socket, "pane.list", json!({})).await;
+    assert_eq!(panes.as_array().map(Vec::len), Some(2));
+
+    // Sessions: create, rename, list, kill.
+    let new = call(&srv.socket, "session.new", json!({"name": "work"})).await;
+    assert_eq!(new["name"], "work");
+    call(
+        &srv.socket,
+        "session.rename",
+        json!({"session": "work", "name": "play"}),
+    )
+    .await;
+    let list = call(&srv.socket, "session.list", json!({})).await;
+    let names: Vec<&str> = list
+        .as_array()
+        .expect("array")
+        .iter()
+        .filter_map(|v| v["name"].as_str())
+        .collect();
+    assert_eq!(names, ["main", "play"]);
+    call(&srv.socket, "session.kill", json!({"session": "play"})).await;
+
+    // Errors are JSON-RPC errors with useful codes.
+    let err = control_call(&srv.socket, "no.such-method", None)
+        .await
+        .expect_err("unknown method");
+    assert_eq!(rpc_code(err), codes::METHOD_NOT_FOUND);
+    let err = control_call(&srv.socket, "session.new", Some(json!({"name": "main"})))
+        .await
+        .expect_err("duplicate name");
+    assert_eq!(rpc_code(err), codes::INVALID_PARAMS);
+    let err = control_call(&srv.socket, "pane.kill", Some(json!({"pane": 999_999})))
+        .await
+        .expect_err("no such pane");
+    assert_eq!(rpc_code(err), codes::NOT_FOUND);
+
+    // Give the killed session a moment to go, then check it went.
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let list = call(&srv.socket, "session.list", json!({})).await;
+    assert_eq!(list.as_array().map(Vec::len), Some(1));
+}
+
+#[tokio::test]
+async fn clients_switch_sessions_and_move_when_one_ends() {
+    let srv = start().await;
+    let mut s = Screen::attach(&srv.socket, frontend(None, true), 80, 24).await;
+    s.ready().await;
+    call(&srv.socket, "session.new", json!({"name": "work"})).await;
+    // C-b ) goes to the next session.
+    s.key(KeyEvent::ctrl('b'));
+    s.key(KeyEvent::ch(')'));
+    s.until("the work session", |t| t.contains("[work]")).await;
+    s.ready().await;
+    run_shell(&mut s, "echo in-wo''rk", "in-work").await;
+    // Back with C-b (.
+    s.key(KeyEvent::ctrl('b'));
+    s.key(KeyEvent::ch('('));
+    s.until("the main session", |t| t.contains("[main]")).await;
+    let list = call(&srv.socket, "session.list", json!({})).await;
+    assert_eq!(list[0]["clients"], 1);
+    assert_eq!(list[1]["clients"], 0);
+    // Ending the session a client is in moves it to another one.
+    call(&srv.socket, "session.kill", json!({"session": "main"})).await;
+    s.until("the remaining session", |t| {
+        t.contains("[work]") && t.contains("in-work")
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn the_server_stops_with_its_last_session_and_removes_the_socket() {
+    let srv = start().await;
+    let mut s = Screen::attach(&srv.socket, frontend(None, true), 80, 24).await;
+    s.ready().await;
+    s.type_text("exit\r");
+    match s.next_event("exit").await {
+        Some(ServerMsg::Exit { .. }) => {}
+        other => panic!("expected Exit, got {other:?}"),
+    }
+    let reason = tokio::time::timeout(Duration::from_secs(10), srv.handle)
+        .await
+        .expect("server stops")
+        .expect("server task");
+    assert_eq!(reason, "no sessions are left");
+    assert!(!srv.socket.exists(), "socket file left behind");
+}
+
+#[tokio::test]
+async fn server_kill_and_resize() {
+    let srv = start().await;
+    let mut s = Screen::attach(&srv.socket, frontend(None, true), 80, 24).await;
+    s.ready().await;
+    s.client
         .tx
         .send(ClientMsg::Resize { cols: 60, rows: 20 })
         .expect("alive");
-    let mut saw_full = false;
-    while !saw_full {
-        match tokio::time::timeout(Duration::from_secs(5), client.rx.recv()).await {
-            Ok(Some(ServerMsg::Frame(f))) => saw_full = f.clear && f.cols == 60 && f.rows == 20,
-            Ok(Some(_)) => {}
-            other => panic!("no full frame after resize: {other:?}"),
-        }
-    }
-    // Quit through the palette, confirming with y.
-    client
-        .tx
-        .send(ClientMsg::Key(KeyEvent::ctrl(' ')))
-        .expect("alive");
-    for c in "session.quit".chars() {
-        client
-            .tx
-            .send(ClientMsg::Key(KeyEvent::ch(c)))
-            .expect("alive");
-    }
-    client
-        .tx
-        .send(ClientMsg::Key(KeyEvent::plain(
-            termos_core::input::KeyCode::Enter,
-        )))
-        .expect("alive");
-    client
-        .tx
-        .send(ClientMsg::Key(KeyEvent::ch('y')))
-        .expect("alive");
     loop {
-        match tokio::time::timeout(Duration::from_secs(5), client.rx.recv()).await {
-            Ok(Some(ServerMsg::Exit { reason })) => {
-                assert_eq!(reason, "quit");
-                break;
-            }
-            Ok(Some(_)) => {}
-            other => panic!("no exit: {other:?}"),
+        match s.client.rx.recv().await {
+            Some(ServerMsg::Frame(f)) if f.clear && f.cols == 60 && f.rows == 20 => break,
+            Some(_) => {}
+            None => panic!("no full frame after resize"),
         }
     }
+    // A second server on the same socket is refused while this one runs.
+    let dup = {
+        let dir = srv.socket.parent().expect("socket dir").to_owned();
+        let paths = Paths {
+            config_dir: dir.join("c"),
+            state_dir: dir.join("s"),
+            runtime_dir: dir.clone(),
+        };
+        let mut o = ServerOptions::new("test", paths, dir.join("c.toml"));
+        o.socket_path = srv.socket.clone();
+        Server::new(o, Config::default()).bind()
+    };
+    assert!(dup.is_err(), "a second server bound a live socket");
+
+    call(&srv.socket, "server.kill", json!({})).await;
+    match s.next_event("exit").await {
+        Some(ServerMsg::Exit { reason }) => assert!(reason.contains("killed"), "{reason}"),
+        other => panic!("expected Exit, got {other:?}"),
+    }
+    let reason = tokio::time::timeout(Duration::from_secs(10), srv.handle)
+        .await
+        .expect("server stops")
+        .expect("server task");
+    assert_eq!(reason, "killed by request");
+    assert!(!srv.socket.exists());
 }

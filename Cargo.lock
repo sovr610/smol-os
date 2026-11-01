@@ -2002,6 +2002,8 @@ dependencies = [
  "nucleo-matcher",
  "ratatui-core",
  "ratatui-widgets",
+ "serde",
+ "serde_json",
  "tempfile",
  "termos-core",
  "termos-render",

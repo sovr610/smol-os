@@ -85,6 +85,21 @@ impl Pane {
     }
 }
 
+/// Facts about a pane (`pane.list`).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct PaneInfo {
+    pub id: u64,
+    pub workspace: usize,
+    pub name: String,
+    pub title: String,
+    pub kind: String,
+    pub cwd: Option<String>,
+    pub cols: u16,
+    pub rows: u16,
+    pub floating: bool,
+    pub focused: bool,
+}
+
 /// Startup settings for a desktop.
 #[derive(Debug, Clone)]
 pub struct DesktopOptions {
@@ -974,6 +989,111 @@ impl Desktop {
 
     // ----- commands ---------------------------------------------------
 
+    /// Runs a command on behalf of `client` (or of no client, e.g. from the
+    /// control API: commands that need a client, like detach or prompts,
+    /// then have no visible effect).
+    pub fn run_as(&mut self, client: Option<ClientId>, cmd: Command) {
+        match client {
+            Some(c) if self.enter(c) => {
+                self.run(cmd);
+                self.leave();
+            }
+            _ => {
+                self.leave();
+                self.run(cmd);
+                // Prompts opened without a client have nobody to answer.
+                self.ui = ClientUi::default();
+            }
+        }
+    }
+
+    fn target_pane(&self, pane: Option<PaneId>) -> Result<PaneId, String> {
+        match pane {
+            Some(p) if self.panes.contains_key(&p) => Ok(p),
+            Some(p) => Err(format!("no pane {p} in session {}", self.session.name)),
+            None => self
+                .focused()
+                .ok_or_else(|| format!("session {} has no focused pane", self.session.name)),
+        }
+    }
+
+    /// Types `text` into a pane (default: the focused one), like pasting
+    /// without bracketing.
+    pub fn send_text(&mut self, pane: Option<PaneId>, text: &str) -> Result<(), String> {
+        let id = self.target_pane(pane)?;
+        match self.panes.get(&id).map(|p| &p.kind) {
+            Some(PaneKind::Term { .. }) => {
+                self.write_to_pane(id, text.as_bytes().to_vec());
+                Ok(())
+            }
+            _ => Err(format!("pane {id} is not a terminal")),
+        }
+    }
+
+    /// Sends keys (tmux notation) to a pane, encoded for its program.
+    pub fn send_keys(&mut self, pane: Option<PaneId>, keys: &[KeyEvent]) -> Result<(), String> {
+        let id = self.target_pane(pane)?;
+        let modes = match self.panes.get(&id).map(|p| &p.kind) {
+            Some(PaneKind::Term { vt, .. }) => vt.modes(),
+            _ => return Err(format!("pane {id} is not a terminal")),
+        };
+        let bytes: Vec<u8> = keys.iter().flat_map(|k| encode_key(*k, &modes)).collect();
+        self.write_to_pane(id, bytes);
+        Ok(())
+    }
+
+    /// Closes a pane without asking.
+    pub fn kill_pane(&mut self, id: PaneId) -> bool {
+        if !self.panes.contains_key(&id) {
+            return false;
+        }
+        self.close_pane(id);
+        true
+    }
+
+    /// Ends the session: every program is terminated.
+    pub fn end(&mut self, reason: &str) {
+        for pane in self.panes.values_mut() {
+            if let PaneKind::Term { pty, .. } = &mut pane.kind {
+                pty.kill();
+            }
+        }
+        self.panes.clear();
+        self.quit = Some(reason.to_owned());
+    }
+
+    /// Facts about every pane, for `pane.list`.
+    pub fn pane_infos(&self) -> Vec<PaneInfo> {
+        let focus = self.focused();
+        let mut out = Vec::new();
+        for (wi, ws) in self.session.workspaces.iter().enumerate() {
+            for id in ws.panes() {
+                let Some(p) = self.panes.get(&id) else {
+                    continue;
+                };
+                let (kind, cwd) = match &p.kind {
+                    PaneKind::Term { pty, .. } => {
+                        ("terminal", p.cwd.clone().or_else(|| pty.foreground_cwd()))
+                    }
+                    PaneKind::App(_) => ("app", None),
+                };
+                out.push(PaneInfo {
+                    id: id.0,
+                    workspace: wi,
+                    name: p.display_name(),
+                    title: p.title.clone(),
+                    kind: kind.into(),
+                    cwd: cwd.map(|c| c.display().to_string()),
+                    cols: p.size.0,
+                    rows: p.size.1,
+                    floating: ws.is_floating(id),
+                    focused: Some(id) == focus && wi == self.session.active_index(),
+                });
+            }
+        }
+        out
+    }
+
     /// Runs a command (from a key binding, the palette or an app).
     pub fn run(&mut self, cmd: Command) {
         let area = self.layout_area();
@@ -1267,6 +1387,10 @@ impl Desktop {
                 }
                 self.config = config;
                 self.ui.key_state = KeyState::Normal;
+                for ui in self.clients.values_mut() {
+                    ui.key_state = KeyState::Normal;
+                }
+                self.recompute_size();
                 if errors.is_empty() {
                     self.notify(Level::Info, "config reloaded");
                 } else {

@@ -1,28 +1,44 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//! The server event loop.
+//! The TermOS server: sessions, attached clients, the session socket and
+//! the JSON-RPC control API (DECISIONS.md D-029 to D-032).
 //!
-//! Event-driven: the loop sleeps until a client message, PTY output, a
-//! config change, or the desktop's next deadline. When something changed it
-//! renders right away, except during output floods, which are parsed
-//! continuously but drawn at most once per [`FRAME_INTERVAL`]. The client
-//! gets only the cells that differ from its last frame (D-026).
+//! The server is event-driven. Connection tasks (socket or in-process, via
+//! [`Connector`]) feed an event channel; PTY output arrives on another; the
+//! loop sleeps until one of them, a config change, a signal, or the
+//! earliest deadline (desktop timers, frame pacing). Each client gets the
+//! cells that changed since its last frame, and only once its previous
+//! frame has been written (backpressure for slow links such as SSH).
 
-use std::time::{Duration, Instant};
+use std::collections::BTreeMap;
+use std::io;
+use std::path::PathBuf;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use termos_core::proto::{ClientMsg, FrameUpdate, ServerMsg};
-use termos_core::transport::ServerEnd;
-use termos_render::diff::{diff, full};
+use serde::Deserialize;
+use serde_json::{Value, json};
+use termos_core::config::Config;
+use termos_core::ids::{ClientId, PaneId, PaneIds};
+use termos_core::input::KeyEvent;
+use termos_core::paths::{Paths, current_uid, ensure_private_dir};
+use termos_core::proto::{ClientMsg, FrameUpdate, PROTOCOL_VERSION, ServerMsg};
+use termos_core::transport::{ClientEnd, read_line};
+use termos_core::wire::{
+    self, ConnKind, FrameDecoder, Hello, HelloReply, Message, Request, Response, RpcError, codes,
+};
+use termos_render::caps::Caps;
+use termos_render::cell::Cell;
+use termos_render::diff::{Span, diff, full};
 use termos_render::encode::CursorState;
 use termos_render::grid::Grid;
 use termos_term::pty::PtyEvent;
-use tokio::sync::mpsc;
+use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
+use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
+use tokio::net::{UnixListener, UnixStream};
+use tokio::sync::{mpsc, oneshot};
 
-use termos_core::ids::ClientId;
-
-use crate::desktop::Desktop;
-
-/// The in-process loop serves exactly one client.
-const CLIENT: ClientId = ClientId(0);
+use crate::commands::{Command, CommandError};
+use crate::desktop::{Desktop, DesktopOptions, SessionRequest};
+use crate::notify::Level;
 
 /// Minimum time between frames during output floods (~120 fps cap).
 pub const FRAME_INTERVAL: Duration = Duration::from_millis(8);
@@ -31,13 +47,1248 @@ pub const FRAME_INTERVAL: Duration = Duration::from_millis(8);
 /// small updates) a frame is drawn immediately, even within the interval.
 pub const SMALL_OUTPUT: usize = 4096;
 
-/// Event sources for the loop.
+/// How a server runs.
+#[derive(Debug, Clone)]
+pub struct ServerOptions {
+    /// The server's name (`termos -L NAME`); names its snapshot directory.
+    pub name: String,
+    pub socket_path: PathBuf,
+    pub paths: Paths,
+    pub config_path: PathBuf,
+    /// `$SHELL` from the environment.
+    pub env_shell: Option<String>,
+    /// The only uid allowed to connect (normally our own).
+    pub allowed_uid: u32,
+    /// Stop when the last session ends, as tmux does.
+    pub exit_when_empty: bool,
+    /// Handle SIGTERM, SIGINT and SIGHUP (the daemon does; tests do not).
+    pub handle_signals: bool,
+}
+
+impl ServerOptions {
+    /// Defaults for server `name`: its socket under the runtime directory,
+    /// our own uid, exit when empty, no signal handling.
+    pub fn new(name: &str, paths: Paths, config_path: PathBuf) -> Self {
+        Self {
+            name: name.to_owned(),
+            socket_path: paths.socket_path(name),
+            paths,
+            config_path,
+            env_shell: std::env::var("SHELL").ok(),
+            allowed_uid: current_uid(),
+            exit_when_empty: true,
+            handle_signals: false,
+        }
+    }
+}
+
+/// Events from connection tasks into the server loop.
 #[derive(Debug)]
-pub struct ServerChannels {
-    pub client: ServerEnd,
-    pub pty_rx: mpsc::Receiver<PtyEvent>,
-    /// Config-file change notifications (absent if watching failed).
-    pub reload_rx: Option<mpsc::UnboundedReceiver<()>>,
+enum Event {
+    FrontendHello {
+        hello: Hello,
+        reply: oneshot::Sender<Result<Attached, RpcError>>,
+    },
+    FrontendMsg {
+        client: ClientId,
+        msg: ClientMsg,
+    },
+    FrameWritten {
+        client: ClientId,
+    },
+    Disconnected {
+        client: ClientId,
+    },
+    Control {
+        req: Request,
+        reply: oneshot::Sender<Option<Response>>,
+    },
+}
+
+/// A frontend admitted by the server.
+#[derive(Debug)]
+struct Attached {
+    client: ClientId,
+    session: String,
+    rx: mpsc::UnboundedReceiver<ServerMsg>,
+}
+
+type SessionKey = u64;
+
+/// Server-side state of one attached frontend.
+struct Conn {
+    session: SessionKey,
+    tx: mpsc::UnboundedSender<ServerMsg>,
+    caps: Caps,
+    cols: u16,
+    rows: u16,
+    /// The client sent its binary `Hello` (size and capabilities).
+    ready: bool,
+    /// A frame was sent and not yet written to the client.
+    busy: bool,
+    frame_due: Option<Instant>,
+    last_frame: Option<Instant>,
+    cur: Grid,
+    prev: Option<Grid>,
+    sent_size: (u16, u16),
+    last_cursor: Option<CursorState>,
+}
+
+impl Conn {
+    fn schedule(&mut self, due: Instant) {
+        self.frame_due = Some(self.frame_due.map_or(due, |d| d.min(due)));
+    }
+
+    /// The next frame is a full redraw, as soon as possible.
+    fn redraw(&mut self) {
+        self.prev = None;
+        self.schedule(Instant::now());
+    }
+}
+
+struct SessionEntry {
+    desktop: Desktop,
+    created: SystemTime,
+    last_used: Instant,
+}
+
+fn stopping() -> RpcError {
+    RpcError::new(codes::INTERNAL_ERROR, "the server is stopping")
+}
+
+fn hello_reply(session: Option<String>) -> HelloReply {
+    HelloReply {
+        version: PROTOCOL_VERSION,
+        server: format!("termos {}", env!("CARGO_PKG_VERSION")),
+        pid: std::process::id(),
+        session,
+    }
+}
+
+/// Lets connection tasks, tests and embedders talk to a running server.
+#[derive(Debug, Clone)]
+pub struct Connector {
+    events: mpsc::UnboundedSender<Event>,
+}
+
+impl Connector {
+    async fn attach_raw(&self, hello: Hello) -> Result<Attached, RpcError> {
+        let (tx, rx) = oneshot::channel();
+        self.events
+            .send(Event::FrontendHello { hello, reply: tx })
+            .map_err(|_| stopping())?;
+        rx.await.map_err(|_| stopping())?
+    }
+
+    /// Attaches a frontend without a socket (tests, embedding). The
+    /// returned [`ClientEnd`] behaves like a socket connection, including
+    /// frame backpressure.
+    pub async fn attach(&self, hello: Hello) -> Result<(HelloReply, ClientEnd), RpcError> {
+        let att = self.attach_raw(hello).await?;
+        let client = att.client;
+        let reply = hello_reply(Some(att.session));
+        let (user_tx, mut user_rx) = mpsc::unbounded_channel::<ClientMsg>();
+        let (to_user_tx, to_user_rx) = mpsc::unbounded_channel::<ServerMsg>();
+        let events = self.events.clone();
+        tokio::spawn(async move {
+            while let Some(msg) = user_rx.recv().await {
+                if events.send(Event::FrontendMsg { client, msg }).is_err() {
+                    return;
+                }
+            }
+            let _ = events.send(Event::Disconnected { client });
+        });
+        let events = self.events.clone();
+        let mut server_rx = att.rx;
+        tokio::spawn(async move {
+            while let Some(msg) = server_rx.recv().await {
+                let is_frame = matches!(msg, ServerMsg::Frame(_));
+                if to_user_tx.send(msg).is_err() {
+                    break;
+                }
+                if is_frame {
+                    let _ = events.send(Event::FrameWritten { client });
+                }
+            }
+        });
+        Ok((
+            reply,
+            ClientEnd {
+                tx: user_tx,
+                rx: to_user_rx,
+            },
+        ))
+    }
+
+    /// Handles one JSON-RPC request; `None` for notifications.
+    pub async fn control(&self, req: Request) -> Option<Response> {
+        let id = req.id.clone();
+        let (tx, rx) = oneshot::channel();
+        if self.events.send(Event::Control { req, reply: tx }).is_err() {
+            return id.map(|id| Response::err(id, stopping()));
+        }
+        rx.await.ok().flatten()
+    }
+
+    /// Calls a control method and returns its result.
+    pub async fn call(&self, method: &str, params: Value) -> Result<Value, RpcError> {
+        match self.control(Request::new(1, method, Some(params))).await {
+            Some(resp) => resp.into_result(),
+            None => Err(stopping()),
+        }
+    }
+}
+
+/// The session server.
+pub struct Server {
+    opts: ServerOptions,
+    config: Config,
+    sessions: BTreeMap<SessionKey, SessionEntry>,
+    next_session: SessionKey,
+    clients: BTreeMap<ClientId, Conn>,
+    next_client: u64,
+    pane_ids: PaneIds,
+    pty_tx: mpsc::Sender<PtyEvent>,
+    pty_rx: mpsc::Receiver<PtyEvent>,
+    events_tx: mpsc::UnboundedSender<Event>,
+    events_rx: mpsc::UnboundedReceiver<Event>,
+    reload_rx: Option<mpsc::UnboundedReceiver<()>>,
+    /// Notices for the next session created (startup problems).
+    notices: Vec<(Level, String)>,
+    shutdown: Option<String>,
+    started: SystemTime,
+    known_names: Vec<String>,
+}
+
+impl std::fmt::Debug for Server {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Server")
+            .field("name", &self.opts.name)
+            .field("sessions", &self.sessions.len())
+            .field("clients", &self.clients.len())
+            .finish_non_exhaustive()
+    }
+}
+
+fn unix_secs(t: SystemTime) -> u64 {
+    t.duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs())
+}
+
+/// Session names: 1 to 64 characters, no `/`, `:` or control characters,
+/// not starting with `$` (reserved for ids such as `$1`).
+pub fn valid_session_name(name: &str) -> Result<(), RpcError> {
+    let bad = name.trim().is_empty()
+        || name.chars().count() > 64
+        || name.starts_with('$')
+        || name
+            .chars()
+            .any(|c| c.is_control() || matches!(c, '/' | ':'));
+    if bad {
+        Err(RpcError::invalid_params(format!(
+            "invalid session name `{name}` (1 to 64 characters, no `/`, `:` or control characters, not starting with `$`)"
+        )))
+    } else {
+        Ok(())
+    }
+}
+
+/// Keeps a frame within a client's visible size.
+fn crop(spans: Vec<Span>, cols: u16, rows: u16) -> Vec<Span> {
+    spans
+        .into_iter()
+        .filter(|s| s.row < rows && s.col < cols)
+        .map(|mut s| {
+            let max = usize::from(cols - s.col);
+            if s.cells.len() > max {
+                s.cells.truncate(max);
+                // Half of a wide character cannot be shown.
+                if let Some(last) = s.cells.last_mut()
+                    && last.width == 2
+                {
+                    *last = Cell::blank(last.style);
+                }
+            }
+            s
+        })
+        .collect()
+}
+
+#[derive(Deserialize)]
+struct TargetParams {
+    #[serde(default)]
+    session: Option<String>,
+}
+
+impl Server {
+    pub fn new(opts: ServerOptions, config: Config) -> Self {
+        let (pty_tx, pty_rx) = mpsc::channel(1024);
+        let (events_tx, events_rx) = mpsc::unbounded_channel();
+        Self {
+            opts,
+            config,
+            sessions: BTreeMap::new(),
+            next_session: 1,
+            clients: BTreeMap::new(),
+            next_client: 1,
+            pane_ids: PaneIds::new(),
+            pty_tx,
+            pty_rx,
+            events_tx,
+            events_rx,
+            reload_rx: None,
+            notices: Vec::new(),
+            shutdown: None,
+            started: SystemTime::now(),
+            known_names: Vec::new(),
+        }
+    }
+
+    /// Delivers config-file change notifications (hot reload).
+    pub fn set_reload(&mut self, rx: mpsc::UnboundedReceiver<()>) {
+        self.reload_rx = Some(rx);
+    }
+
+    /// Shows `text` in the next session created (startup problems such as
+    /// a broken config file).
+    pub fn notice(&mut self, level: Level, text: impl Into<String>) {
+        self.notices.push((level, text.into()));
+    }
+
+    pub fn options(&self) -> &ServerOptions {
+        &self.opts
+    }
+
+    pub fn connector(&self) -> Connector {
+        Connector {
+            events: self.events_tx.clone(),
+        }
+    }
+
+    /// Binds the session socket (mode 0600 in a 0700 directory), replacing a
+    /// stale socket file but refusing to start beside a live server.
+    pub fn bind(&self) -> io::Result<UnixListener> {
+        use std::os::unix::fs::PermissionsExt as _;
+        let path = &self.opts.socket_path;
+        if let Some(dir) = path.parent() {
+            ensure_private_dir(dir)?;
+        }
+        if path.exists() {
+            if std::os::unix::net::UnixStream::connect(path).is_ok() {
+                return Err(io::Error::new(
+                    io::ErrorKind::AddrInUse,
+                    format!("a TermOS server is already running at {}", path.display()),
+                ));
+            }
+            std::fs::remove_file(path)?;
+        }
+        let listener = UnixListener::bind(path)?;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+        Ok(listener)
+    }
+
+    // ----- sessions ---------------------------------------------------
+
+    fn find_session(&self, name: &str) -> Option<SessionKey> {
+        if let Some(id) = name.strip_prefix('$').and_then(|n| n.parse::<u64>().ok()) {
+            return self.sessions.contains_key(&id).then_some(id);
+        }
+        self.sessions
+            .iter()
+            .find(|(_, e)| e.desktop.name() == name)
+            .map(|(k, _)| *k)
+    }
+
+    fn most_recent(&self) -> Option<SessionKey> {
+        self.sessions
+            .iter()
+            .max_by_key(|(_, e)| e.last_used)
+            .map(|(k, _)| *k)
+    }
+
+    fn target(&self, name: Option<&str>) -> Result<SessionKey, RpcError> {
+        match name {
+            Some(n) => self
+                .find_session(n)
+                .ok_or_else(|| RpcError::not_found(format!("no session named `{n}`"))),
+            None => self
+                .most_recent()
+                .ok_or_else(|| RpcError::not_found("there are no sessions")),
+        }
+    }
+
+    fn free_name(&self) -> String {
+        if self.find_session("main").is_none() {
+            return "main".into();
+        }
+        (1..=u32::MAX)
+            .map(|n| n.to_string())
+            .find(|n| self.find_session(n).is_none())
+            .unwrap_or_else(|| "session".into())
+    }
+
+    fn session_name(&self, key: SessionKey) -> String {
+        self.sessions
+            .get(&key)
+            .map(|e| e.desktop.name().to_owned())
+            .unwrap_or_default()
+    }
+
+    /// Creates a session with one shell. Without a name it is `main`, or
+    /// else the first free number.
+    pub fn create_session(&mut self, name: Option<&str>) -> Result<SessionKey, RpcError> {
+        let name = match name {
+            Some(n) => {
+                valid_session_name(n)?;
+                if self.find_session(n).is_some() {
+                    return Err(RpcError::invalid_params(format!(
+                        "a session named `{n}` already exists"
+                    )));
+                }
+                n.to_owned()
+            }
+            None => self.free_name(),
+        };
+        let key = self.next_session;
+        let opts = DesktopOptions {
+            session_name: name,
+            config_path: self.opts.config_path.clone(),
+            paths: self.opts.paths.clone(),
+            env_shell: self.opts.env_shell.clone(),
+            pane_ids: self.pane_ids.clone(),
+            // Lets `termos msg`, `ls` and `detach` inside a pane find us
+            // (D-029; supersedes D-027's pid-only value).
+            pane_env: vec![(
+                "TERMOS".into(),
+                format!(
+                    "{},{},${key}",
+                    self.opts.socket_path.display(),
+                    std::process::id()
+                ),
+            )],
+        };
+        let mut desktop = Desktop::new(opts, self.config.clone(), self.pty_tx.clone(), 80, 24)
+            .map_err(|e| {
+                RpcError::new(codes::INTERNAL_ERROR, format!("cannot start a shell: {e}"))
+            })?;
+        self.next_session += 1;
+        for (level, text) in self.notices.drain(..) {
+            desktop.post(level, text);
+        }
+        self.sessions.insert(
+            key,
+            SessionEntry {
+                desktop,
+                created: SystemTime::now(),
+                last_used: Instant::now(),
+            },
+        );
+        Ok(key)
+    }
+
+    fn resolve_frontend(&mut self, hello: &Hello) -> Result<SessionKey, RpcError> {
+        match &hello.session {
+            Some(name) => match self.find_session(name) {
+                Some(k) => Ok(k),
+                None if hello.create => self.create_session(Some(name)),
+                None => Err(RpcError::not_found(format!("no session named `{name}`"))),
+            },
+            None => match self.most_recent() {
+                Some(k) => Ok(k),
+                None if hello.create => self.create_session(None),
+                None => Err(RpcError::not_found(
+                    "there are no sessions; start one with `termos`",
+                )),
+            },
+        }
+    }
+
+    /// Moves a client to another session.
+    fn move_client(&mut self, client: ClientId, to: SessionKey) {
+        let Some(conn) = self.clients.get_mut(&client) else {
+            return;
+        };
+        let from = conn.session;
+        conn.session = to;
+        conn.redraw();
+        let hello = conn.ready.then(|| ClientMsg::Hello {
+            version: PROTOCOL_VERSION,
+            caps: conn.caps.clone(),
+            cols: conn.cols,
+            rows: conn.rows,
+        });
+        if from != to
+            && let Some(e) = self.sessions.get_mut(&from)
+        {
+            e.desktop.detach_client(client);
+        }
+        if let Some(e) = self.sessions.get_mut(&to) {
+            e.last_used = Instant::now();
+            if let Some(h) = hello {
+                e.desktop.handle_client(client, h);
+            }
+        }
+    }
+
+    fn remove_client(&mut self, client: ClientId) {
+        if let Some(conn) = self.clients.remove(&client)
+            && let Some(e) = self.sessions.get_mut(&conn.session)
+        {
+            e.desktop.detach_client(client);
+        }
+    }
+
+    /// Sends a message; `Detached` and `Exit` also drop the client.
+    fn send(&mut self, client: ClientId, msg: ServerMsg) {
+        let ends = matches!(msg, ServerMsg::Detached { .. } | ServerMsg::Exit { .. });
+        if let Some(conn) = self.clients.get(&client) {
+            let _ = conn.tx.send(msg);
+        }
+        if ends {
+            self.remove_client(client);
+        }
+    }
+
+    fn clients_of(&self, key: SessionKey) -> Vec<ClientId> {
+        self.clients
+            .iter()
+            .filter(|(_, c)| c.session == key)
+            .map(|(id, _)| *id)
+            .collect()
+    }
+
+    // ----- the loop ---------------------------------------------------
+
+    /// Runs until stopped (`server.kill`, a signal, or the last session
+    /// ending when `exit_when_empty`). Serves `listener` if given and
+    /// removes the socket file on the way out. Returns why it stopped.
+    pub async fn run(mut self, listener: Option<UnixListener>) -> String {
+        let owns_socket = listener.is_some();
+        let accept = listener.map(|l| {
+            let connector = self.connector();
+            let uid = self.opts.allowed_uid;
+            tokio::spawn(async move {
+                loop {
+                    match l.accept().await {
+                        Ok((stream, _)) => {
+                            tokio::spawn(handle_conn(stream, connector.clone(), uid));
+                        }
+                        Err(e) => {
+                            // Out of descriptors and the like: back off
+                            // instead of spinning.
+                            tracing::warn!("accept failed: {e}");
+                            tokio::time::sleep(Duration::from_millis(100)).await;
+                        }
+                    }
+                }
+            })
+        });
+        let mut signals = if self.opts.handle_signals {
+            Signals::new()
+        } else {
+            None
+        };
+        let reason = loop {
+            self.pump();
+            if let Some(r) = self.shutdown.take() {
+                break r;
+            }
+            let timer = self.next_deadline();
+            tokio::select! {
+                Some(ev) = self.events_rx.recv() => self.on_event(ev),
+                Some(ev) = self.pty_rx.recv() => {
+                    self.on_pty(ev);
+                    // Drain what is already queued so a burst becomes one
+                    // frame.
+                    while let Ok(ev) = self.pty_rx.try_recv() {
+                        self.on_pty(ev);
+                    }
+                }
+                r = recv_reload(&mut self.reload_rx) => match r {
+                    Some(()) => self.reload_config(),
+                    None => self.reload_rx = None,
+                },
+                sig = recv_signal(&mut signals) => {
+                    self.shutdown = Some(format!("stopped by {sig}"));
+                }
+                () = sleep_until(timer) => {
+                    let now = Instant::now();
+                    for e in self.sessions.values_mut() {
+                        e.desktop.on_timer(now);
+                    }
+                }
+            }
+        };
+        tracing::info!("server stopping: {reason}");
+        let ids: Vec<ClientId> = self.clients.keys().copied().collect();
+        for c in ids {
+            self.send(
+                c,
+                ServerMsg::Exit {
+                    reason: format!("the server stopped ({reason})"),
+                },
+            );
+        }
+        for e in self.sessions.values_mut() {
+            e.desktop.end(&reason);
+        }
+        if let Some(a) = accept {
+            a.abort();
+        }
+        if owns_socket {
+            let _ = std::fs::remove_file(&self.opts.socket_path);
+        }
+        // Let connection tasks flush the last messages.
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        reason
+    }
+
+    fn reload_config(&mut self) {
+        if let Ok(c) = Config::load(&self.opts.config_path) {
+            self.config = c;
+        }
+        for e in self.sessions.values_mut() {
+            e.desktop.reload_config();
+        }
+    }
+
+    fn next_deadline(&self) -> Option<Instant> {
+        let desktops = self
+            .sessions
+            .values()
+            .filter_map(|e| e.desktop.next_deadline());
+        let frames = self
+            .clients
+            .values()
+            .filter(|c| c.ready && !c.busy)
+            .filter_map(|c| c.frame_due);
+        desktops.chain(frames).min()
+    }
+
+    fn on_pty(&mut self, ev: PtyEvent) {
+        let id = match &ev {
+            PtyEvent::Output(id, _) | PtyEvent::Exited(id, _) => *id,
+        };
+        if let Some(e) = self.sessions.values_mut().find(|e| e.desktop.has_pane(id)) {
+            e.desktop.on_pty(ev);
+        }
+    }
+
+    fn on_event(&mut self, ev: Event) {
+        match ev {
+            Event::FrontendHello { hello, reply } => {
+                let result = self.resolve_frontend(&hello).map(|key| self.admit(key));
+                if let Err(Ok(att)) = reply.send(result) {
+                    // The connection went away before the reply.
+                    self.remove_client(att.client);
+                }
+            }
+            Event::FrontendMsg { client, msg } => {
+                let Some(conn) = self.clients.get_mut(&client) else {
+                    return;
+                };
+                match &msg {
+                    ClientMsg::Hello {
+                        caps, cols, rows, ..
+                    } => {
+                        conn.caps = caps.clone();
+                        conn.cols = (*cols).max(1);
+                        conn.rows = (*rows).max(1);
+                        conn.ready = true;
+                        conn.redraw();
+                    }
+                    ClientMsg::Resize { cols, rows } => {
+                        conn.cols = (*cols).max(1);
+                        conn.rows = (*rows).max(1);
+                        conn.redraw();
+                    }
+                    _ => {}
+                }
+                let key = conn.session;
+                if let Some(e) = self.sessions.get_mut(&key) {
+                    e.last_used = Instant::now();
+                    e.desktop.handle_client(client, msg);
+                }
+            }
+            Event::FrameWritten { client } => {
+                if let Some(c) = self.clients.get_mut(&client) {
+                    c.busy = false;
+                }
+            }
+            Event::Disconnected { client } => self.remove_client(client),
+            Event::Control { req, reply } => {
+                let id = req.id.clone();
+                let result = self.control(&req);
+                let resp = id.map(|id| match result {
+                    Ok(v) => Response::ok(id, v),
+                    Err(e) => Response::err(id, e),
+                });
+                let _ = reply.send(resp);
+            }
+        }
+    }
+
+    /// Registers a frontend on session `key`.
+    fn admit(&mut self, key: SessionKey) -> Attached {
+        let client = ClientId(self.next_client);
+        self.next_client += 1;
+        let (tx, rx) = mpsc::unbounded_channel();
+        self.clients.insert(
+            client,
+            Conn {
+                session: key,
+                tx,
+                caps: Caps::default(),
+                cols: 80,
+                rows: 24,
+                ready: false,
+                busy: false,
+                frame_due: None,
+                last_frame: None,
+                cur: Grid::new(1, 1),
+                prev: None,
+                sent_size: (0, 0),
+                last_cursor: None,
+            },
+        );
+        let session = match self.sessions.get_mut(&key) {
+            Some(e) => {
+                e.last_used = Instant::now();
+                e.desktop.name().to_owned()
+            }
+            None => String::new(),
+        };
+        tracing::info!("{client} attached to session {session}");
+        Attached {
+            client,
+            session,
+            rx,
+        }
+    }
+
+    /// Delivers what the desktops produced, handles session requests and
+    /// ended sessions, and draws the frames that are due.
+    fn pump(&mut self) {
+        // Requests can produce more output (a moved client is greeted, a
+        // failed switch posts a notification): settle, with a bound.
+        for _ in 0..4 {
+            if !self.deliver() {
+                break;
+            }
+        }
+        let names: Vec<String> = self
+            .sessions
+            .values()
+            .map(|e| e.desktop.name().to_owned())
+            .collect();
+        if names != self.known_names {
+            for e in self.sessions.values_mut() {
+                e.desktop.set_known_sessions(names.clone());
+            }
+            self.known_names = names;
+        }
+        self.schedule_frames();
+        self.draw_due_frames();
+    }
+
+    /// One round of outbox delivery and request handling. Returns whether
+    /// anything happened.
+    fn deliver(&mut self) -> bool {
+        let mut requests = Vec::new();
+        let mut ended = Vec::new();
+        let mut outgoing = Vec::new();
+        for (key, entry) in &mut self.sessions {
+            for (to, msg) in entry.desktop.take_outbox() {
+                outgoing.push((*key, to, msg));
+            }
+            requests.extend(entry.desktop.take_requests());
+            if let Some(r) = entry.desktop.quit_reason() {
+                ended.push((*key, r.to_owned()));
+            }
+        }
+        let busy = !(requests.is_empty() && ended.is_empty() && outgoing.is_empty());
+        for (key, to, msg) in outgoing {
+            match to {
+                Some(c) => self.send(c, msg),
+                None => {
+                    for c in self.clients_of(key) {
+                        self.send(c, msg.clone());
+                    }
+                }
+            }
+        }
+        for req in requests {
+            self.on_request(req);
+        }
+        for (key, reason) in ended {
+            self.end_session(key, &reason);
+        }
+        busy
+    }
+
+    /// Schedules frames for the clients of sessions that changed.
+    fn schedule_frames(&mut self) {
+        let now = Instant::now();
+        let mut changed = Vec::new();
+        for (key, e) in &mut self.sessions {
+            if e.desktop.take_dirty() {
+                changed.push((*key, e.desktop.pending_output()));
+            }
+        }
+        for (key, pending) in changed {
+            for conn in self.clients.values_mut().filter(|c| c.session == key) {
+                // Draw now, unless this is a flood and the last frame was
+                // less than an interval ago.
+                let due = match conn.last_frame {
+                    Some(t) if pending >= SMALL_OUTPUT => (t + FRAME_INTERVAL).max(now),
+                    _ => now,
+                };
+                conn.schedule(due);
+            }
+        }
+    }
+
+    fn on_request(&mut self, req: SessionRequest) {
+        match req {
+            SessionRequest::Switch { client, to } => match self.find_session(&to) {
+                Some(k) => self.move_client(client, k),
+                None => self.post_to_client(client, &format!("no session named `{to}`")),
+            },
+            SessionRequest::Cycle { client, forward } => {
+                let keys: Vec<SessionKey> = self.sessions.keys().copied().collect();
+                if let Some(cur) = self.clients.get(&client).map(|c| c.session)
+                    && let Some(pos) = keys.iter().position(|k| *k == cur)
+                {
+                    let n = keys.len();
+                    let next = if forward {
+                        keys[(pos + 1) % n]
+                    } else {
+                        keys[(pos + n - 1) % n]
+                    };
+                    if next != cur {
+                        self.move_client(client, next);
+                    }
+                }
+            }
+            SessionRequest::New { client } => match self.create_session(None) {
+                Ok(k) => self.move_client(client, k),
+                Err(e) => self.post_to_client(client, &e.message),
+            },
+            SessionRequest::Rename { from, to } => {
+                let Some(k) = self.find_session(&from) else {
+                    return;
+                };
+                let problem = match valid_session_name(&to) {
+                    Err(e) => Some(e.message),
+                    Ok(()) if self.find_session(&to).is_some_and(|o| o != k) => {
+                        Some(format!("a session named `{to}` already exists"))
+                    }
+                    Ok(()) => None,
+                };
+                if let Some(e) = self.sessions.get_mut(&k) {
+                    match problem {
+                        Some(p) => e.desktop.post(Level::Warn, p),
+                        None => e.desktop.rename(to),
+                    }
+                }
+            }
+        }
+    }
+
+    fn post_to_client(&mut self, client: ClientId, text: &str) {
+        if let Some(key) = self.clients.get(&client).map(|c| c.session)
+            && let Some(e) = self.sessions.get_mut(&key)
+        {
+            e.desktop.post(Level::Warn, text);
+        }
+    }
+
+    /// A session ended: its clients move to the most recently used other
+    /// session, or exit if there is none.
+    fn end_session(&mut self, key: SessionKey, reason: &str) {
+        let Some(entry) = self.sessions.remove(&key) else {
+            return;
+        };
+        let name = entry.desktop.name().to_owned();
+        drop(entry);
+        tracing::info!("session {name} ended: {reason}");
+        if self.sessions.is_empty() && self.opts.exit_when_empty && self.shutdown.is_none() {
+            self.shutdown = Some("no sessions are left".into());
+        }
+        let fallback = self.most_recent();
+        for c in self.clients_of(key) {
+            match fallback {
+                Some(k) => {
+                    self.move_client(c, k);
+                    if let Some(e) = self.sessions.get_mut(&k) {
+                        e.desktop
+                            .post(Level::Info, format!("session {name} ended ({reason})"));
+                    }
+                }
+                None => self.send(
+                    c,
+                    ServerMsg::Exit {
+                        reason: reason.to_owned(),
+                    },
+                ),
+            }
+        }
+    }
+
+    fn draw_due_frames(&mut self) {
+        let now = Instant::now();
+        let due: Vec<ClientId> = self
+            .clients
+            .iter()
+            .filter(|(_, c)| c.ready && !c.busy && c.frame_due.is_some_and(|d| d <= now))
+            .map(|(id, _)| *id)
+            .collect();
+        for client in due {
+            self.draw(client);
+        }
+    }
+
+    fn draw(&mut self, client: ClientId) {
+        let Some(conn) = self.clients.get_mut(&client) else {
+            return;
+        };
+        let Some(entry) = self.sessions.get_mut(&conn.session) else {
+            return;
+        };
+        let cursor = entry.desktop.render(client, &mut conn.cur);
+        let (grid_cols, grid_rows) = (conn.cur.cols(), conn.cur.rows());
+        let visible = (grid_cols.min(conn.cols), grid_rows.min(conn.rows));
+        let incremental = conn.sent_size == visible
+            && conn
+                .prev
+                .as_ref()
+                .is_some_and(|p| p.cols() == grid_cols && p.rows() == grid_rows);
+        let (spans, clear) = match &conn.prev {
+            Some(prev) if incremental => (diff(prev, &conn.cur), false),
+            _ => (full(&conn.cur), true),
+        };
+        let spans = crop(spans, visible.0, visible.1);
+        let cursor = cursor.filter(|c| c.x < visible.0 && c.y < visible.1);
+        if clear || !spans.is_empty() || cursor != conn.last_cursor {
+            let frame = FrameUpdate {
+                cols: visible.0,
+                rows: visible.1,
+                clear,
+                spans,
+                cursor,
+            };
+            if conn.tx.send(ServerMsg::Frame(frame)).is_ok() {
+                conn.busy = true;
+            }
+        }
+        conn.last_cursor = cursor;
+        conn.sent_size = visible;
+        match &mut conn.prev {
+            Some(prev) if incremental => std::mem::swap(prev, &mut conn.cur),
+            _ => conn.prev = Some(conn.cur.clone()),
+        }
+        conn.frame_due = None;
+        conn.last_frame = Some(Instant::now());
+    }
+
+    // ----- control API --------------------------------------------------
+
+    fn control(&mut self, req: &Request) -> Result<Value, RpcError> {
+        let target = || req.params_as::<TargetParams>().ok().and_then(|t| t.session);
+        match req.method.as_str() {
+            "server.info" => Ok(json!({
+                "pid": std::process::id(),
+                "version": env!("CARGO_PKG_VERSION"),
+                "protocol": PROTOCOL_VERSION,
+                "name": self.opts.name,
+                "socket": self.opts.socket_path.display().to_string(),
+                "sessions": self.sessions.len(),
+                "clients": self.clients.len(),
+                "started": unix_secs(self.started),
+            })),
+            "server.kill" => {
+                self.shutdown = Some("killed by request".into());
+                Ok(json!({ "stopping": true }))
+            }
+            "config.reload" => {
+                self.reload_config();
+                Ok(json!({ "reloaded": true }))
+            }
+            "session.list" => Ok(Value::Array(
+                self.sessions
+                    .iter()
+                    .map(|(k, e)| {
+                        let s = e.desktop.session();
+                        json!({
+                            "id": format!("${k}"),
+                            "name": e.desktop.name(),
+                            "workspaces": s.workspaces.len(),
+                            "active_workspace": s.active_index(),
+                            "panes": s.all_panes().len(),
+                            "clients": self.clients_of(*k).len(),
+                            "created": unix_secs(e.created),
+                        })
+                    })
+                    .collect(),
+            )),
+            "session.new" => {
+                #[derive(Deserialize)]
+                struct P {
+                    #[serde(default)]
+                    name: Option<String>,
+                }
+                let p: P = req.params_as()?;
+                let key = self.create_session(p.name.as_deref())?;
+                Ok(json!({ "id": format!("${key}"), "name": self.session_name(key) }))
+            }
+            "session.kill" => {
+                let key = self.target(target().as_deref())?;
+                let name = self.session_name(key);
+                if let Some(e) = self.sessions.get_mut(&key) {
+                    e.desktop.end("killed");
+                }
+                Ok(json!({ "killed": name }))
+            }
+            "session.rename" => {
+                #[derive(Deserialize)]
+                struct P {
+                    #[serde(default)]
+                    session: Option<String>,
+                    name: String,
+                }
+                let p: P = req.params_as()?;
+                valid_session_name(&p.name)?;
+                let key = self.target(p.session.as_deref())?;
+                if self.find_session(&p.name).is_some_and(|o| o != key) {
+                    return Err(RpcError::invalid_params(format!(
+                        "a session named `{}` already exists",
+                        p.name
+                    )));
+                }
+                if let Some(e) = self.sessions.get_mut(&key) {
+                    e.desktop.rename(p.name.clone());
+                }
+                Ok(json!({ "name": p.name }))
+            }
+            "client.list" => Ok(Value::Array(
+                self.clients
+                    .iter()
+                    .map(|(id, c)| {
+                        json!({
+                            "id": id.0,
+                            "session": self.session_name(c.session),
+                            "cols": c.cols,
+                            "rows": c.rows,
+                        })
+                    })
+                    .collect(),
+            )),
+            "client.detach" => {
+                // Without a session: every client (`termos detach` outside
+                // TermOS); inside a pane the CLI passes its own session.
+                let targets: Vec<ClientId> = match target() {
+                    Some(name) => {
+                        let key = self.target(Some(&name))?;
+                        self.clients_of(key)
+                    }
+                    None => self.clients.keys().copied().collect(),
+                };
+                for c in &targets {
+                    let session = self
+                        .clients
+                        .get(c)
+                        .map(|conn| self.session_name(conn.session))
+                        .unwrap_or_default();
+                    self.send(*c, ServerMsg::Detached { session });
+                }
+                Ok(json!({ "detached": targets.len() }))
+            }
+            "pane.list" => {
+                let keys: Vec<SessionKey> = match target() {
+                    Some(n) => vec![self.target(Some(&n))?],
+                    None => self.sessions.keys().copied().collect(),
+                };
+                let mut out = Vec::new();
+                for k in keys {
+                    let Some(e) = self.sessions.get(&k) else {
+                        continue;
+                    };
+                    for p in e.desktop.pane_infos() {
+                        let mut v = serde_json::to_value(&p)
+                            .map_err(|err| RpcError::new(codes::INTERNAL_ERROR, err.to_string()))?;
+                        if let Value::Object(m) = &mut v {
+                            m.insert("session".into(), Value::from(e.desktop.name()));
+                        }
+                        out.push(v);
+                    }
+                }
+                Ok(Value::Array(out))
+            }
+            "pane.send-text" | "pane.send-keys" | "pane.kill" => self.pane_method(req),
+            "notify.send" => {
+                #[derive(Deserialize)]
+                struct P {
+                    text: String,
+                    #[serde(default)]
+                    level: Option<String>,
+                    #[serde(default)]
+                    session: Option<String>,
+                }
+                let p: P = req.params_as()?;
+                let level = match p.level.as_deref() {
+                    None | Some("info") => Level::Info,
+                    Some("warn" | "warning") => Level::Warn,
+                    Some("error") => Level::Error,
+                    Some(other) => {
+                        return Err(RpcError::invalid_params(format!(
+                            "unknown level `{other}` (info, warn, error)"
+                        )));
+                    }
+                };
+                let keys: Vec<SessionKey> = match p.session {
+                    Some(s) => vec![self.target(Some(&s))?],
+                    None => self.sessions.keys().copied().collect(),
+                };
+                for k in &keys {
+                    if let Some(e) = self.sessions.get_mut(k) {
+                        e.desktop.post(level, p.text.clone());
+                    }
+                }
+                Ok(json!({ "sessions": keys.len() }))
+            }
+            "command.run" => {
+                #[derive(Deserialize)]
+                struct P {
+                    command: String,
+                    #[serde(default)]
+                    session: Option<String>,
+                }
+                let p: P = req.params_as()?;
+                let cmd: Command = p
+                    .command
+                    .parse()
+                    .map_err(|e: CommandError| RpcError::invalid_params(e.0))?;
+                self.run_command(p.session.as_deref(), cmd)
+            }
+            other => {
+                // Every named desktop command is a method too:
+                // `termos msg pane.split-right`.
+                #[derive(Deserialize, Default)]
+                struct P {
+                    #[serde(default)]
+                    arg: Option<String>,
+                }
+                let text = match req.params_as::<P>().unwrap_or_default().arg {
+                    Some(a) => format!("{other} {a}"),
+                    None => other.to_owned(),
+                };
+                match text.parse::<Command>() {
+                    Ok(cmd) => self.run_command(target().as_deref(), cmd),
+                    Err(_) => Err(RpcError::new(
+                        codes::METHOD_NOT_FOUND,
+                        format!("unknown method `{other}`"),
+                    )),
+                }
+            }
+        }
+    }
+
+    fn pane_method(&mut self, req: &Request) -> Result<Value, RpcError> {
+        #[derive(Deserialize)]
+        struct P {
+            #[serde(default)]
+            session: Option<String>,
+            #[serde(default)]
+            pane: Option<u64>,
+            #[serde(default)]
+            text: Option<String>,
+            #[serde(default)]
+            keys: Vec<String>,
+        }
+        let p: P = req.params_as()?;
+        let key = match (p.session.as_deref(), p.pane) {
+            (Some(s), _) => self.target(Some(s))?,
+            (None, Some(id)) => self
+                .sessions
+                .iter()
+                .find(|(_, e)| e.desktop.has_pane(PaneId(id)))
+                .map(|(k, _)| *k)
+                .ok_or_else(|| RpcError::not_found(format!("no pane {}", PaneId(id))))?,
+            (None, None) => self.target(None)?,
+        };
+        let e = self
+            .sessions
+            .get_mut(&key)
+            .ok_or_else(|| RpcError::not_found("no such session"))?;
+        let pane = p.pane.map(PaneId);
+        match req.method.as_str() {
+            "pane.kill" => {
+                let id = pane.ok_or_else(|| RpcError::invalid_params("`pane` is required"))?;
+                if !e.desktop.kill_pane(id) {
+                    return Err(RpcError::not_found(format!("no pane {id}")));
+                }
+            }
+            "pane.send-keys" => {
+                let keys = p
+                    .keys
+                    .iter()
+                    .map(|k| k.parse::<KeyEvent>())
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(|err| RpcError::invalid_params(err.to_string()))?;
+                e.desktop
+                    .send_keys(pane, &keys)
+                    .map_err(RpcError::not_found)?;
+            }
+            _ => {
+                let text = p
+                    .text
+                    .ok_or_else(|| RpcError::invalid_params("`text` is required"))?;
+                e.desktop
+                    .send_text(pane, &text)
+                    .map_err(RpcError::not_found)?;
+            }
+        }
+        Ok(json!({ "ok": true }))
+    }
+
+    fn run_command(&mut self, session: Option<&str>, cmd: Command) -> Result<Value, RpcError> {
+        let key = self.target(session)?;
+        // Act as the session's newest client when there is one, so session
+        // commands (switch, new, detach) have someone to act on.
+        let client = self.clients_of(key).into_iter().max();
+        let text = cmd.to_string();
+        if let Some(e) = self.sessions.get_mut(&key) {
+            e.desktop.run_as(client, cmd);
+        }
+        Ok(json!({ "ran": text }))
+    }
+}
+
+struct Signals {
+    term: tokio::signal::unix::Signal,
+    int: tokio::signal::unix::Signal,
+    hup: tokio::signal::unix::Signal,
+}
+
+impl Signals {
+    fn new() -> Option<Self> {
+        use tokio::signal::unix::{SignalKind, signal};
+        Some(Self {
+            term: signal(SignalKind::terminate()).ok()?,
+            int: signal(SignalKind::interrupt()).ok()?,
+            hup: signal(SignalKind::hangup()).ok()?,
+        })
+    }
+}
+
+async fn recv_signal(signals: &mut Option<Signals>) -> &'static str {
+    match signals {
+        Some(s) => tokio::select! {
+            _ = s.term.recv() => "SIGTERM",
+            _ = s.int.recv() => "SIGINT",
+            _ = s.hup.recv() => "SIGHUP",
+        },
+        None => std::future::pending().await,
+    }
 }
 
 async fn sleep_until(deadline: Option<Instant>) {
@@ -54,108 +1305,189 @@ async fn recv_reload(rx: &mut Option<mpsc::UnboundedReceiver<()>>) -> Option<()>
     }
 }
 
-fn earliest(a: Option<Instant>, b: Option<Instant>) -> Option<Instant> {
-    match (a, b) {
-        (Some(x), Some(y)) => Some(x.min(y)),
-        (x, None) => x,
-        (None, y) => y,
+async fn write_response(write: &mut OwnedWriteHalf, resp: &Response) -> io::Result<()> {
+    write.write_all(wire::to_line(resp).as_bytes()).await
+}
+
+/// One socket connection: peer check, handshake, then the frontend frame
+/// pump or the control request loop.
+async fn handle_conn(stream: UnixStream, connector: Connector, allowed_uid: u32) {
+    let peer_ok = stream
+        .peer_cred()
+        .is_ok_and(|cred| cred.uid() == allowed_uid);
+    let (read, mut write) = stream.into_split();
+    if !peer_ok {
+        let e = RpcError::forbidden("connections from other users are not allowed");
+        let _ = write_response(&mut write, &Response::err(Value::Null, e)).await;
+        return;
+    }
+    let mut reader = BufReader::new(read);
+    let Ok(Some(line)) = read_line(&mut reader).await else {
+        return;
+    };
+    let req = match wire::parse_message(&line) {
+        Ok(Message::Request(r)) => r,
+        Ok(Message::Response(_)) => {
+            let e = RpcError::new(codes::HELLO_REQUIRED, "the first message must be `hello`");
+            let _ = write_response(&mut write, &Response::err(Value::Null, e)).await;
+            return;
+        }
+        Err(e) => {
+            let _ = write_response(&mut write, &Response::err(Value::Null, e)).await;
+            return;
+        }
+    };
+    let id = req.id.clone().unwrap_or(Value::Null);
+    let hello = match wire::check_hello(&req) {
+        Ok(h) => h,
+        Err(e) => {
+            let _ = write_response(&mut write, &Response::err(id, e)).await;
+            return;
+        }
+    };
+    match hello.kind {
+        ConnKind::Frontend => match connector.attach_raw(hello).await {
+            Ok(att) => {
+                let reply = serde_json::to_value(hello_reply(Some(att.session.clone())))
+                    .unwrap_or(Value::Null);
+                if write_response(&mut write, &Response::ok(id, reply))
+                    .await
+                    .is_err()
+                {
+                    let _ = connector
+                        .events
+                        .send(Event::Disconnected { client: att.client });
+                    return;
+                }
+                frontend_pump(reader, write, att, connector).await;
+            }
+            Err(e) => {
+                let _ = write_response(&mut write, &Response::err(id, e)).await;
+            }
+        },
+        ConnKind::Control => {
+            let reply = serde_json::to_value(hello_reply(None)).unwrap_or(Value::Null);
+            if write_response(&mut write, &Response::ok(id, reply))
+                .await
+                .is_ok()
+            {
+                control_loop(reader, write, connector).await;
+            }
+        }
+        ConnKind::Plugin => {
+            // TODO(M3): plugin connections (token check, plugin API).
+            let e = RpcError::forbidden("plugin connections are not supported yet");
+            let _ = write_response(&mut write, &Response::err(id, e)).await;
+        }
     }
 }
 
-/// Runs the desktop until the session ends or the client goes away.
-/// Returns the reason.
-pub async fn run(mut desktop: Desktop, mut ch: ServerChannels) -> String {
-    let mut current = Grid::new(desktop.cols(), desktop.rows());
-    let mut previous: Option<Grid> = None;
-    let mut last_cursor: Option<CursorState> = None;
-    let mut last_frame: Option<Instant> = None;
-    let mut frame_due: Option<Instant> = None;
-    let mut hello = false;
-
-    loop {
-        let timer = earliest(desktop.next_deadline(), frame_due);
-        tokio::select! {
-            msg = ch.client.rx.recv() => match msg {
-                Some(m) => {
-                    if matches!(m, ClientMsg::Hello { .. } | ClientMsg::Resize { .. }) {
-                        // Size changed: next frame is a full redraw.
-                        previous = None;
-                        hello = true;
+/// Frames to the frontend, input from it.
+async fn frontend_pump(
+    mut reader: BufReader<OwnedReadHalf>,
+    mut write: OwnedWriteHalf,
+    att: Attached,
+    connector: Connector,
+) {
+    let client = att.client;
+    let events = connector.events.clone();
+    let reader_task = tokio::spawn(async move {
+        let mut decoder = FrameDecoder::new();
+        let mut buf = vec![0u8; 64 * 1024];
+        'conn: loop {
+            match reader.read(&mut buf).await {
+                Ok(0) | Err(_) => break,
+                Ok(n) => decoder.push(&buf[..n]),
+            }
+            loop {
+                match decoder.next_frame::<ClientMsg>() {
+                    Ok(Some(msg)) => {
+                        if events.send(Event::FrontendMsg { client, msg }).is_err() {
+                            break 'conn;
+                        }
                     }
-                    desktop.handle_client(CLIENT, m);
+                    Ok(None) => break,
+                    Err(e) => {
+                        tracing::warn!("bad frame from {client}: {e}");
+                        break 'conn;
+                    }
                 }
-                None => return "the client disconnected".into(),
-            },
-            Some(ev) = ch.pty_rx.recv() => {
-                desktop.on_pty(ev);
-                // Drain what is already queued so a burst becomes one frame.
-                while let Ok(ev) = ch.pty_rx.try_recv() {
-                    desktop.on_pty(ev);
-                }
-            },
-            r = recv_reload(&mut ch.reload_rx) => match r {
-                Some(()) => desktop.reload_config(),
-                None => ch.reload_rx = None,
-            },
-            () = sleep_until(timer) => desktop.on_timer(Instant::now()),
-        }
-
-        for (_, msg) in desktop.take_outbox() {
-            if ch.client.tx.send(msg).is_err() {
-                return "the client disconnected".into();
             }
         }
-        if let Some(reason) = desktop.quit_reason() {
-            let reason = reason.to_owned();
-            let _ = ch.client.tx.send(ServerMsg::Exit {
-                reason: reason.clone(),
-            });
-            return reason;
+        let _ = events.send(Event::Disconnected { client });
+    });
+    let mut rx = att.rx;
+    while let Some(msg) = rx.recv().await {
+        let is_frame = matches!(msg, ServerMsg::Frame(_));
+        let last = matches!(msg, ServerMsg::Detached { .. } | ServerMsg::Exit { .. });
+        match wire::encode_frame(&msg) {
+            Ok(bytes) => {
+                if write.write_all(&bytes).await.is_err() {
+                    break;
+                }
+            }
+            Err(e) => tracing::warn!("cannot encode a message for {client}: {e}"),
         }
-        if !hello {
-            // Nothing to draw until the client says how big it is.
+        if is_frame {
+            let _ = connector.events.send(Event::FrameWritten { client });
+        }
+        if last {
+            break;
+        }
+    }
+    let _ = write.shutdown().await;
+    reader_task.abort();
+    let _ = connector.events.send(Event::Disconnected { client });
+}
+
+/// Newline-delimited JSON-RPC requests until the peer hangs up.
+async fn control_loop(
+    mut reader: BufReader<OwnedReadHalf>,
+    mut write: OwnedWriteHalf,
+    connector: Connector,
+) {
+    while let Ok(Some(line)) = read_line(&mut reader).await {
+        if line.trim().is_empty() {
             continue;
         }
+        let resp = match wire::parse_message(&line) {
+            Ok(Message::Request(req)) => connector.control(req).await,
+            Ok(Message::Response(_)) => None,
+            Err(e) => Some(Response::err(Value::Null, e)),
+        };
+        if let Some(r) = resp
+            && write_response(&mut write, &r).await.is_err()
+        {
+            return;
+        }
+    }
+}
 
-        let now = Instant::now();
-        if desktop.take_dirty() {
-            // Draw now, unless this is a flood and the last frame was less
-            // than an interval ago.
-            let due = match last_frame {
-                Some(t) if desktop.pending_output() >= SMALL_OUTPUT => {
-                    (t + FRAME_INTERVAL).max(now)
-                }
-                _ => now,
-            };
-            frame_due = Some(frame_due.map_or(due, |d| d.min(due)));
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use termos_render::cell::Style;
+
+    #[test]
+    fn session_names() {
+        assert!(valid_session_name("main").is_ok());
+        assert!(valid_session_name("web dev").is_ok());
+        for bad in ["", " ", "$1", "a/b", "a:b", "x\u{7}"] {
+            assert!(valid_session_name(bad).is_err(), "{bad:?}");
         }
-        if frame_due.is_some_and(|d| d <= now) {
-            frame_due = None;
-            last_frame = Some(now);
-            let cursor = desktop.render(CLIENT, &mut current);
-            let (spans, clear) = match &previous {
-                Some(prev) if prev.cols() == current.cols() && prev.rows() == current.rows() => {
-                    (diff(prev, &current), false)
-                }
-                _ => (full(&current), true),
-            };
-            if clear || !spans.is_empty() || cursor != last_cursor {
-                let frame = FrameUpdate {
-                    cols: current.cols(),
-                    rows: current.rows(),
-                    clear,
-                    spans,
-                    cursor,
-                };
-                if ch.client.tx.send(ServerMsg::Frame(frame)).is_err() {
-                    return "the client disconnected".into();
-                }
-            }
-            last_cursor = cursor;
-            match &mut previous {
-                Some(prev) => std::mem::swap(prev, &mut current),
-                None => previous = Some(current.clone()),
-            }
-        }
+        assert!(valid_session_name(&"x".repeat(65)).is_err());
+    }
+
+    #[test]
+    fn cropping_keeps_frames_inside_small_clients() {
+        let mut g = Grid::new(10, 3);
+        g.put_str(0, 0, "abcdefgh界", Style::new(), 10);
+        g.put_str(0, 2, "zz", Style::new(), 10);
+        let spans = crop(full(&g), 9, 2);
+        assert!(spans.iter().all(|s| s.row < 2));
+        let first = spans.iter().find(|s| s.row == 0).expect("row 0 is sent");
+        assert_eq!(first.cells.len(), 9);
+        // The wide character at columns 8-9 does not fit: it became a blank.
+        assert_eq!(first.cells[8].width, 1);
     }
 }

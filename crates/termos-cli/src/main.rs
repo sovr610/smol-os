@@ -16,13 +16,12 @@ use anyhow::Context as _;
 use clap::{Parser, Subcommand};
 use termos_core::config::{Config, DEFAULT_CONFIG};
 use termos_core::paths::Paths;
-use termos_core::transport::in_process;
 use termos_core::watch::ConfigWatcher;
+use termos_core::wire::{ConnKind, Hello};
 use termos_render::caps::Caps;
 use termos_shell::keys::KeyTables;
 use termos_shell::notify::Level;
-use termos_shell::server::{ServerChannels, run as run_server};
-use termos_shell::{Desktop, DesktopOptions};
+use termos_shell::server::{Server, ServerOptions};
 use tokio::sync::mpsc;
 
 /// Long version string, e.g. `0.0.0 (x86_64-unknown-linux-gnu)`.
@@ -149,7 +148,6 @@ fn run_desktop(force: bool, paths: &Paths, config_path: &Path) -> anyhow::Result
         Err(e) => (Config::default(), Some(e.to_string())),
     };
     let mut caps = Caps::from_env(|k| std::env::var(k).ok());
-    let (cols, rows) = crossterm::terminal::size().context("cannot read the terminal size")?;
 
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -157,40 +155,35 @@ fn run_desktop(force: bool, paths: &Paths, config_path: &Path) -> anyhow::Result
         .context("cannot start the async runtime")?;
     let _enter = runtime.enter();
 
-    let (pty_tx, pty_rx) = mpsc::channel(256);
-    let opts = DesktopOptions {
-        session_name: "main".into(),
-        config_path: config_path.to_owned(),
-        paths: paths.clone(),
-        env_shell: std::env::var("SHELL").ok(),
-        pane_ids: termos_core::ids::PaneIds::new(),
-        pane_env: Vec::new(),
-    };
-    let mut desktop =
-        Desktop::new(opts, config, pty_tx, cols, rows).context("cannot start the first shell")?;
+    // TODO(M3): run the server as a daemon on its socket and attach to it.
+    let opts = ServerOptions::new("default", paths.clone(), config_path.to_owned());
+    let mut server = Server::new(opts, config);
     if let Some(e) = config_error {
-        desktop.post(Level::Error, format!("using default settings: {e}"));
+        server.notice(Level::Error, format!("using default settings: {e}"));
     }
     let (reload_tx, reload_rx) = mpsc::unbounded_channel();
     let watcher = match ConfigWatcher::spawn(config_path, reload_tx) {
-        Ok(w) => Some(w),
+        Ok(w) => {
+            server.set_reload(reload_rx);
+            Some(w)
+        }
         Err(e) => {
-            desktop.post(
+            server.notice(
                 Level::Warn,
                 format!("config changes will not be picked up automatically: {e}"),
             );
             None
         }
     };
-    let (client_end, server_end) = in_process();
-    let server = runtime.spawn(run_server(
-        desktop,
-        ServerChannels {
-            client: server_end,
-            pty_rx,
-            reload_rx: watcher.as_ref().map(|_| reload_rx),
-        },
-    ));
+    let connector = server.connector();
+    let server = runtime.spawn(server.run(None));
+    let mut hello = Hello::new(ConnKind::Frontend);
+    hello.session = Some("main".into());
+    hello.create = true;
+    let (_, client_end) = runtime
+        .block_on(connector.attach(hello))
+        .map_err(|e| anyhow::anyhow!("{}", e.message))
+        .context("cannot start the session")?;
 
     let mut stdout = std::io::stdout();
     let guard = client::TerminalGuard::enter(&mut stdout).context("cannot set up the terminal")?;

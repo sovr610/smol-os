@@ -6,7 +6,8 @@
 //!
 //! - [`desktop`]: the [`desktop::Desktop`] state machine: panes, input
 //!   routing (prefix key, overlays, copy mode, mouse), commands, rendering.
-//! - [`server`]: the event loop that drives a desktop for one client.
+//! - [`server`]: the session server: many sessions (one desktop each), many
+//!   attached clients, the Unix socket and the JSON-RPC control API.
 //! - [`commands`] and [`keys`]: named commands and the tmux-compatible key
 //!   tables.
 //! - [`status`], [`palette`], [`whichkey`], [`prompt`]: the status line, the
