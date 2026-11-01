@@ -207,6 +207,13 @@ Then try: `C-b %`, `C-b "`, `C-b f`, `C-b c`, `Ctrl+Space`, `C-b [`, and the mou
 
 The demo found one bug, fixed with a regression test: a session restored in place lost the plugin widgets and the palette's session list.
 
+**CI** (all 8 jobs green, including macOS) found three more things, all fixed:
+- macOS refuses socket timeouts once the peer has hung up, which made the SDK report an I/O error instead of "closed";
+- two tests read output before it had arrived;
+- several tests checked whole screen rows, which the pane beside them could fool.
+
+The shell and CLI suites then passed 6 out of 6 runs with every CPU busy.
+
 ```bash
 termos            # C-b d to detach
 termos ls
