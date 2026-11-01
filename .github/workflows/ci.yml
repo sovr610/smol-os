@@ -105,11 +105,13 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: fuzz
+      # The prebuilt cargo-fuzz is a musl binary and would default to the
+      # musl target, which the sanitizer cannot use; pin the gnu target.
       - name: Run fuzz targets
         working-directory: fuzz
         run: |
           for target in vt_advance config_parse keyspec_parse; do
-            cargo +nightly fuzz run "$target" -- -max_total_time=60
+            cargo +nightly fuzz run "$target" --target x86_64-unknown-linux-gnu -- -max_total_time=60
           done
 
   perf:
