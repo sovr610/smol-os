@@ -215,10 +215,19 @@ impl Drop for PtyPane {
 
 #[cfg(target_os = "linux")]
 fn proc_comm(pid: u32) -> Option<String> {
-    std::fs::read_to_string(format!("/proc/{pid}/comm"))
-        .ok()
-        .map(|s| s.trim().to_owned())
-        .filter(|s| !s.is_empty())
+    let read = |path: &str| {
+        std::fs::read_to_string(path)
+            .ok()
+            .map(|s| s.trim().to_owned())
+            .filter(|s| !s.is_empty())
+    };
+    let name = read(&format!("/proc/{pid}/comm"))?;
+    // Between fork and exec the child still carries the name of the thread
+    // that spawned it (ours); that is not the program the user started.
+    if read("/proc/thread-self/comm").as_deref() == Some(name.as_str()) {
+        return None;
+    }
+    Some(name)
 }
 
 #[cfg(not(target_os = "linux"))]

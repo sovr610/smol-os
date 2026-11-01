@@ -162,13 +162,16 @@ async fn split_right_type_and_see_separator() {
     let focused = h.desktop.focused();
     assert_eq!(focused, Some(h.panes()[1]));
     h.type_text("echo ri''ght\n");
-    let screen = h.wait_text("right").await;
+    // The output line: "right" alone in the right-hand pane (the status
+    // line may also contain the word, e.g. in a workspace name).
+    let is_output = |l: &str| l.split('│').nth(1).is_some_and(|r| r.trim() == "right");
+    let screen = h
+        .wait_for("output in the right pane", move |s, _| {
+            s.lines().any(is_output)
+        })
+        .await;
     assert!(screen.contains('│'), "{screen}");
-    // The text is in the right-hand half.
-    let line = screen
-        .lines()
-        .find(|l| l.contains("right") && !l.contains("echo"))
-        .unwrap_or("");
+    let line = screen.lines().find(|l| is_output(l)).unwrap_or("");
     assert!(
         line.find("right").unwrap_or(0) > usize::from(COLS / 2),
         "{line:?}"
