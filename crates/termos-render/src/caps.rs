@@ -320,9 +320,10 @@ mod tests {
         assert_eq!(detect(&[]).color, no_term);
     }
 
-    /// Probe replies per terminal. These are rebuilt from each terminal's
-    /// documented reply formats, not recorded; replace them with real
-    /// recordings from `termos debug caps --raw` when available.
+    /// Probe replies per terminal. tmux's is recorded (`termos debug caps
+    /// --raw` in a detached tmux 3.4 session, a build with Sixel); the
+    /// others are rebuilt from each terminal's documented reply formats
+    /// until recordings replace them.
     /// A terminal's name, its environment and its reply bytes.
     type Fixture = (
         &'static str,
@@ -383,7 +384,7 @@ mod tests {
                 ("TERM", "tmux-256color"),
                 ("TMUX", "/tmp/tmux-1000/default,1,0"),
             ],
-            b"\x1bP>|tmux 3.4\x1b\\\x1b[?2026;2$y\x1b]11;rgb:0000/0000/0000\x1b\\\x1b[?1;2c",
+            b"\x1bP>|tmux 3.4\x1b\\\x1b[6;32;16t\x1b[4;1280;1920t\x1b[?1;2;4c",
         ),
     ];
 
@@ -411,14 +412,16 @@ mod tests {
             ("xterm", ImageProtocol::Sixel, px(9, 17), false),
             ("windows-terminal", ImageProtocol::Sixel, None, false),
             ("gnome-terminal", ImageProtocol::Blocks, None, false),
-            ("tmux", ImageProtocol::Blocks, None, false),
+            // tmux passes Sixel on, and only Sixel.
+            ("tmux", ImageProtocol::Sixel, px(16, 32), false),
         ];
         for &(name, protocol, cell, kitty_keyboard) in expect {
             let caps = probed(name);
             assert_eq!(caps.image_protocol(), protocol, "{name}");
             assert_eq!(caps.cell_px, cell, "{name}");
             assert_eq!(caps.kitty_keyboard, kitty_keyboard, "{name}");
-            assert!(caps.background.is_some(), "{name}: OSC 11");
+            // A detached tmux has no outer terminal to ask for colours.
+            assert_eq!(caps.background.is_some(), name != "tmux", "{name}: OSC 11");
         }
         assert!(probed("wezterm").graphics.iterm2 && probed("wezterm").graphics.sixel);
         assert!(probed("iterm2").graphics.iterm2);
@@ -427,7 +430,10 @@ mod tests {
             "xterm does not know mode 2026"
         );
         let tmux = probed("tmux");
-        assert!(tmux.in_tmux);
+        assert!(
+            tmux.in_tmux && tmux.sync_output,
+            "no DECRQM reply: unchanged"
+        );
         assert_eq!(tmux.terminal.as_deref(), Some("tmux 3.4"));
         let mut gnome = probed("gnome-terminal");
         gnome.derive_cell_px(128, 40);

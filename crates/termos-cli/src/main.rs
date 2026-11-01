@@ -10,6 +10,7 @@
 //! the pane belongs to (`$TERMOS`).
 
 mod client;
+mod probe;
 
 use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
@@ -117,6 +118,22 @@ enum Cmd {
         #[command(subcommand)]
         action: ConfigCmd,
     },
+    /// Diagnostics.
+    #[command(hide = true)]
+    Debug {
+        #[command(subcommand)]
+        what: DebugCmd,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum DebugCmd {
+    /// Ask this terminal what it can do and print what TermOS detects.
+    Caps {
+        /// Also print the terminal's raw replies (for test fixtures).
+        #[arg(long)]
+        raw: bool,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -187,6 +204,9 @@ fn main() -> ExitCode {
     let config_path = cli.config.clone().unwrap_or_else(|| paths.config_file());
     let result = match &cli.command {
         Some(Cmd::Config { action }) => config_command(action, &config_path),
+        Some(Cmd::Debug {
+            what: DebugCmd::Caps { raw },
+        }) => debug_caps(*raw),
         _ => resolve_target(&cli, &paths).and_then(|t| run(&cli, &paths, &config_path, &t)),
     };
     match result {
@@ -295,8 +315,38 @@ fn run(cli: &Cli, paths: &Paths, config_path: &Path, t: &Target) -> anyhow::Resu
             }
         }
         Some(Cmd::Server) => run_server(paths, config_path, t),
-        Some(Cmd::Config { .. }) => Ok(ExitCode::SUCCESS),
+        Some(Cmd::Config { .. } | Cmd::Debug { .. }) => Ok(ExitCode::SUCCESS),
     }
+}
+
+/// `termos debug caps`: what the attach-time probe finds in this terminal.
+fn debug_caps(raw: bool) -> anyhow::Result<ExitCode> {
+    if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
+        bail!("stdin and stdout must be a terminal");
+    }
+    let env = |k: &str| std::env::var(k).ok();
+    let mut caps = Caps::from_env(env);
+    let mut stdout = std::io::stdout();
+    crossterm::terminal::enable_raw_mode().context("cannot set up the terminal")?;
+    // A generous timeout: this is for finding out, not for speed.
+    let probed = probe::run(&mut stdout, Duration::from_secs(2));
+    let _ = crossterm::terminal::disable_raw_mode();
+    let (replies, bytes) = probed.context("probing the terminal failed")?;
+    caps.apply_replies(&replies);
+    if let Ok((cols, rows)) = crossterm::terminal::size() {
+        caps.derive_cell_px(cols, rows);
+    }
+    if !probe::enabled(env) {
+        println!("note: the probe is off here (TERMOS_PROBE=0, or Windows); environment only");
+    } else if !replies.complete() {
+        println!("note: no DA1 reply within 2 s; the replies below may be incomplete");
+    }
+    println!("image protocol: {}", caps.image_protocol());
+    println!("{}", serde_json::to_string_pretty(&caps)?);
+    if raw {
+        println!("raw replies: {:?}", String::from_utf8_lossy(&bytes));
+    }
+    Ok(ExitCode::SUCCESS)
 }
 
 fn runtime() -> anyhow::Result<tokio::runtime::Runtime> {
@@ -480,11 +530,24 @@ fn attach(
     let (_, end) = runtime
         .block_on(connect_frontend(&t.socket, &hello))
         .map_err(|e| explain(t, e))?;
-    let mut caps = Caps::from_env(|k| std::env::var(k).ok());
+    let env = |k: &str| std::env::var(k).ok();
+    let mut caps = Caps::from_env(env);
+    let probe = probe::enabled(env).then(|| probe::timeout(caps.remote));
 
     let mut stdout = std::io::stdout();
-    let guard = client::TerminalGuard::enter(&mut stdout).context("cannot set up the terminal")?;
-    caps.kitty_keyboard = guard.kitty_keyboard();
+    let (guard, replies) =
+        client::TerminalGuard::enter(&mut stdout, probe).context("cannot set up the terminal")?;
+    caps.apply_replies(&replies);
+    if let Ok((cols, rows)) = crossterm::terminal::size() {
+        caps.derive_cell_px(cols, rows);
+    }
+    tracing::info!(
+        "terminal: {:?}, images: {}, {:?}",
+        caps.terminal,
+        caps.image_protocol(),
+        caps
+    );
+    let typeahead = probe::typeahead(&replies);
     let kitty = guard.kitty_keyboard();
     let default_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
@@ -493,7 +556,7 @@ fn attach(
     }));
     let ended = {
         let mut out = stdout.lock();
-        runtime.block_on(client::run(end, caps, &mut out))
+        runtime.block_on(client::run(end, caps, typeahead, &mut out))
     };
     drop(guard);
     let mut stdout = std::io::stdout();

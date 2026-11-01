@@ -3,6 +3,7 @@
 //! [`ClientMsg`]s and server frames into escape sequences.
 
 use std::io::{self, Write};
+use std::time::Duration;
 
 use crossterm::event::{
     self as ct, DisableBracketedPaste, DisableFocusChange, DisableMouseCapture,
@@ -17,6 +18,7 @@ use termos_core::proto::{ClientMsg, PROTOCOL_VERSION, ServerMsg};
 use termos_core::transport::ClientEnd;
 use termos_render::caps::Caps;
 use termos_render::encode::{Encoder, osc52_copy, set_title};
+use termos_render::probe::Replies;
 
 /// Puts the terminal into desktop mode and restores it on drop (also when
 /// unwinding from a panic).
@@ -25,9 +27,24 @@ pub(crate) struct TerminalGuard {
 }
 
 impl TerminalGuard {
-    pub(crate) fn enter(out: &mut impl Write) -> io::Result<Self> {
+    /// Raw mode, then the capability probe (when `probe` gives a
+    /// timeout), then desktop mode. Returns the probe's replies.
+    pub(crate) fn enter(
+        out: &mut impl Write,
+        probe: Option<Duration>,
+    ) -> io::Result<(Self, Replies)> {
         terminal::enable_raw_mode()?;
-        let kitty_keyboard = matches!(terminal::supports_keyboard_enhancement(), Ok(true));
+        let replies = match probe {
+            Some(timeout) => match crate::probe::run(out, timeout) {
+                Ok((r, _)) => r,
+                Err(e) => {
+                    tracing::warn!("capability probe failed: {e}");
+                    Replies::default()
+                }
+            },
+            None => Replies::default(),
+        };
+        let kitty_keyboard = replies.kitty_keyboard.is_some();
         crossterm::execute!(out, EnterAlternateScreen, EnableMouseCapture)?;
         // The Windows console delivers input as key events, so pastes
         // arrive as typed keys there.
@@ -42,7 +59,7 @@ impl TerminalGuard {
                 PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
             )?;
         }
-        Ok(Self { kitty_keyboard })
+        Ok((Self { kitty_keyboard }, replies))
     }
 
     pub(crate) fn kitty_keyboard(&self) -> bool {
@@ -193,7 +210,12 @@ pub(crate) enum Ended {
 }
 
 /// Runs the frontend until the server detaches it or the session ends.
-pub(crate) async fn run(mut end: ClientEnd, caps: Caps, out: &mut impl Write) -> io::Result<Ended> {
+pub(crate) async fn run(
+    mut end: ClientEnd,
+    caps: Caps,
+    typeahead: Vec<ClientMsg>,
+    out: &mut impl Write,
+) -> io::Result<Ended> {
     let (cols, rows) = terminal::size()?;
     let send = |end: &ClientEnd, msg: ClientMsg| {
         end.tx
@@ -209,6 +231,9 @@ pub(crate) async fn run(mut end: ClientEnd, caps: Caps, out: &mut impl Write) ->
             rows,
         },
     )?;
+    for msg in typeahead {
+        send(&end, msg)?;
+    }
     let mut encoder = Encoder::new(&caps);
     let mut events = EventStream::new();
     loop {
