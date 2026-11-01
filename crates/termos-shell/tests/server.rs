@@ -186,6 +186,20 @@ async fn run_shell(screen: &mut Screen, cmd: &str, expect: &str) {
         .await;
 }
 
+/// Whether some pane has a line that is `text`, possibly after a prompt
+/// (typeahead), but not the command that printed it. Rows hold several
+/// panes side by side, separated by `│`.
+fn in_a_pane(screen: &str, text: &str) -> bool {
+    screen.lines().any(|l| {
+        l.split('│').any(|cell| {
+            cell.trim().strip_suffix(text).is_some_and(|before| {
+                let before = before.trim_end();
+                before.is_empty() || before.ends_with(['$', '#'])
+            })
+        })
+    })
+}
+
 fn rpc_code(err: ConnectError) -> i64 {
     match err {
         ConnectError::Rpc(e) => e.code,
@@ -331,22 +345,16 @@ async fn control_api_drives_sessions_and_panes() {
         json!({"pane": target, "text": "echo via''-api\r"}),
     )
     .await;
-    s.until("text sent through the API", |t| {
-        t.lines()
-            .any(|l| l.contains("via-api") && !l.contains("echo"))
-    })
-    .await;
+    s.until("text sent through the API", |t| in_a_pane(t, "via-api"))
+        .await;
     call(
         &srv.socket,
         "pane.send-keys",
         json!({"pane": target, "keys": ["e", "c", "h", "o", "Space", "k", "e", "y", "s", "Enter"]}),
     )
     .await;
-    s.until("keys sent through the API", |t| {
-        t.lines()
-            .any(|l| l.trim_end().ends_with("keys") && !l.contains("echo"))
-    })
-    .await;
+    s.until("keys sent through the API", |t| in_a_pane(t, "keys"))
+        .await;
 
     call(
         &srv.socket,

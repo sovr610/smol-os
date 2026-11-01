@@ -54,10 +54,23 @@ fn split_type_close_and_exit() {
     t.send(b"exit\r");
     let status = t.wait_exit(T);
     assert!(status.success(), "{status:?}");
-    let out = t.raw_output();
-    assert!(out.contains("[exited: the last pane was closed]"), "{out}");
+    let out = t.wait_output(T, "[exited: the last pane was closed]");
     // Alternate screen left, raw mode off: the restore sequences were sent.
     assert!(out.contains("\x1b[?1049l"), "alternate screen not left");
+}
+
+/// Whether some pane has a line that is `text`, possibly after a prompt
+/// (typeahead), but not the command that printed it. Rows hold several
+/// panes side by side, separated by `│`.
+fn in_a_pane(screen: &str, text: &str) -> bool {
+    screen.lines().any(|l| {
+        l.split('│').any(|cell| {
+            cell.trim().strip_suffix(text).is_some_and(|before| {
+                let before = before.trim_end();
+                before.is_empty() || before.ends_with(['$', '#'])
+            })
+        })
+    })
 }
 
 fn stdout(out: &std::process::Output) -> String {
@@ -77,11 +90,7 @@ fn detach_ls_attach_msg_and_kill_server() {
     t.send(b"\x02d");
     let status = t.wait_exit(T);
     assert!(status.success(), "{status:?}");
-    assert!(
-        t.raw_output().contains("[detached (from session main)]"),
-        "{}",
-        t.raw_output()
-    );
+    t.wait_output(T, "[detached (from session main)]");
 
     // The session keeps running without a client.
     let ls = t.run(&["ls"]);
@@ -94,7 +103,7 @@ fn detach_ls_attach_msg_and_kill_server() {
     assert_eq!(panes.as_array().map(Vec::len), Some(2));
 
     // Reattach from another terminal: the same screen.
-    let t2 = t.client(&["attach"]);
+    let mut t2 = t.client(&["attach"]);
     t2.wait_ready();
     t2.wait_for("the old output and the split", T, |s| {
         s.contains("before-detach") && s.contains('│')
@@ -104,10 +113,7 @@ fn detach_ls_attach_msg_and_kill_server() {
     // Scripts drive it.
     let sent = t.run(&["msg", "pane.send-text", r#"{"text": "echo via-m''sg\r"}"#]);
     assert!(sent.status.success(), "{sent:?}");
-    t2.wait_for("text typed by msg", T, |s| {
-        s.lines()
-            .any(|l| l.trim_end().ends_with("via-msg") && !l.contains("echo"))
-    });
+    t2.wait_for("text typed by msg", T, |s| in_a_pane(s, "via-msg"));
     t.run(&["msg", "notify.send", r#"{"text": "hello from msg"}"#]);
     t2.wait_for("the notification", T, |s| s.contains("hello from msg"));
     let bad = t.run(&["msg", "no.such-method"]);
@@ -125,20 +131,14 @@ fn detach_ls_attach_msg_and_kill_server() {
     t2.wait_for("the renamed session", T, |s| {
         s.lines().last().is_some_and(|l| l.starts_with("[work]"))
     });
-    let mut t2 = t2;
     t2.send(format!("{} detach\r", env!("CARGO_BIN_EXE_termos")).as_bytes());
     t2.wait_exit(T);
-    assert!(t2.raw_output().contains("[detached (from session work)]"));
+    t2.wait_output(T, "[detached (from session work)]");
 
     // Attaching to a missing session fails cleanly; kill-server stops all.
-    let t3 = t.client(&["attach", "-t", "nope"]);
-    let mut t3 = t3;
+    let mut t3 = t.client(&["attach", "-t", "nope"]);
     t3.wait_exit(T);
-    assert!(
-        t3.raw_output().contains("no session named `nope`"),
-        "{}",
-        t3.raw_output()
-    );
+    t3.wait_output(T, "no session named `nope`");
     let killed = t.run(&["kill-server"]);
     assert!(killed.status.success(), "{killed:?}");
     assert!(!t.env.socket().exists(), "socket left behind");

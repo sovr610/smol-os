@@ -222,6 +222,27 @@ impl Termos {
         }
     }
 
+    /// Waits until the raw output contains `needle`: a program's last words
+    /// can still be in the PTY when it has already exited. Panics with the
+    /// output on timeout or once the PTY closed without it.
+    pub fn wait_output(&self, timeout: Duration, needle: &str) -> String {
+        let deadline = Instant::now() + timeout;
+        let (lock, cv) = &*self.shared;
+        let mut guard = lock.lock().expect("lock");
+        loop {
+            let raw = String::from_utf8_lossy(&guard.raw).into_owned();
+            if raw.contains(needle) {
+                return raw;
+            }
+            let now = Instant::now();
+            assert!(
+                now < deadline && !guard.closed,
+                "{needle:?} never appeared in the output:\n{raw}"
+            );
+            guard = cv.wait_timeout(guard, deadline - now).expect("wait").0;
+        }
+    }
+
     /// Waits until the screen changes after generation `since`; returns the
     /// elapsed time.
     pub fn wait_change(&self, since: u64, timeout: Duration) -> Duration {
