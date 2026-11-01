@@ -2009,6 +2009,7 @@ dependencies = [
 name = "termos-shell"
 version = "0.0.0"
 dependencies = [
+ "getrandom",
  "insta",
  "jiff",
  "nucleo-matcher",

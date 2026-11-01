@@ -20,7 +20,7 @@ use anyhow::{Context as _, bail};
 use clap::{Parser, Subcommand};
 use serde_json::{Value, json};
 use termos_core::config::{Config, DEFAULT_CONFIG};
-use termos_core::paths::Paths;
+use termos_core::paths::{Paths, server_name};
 use termos_core::transport::{ConnectError, connect_frontend, control_call};
 use termos_core::watch::ConfigWatcher;
 use termos_core::wire::{ConnKind, Hello};
@@ -157,25 +157,16 @@ fn inside_termos() -> Option<(PathBuf, String)> {
 
 fn resolve_target(cli: &Cli, paths: &Paths) -> anyhow::Result<Target> {
     let inside = inside_termos();
+    let name_of = |p: &Path| server_name(p).unwrap_or_else(|| DEFAULT_SERVER.to_owned());
     let (socket, name) = if let Some(path) = &cli.socket_path {
-        let name = path
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or(DEFAULT_SERVER)
-            .to_owned();
-        (path.clone(), name)
+        (path.clone(), name_of(path))
     } else if let Some(name) = &cli.socket_name {
-        if name.is_empty() || name.contains('/') {
+        if name.is_empty() || name.contains(['/', '\\']) {
             bail!("-L takes a name, not a path (use -S for a path)");
         }
         (paths.socket_path(name), name.clone())
     } else if let Some((socket, _)) = &inside {
-        let name = socket
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or(DEFAULT_SERVER)
-            .to_owned();
-        (socket.clone(), name)
+        (socket.clone(), name_of(socket))
     } else {
         (paths.socket_path(DEFAULT_SERVER), DEFAULT_SERVER.to_owned())
     };
@@ -483,7 +474,9 @@ fn list(t: &Target) -> anyhow::Result<ExitCode> {
 /// `termos server`: the daemon (or a foreground server for debugging).
 fn run_server(paths: &Paths, config_path: &Path, t: &Target) -> anyhow::Result<ExitCode> {
     // No controlling terminal: closing the terminal that started us must
-    // not stop the sessions. Fails only if we already lead a session.
+    // not stop the sessions. Fails only if we already lead a session. (On
+    // Windows the client starts us without a console window instead.)
+    #[cfg(unix)]
     let _ = rustix::process::setsid();
     if let Err(e) = termos_core::log::init_file_logging(&paths.log_dir(), "server") {
         eprintln!("termos: logging disabled: {e}");

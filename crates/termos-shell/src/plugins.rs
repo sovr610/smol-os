@@ -15,7 +15,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
-use std::io::{self, Read as _};
+use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 
@@ -113,10 +113,10 @@ impl fmt::Debug for Token {
 }
 
 impl Token {
-    /// 128 random bits from the kernel, as hex.
+    /// 128 random bits from the operating system, as hex.
     pub fn generate() -> io::Result<Self> {
         let mut bytes = [0u8; 16];
-        std::fs::File::open("/dev/urandom")?.read_exact(&mut bytes)?;
+        getrandom::fill(&mut bytes).map_err(|e| io::Error::other(e.to_string()))?;
         Ok(Self(bytes.iter().map(|b| format!("{b:02x}")).collect()))
     }
 
@@ -393,7 +393,7 @@ pub(crate) struct PluginHost {
 /// Resolves the manifest's program: with a `/` relative to the plugin
 /// directory, else looked up in `PATH`.
 fn program_path(dir: &Path, program: &str) -> PathBuf {
-    if program.contains('/') {
+    if Path::new(program).components().count() > 1 {
         dir.join(program)
     } else {
         PathBuf::from(program)

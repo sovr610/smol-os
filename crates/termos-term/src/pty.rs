@@ -186,12 +186,17 @@ impl PtyPane {
     }
 
     /// The PID of the PTY's foreground process group leader (the program
-    /// the user is interacting with), falling back to the child.
+    /// the user is interacting with), falling back to the child. Windows
+    /// has no foreground process group: always the child.
     pub fn foreground_pid(&self) -> Option<u32> {
-        self.master
+        #[cfg(unix)]
+        let leader = self
+            .master
             .process_group_leader()
-            .and_then(|p| u32::try_from(p).ok())
-            .or(self.pid)
+            .and_then(|p| u32::try_from(p).ok());
+        #[cfg(not(unix))]
+        let leader = None;
+        leader.or(self.pid)
     }
 
     /// Name of the foreground program (Linux; `None` elsewhere).

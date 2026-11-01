@@ -66,11 +66,16 @@ pub struct PaneSnapshot {
     pub scrollback: Option<Vec<String>>,
 }
 
-/// The program name of a command line (`/usr/bin/vim` → `vim`).
+/// The program name of a command line (`/usr/bin/vim` → `vim`,
+/// `C:\Tools\vim.exe` → `vim`).
 pub fn program_name(argv0: &str) -> &str {
-    let base = argv0.rsplit('/').next().unwrap_or(argv0);
+    let base = argv0.rsplit(['/', '\\']).next().unwrap_or(argv0);
     // Login shells show up as `-bash`.
-    base.strip_prefix('-').unwrap_or(base)
+    let base = base.strip_prefix('-').unwrap_or(base);
+    match base.len().checked_sub(4) {
+        Some(i) if base.is_char_boundary(i) && base[i..].eq_ignore_ascii_case(".exe") => &base[..i],
+        _ => base,
+    }
 }
 
 /// Whether `argv` runs a program on the allowlist.
@@ -123,12 +128,20 @@ pub fn shell_quote(argv: &[String]) -> String {
         .join(" ")
 }
 
+/// Names Windows reserves for devices, even with an extension.
+const RESERVED: [&str; 22] = [
+    "con", "prn", "aux", "nul", "com1", "com2", "com3", "com4", "com5", "com6", "com7", "com8",
+    "com9", "lpt1", "lpt2", "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8", "lpt9",
+];
+
 /// The file name for a session: unreserved characters as they are, the
-/// rest percent-encoded (so any session name is a safe file name).
+/// rest percent-encoded (so any session name is a safe file name, also on
+/// Windows, where device names such as `con` are encoded too).
 pub fn file_name(session: &str) -> String {
     let mut out = String::new();
-    for b in session.bytes() {
-        if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_') {
+    for (i, b) in session.bytes().enumerate() {
+        let device = i == 0 && RESERVED.contains(&session.to_ascii_lowercase().as_str());
+        if (b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_')) && !device {
             out.push(char::from(b));
         } else {
             out.push_str(&format!("%{b:02X}"));
@@ -139,26 +152,42 @@ pub fn file_name(session: &str) -> String {
 }
 
 /// Writes `snap` into `dir` atomically (temporary file, then rename), mode
-/// 0600, in a 0700 directory.
+/// 0600 in a 0700 directory on Unix (on Windows the profile's ACLs apply).
 pub fn save(dir: &Path, snap: &SessionSnapshot) -> io::Result<PathBuf> {
-    use std::os::unix::fs::OpenOptionsExt as _;
     ensure_private_dir(dir)?;
     let path = dir.join(file_name(&snap.name));
     let tmp = dir.join(format!(".{}.tmp", file_name(&snap.name)));
     let json = serde_json::to_vec_pretty(snap).map_err(io::Error::other)?;
     {
-        let mut f = std::fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .mode(0o600)
-            .open(&tmp)?;
+        let mut opts = std::fs::OpenOptions::new();
+        opts.write(true).create(true).truncate(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt as _;
+            opts.mode(0o600);
+        }
+        let mut f = opts.open(&tmp)?;
         f.write_all(&json)?;
         f.write_all(b"\n")?;
         f.sync_all()?;
     }
-    std::fs::rename(&tmp, &path)?;
+    rename(&tmp, &path)?;
     Ok(path)
+}
+
+/// Replaces `to` with `from`. On Windows a virus scanner can hold the old
+/// file open for a moment, so a refused rename is retried briefly.
+fn rename(from: &Path, to: &Path) -> io::Result<()> {
+    let mut tries = 0;
+    loop {
+        match std::fs::rename(from, to) {
+            Err(e) if cfg!(windows) && e.kind() == io::ErrorKind::PermissionDenied && tries < 3 => {
+                tries += 1;
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            other => return other,
+        }
+    }
 }
 
 /// Deletes a session's snapshot (a missing file is fine).
@@ -281,22 +310,29 @@ mod tests {
         assert_eq!(file_name("main"), "main.json");
         assert_eq!(file_name("web dev/1"), "web%20dev%2F1.json");
         assert_eq!(file_name(".."), "%2E%2E.json");
+        assert_eq!(file_name("con"), "%63on.json");
+        assert_eq!(file_name("Lpt1"), "%4Cpt1.json");
+        assert_eq!(file_name("console"), "console.json");
     }
 
     #[test]
     fn save_and_load_round_trip_privately() {
-        use std::os::unix::fs::PermissionsExt as _;
         let dir = tempfile::tempdir().expect("tempdir");
         let sessions = dir.path().join("sessions");
         let snap = sample();
         let path = save(&sessions, &snap).expect("save");
-        let mode = std::fs::metadata(&path).expect("meta").permissions().mode();
-        assert_eq!(mode & 0o777, 0o600);
-        let dmode = std::fs::metadata(&sessions)
-            .expect("meta")
-            .permissions()
-            .mode();
-        assert_eq!(dmode & 0o777, 0o700);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            let mode = std::fs::metadata(&path).expect("meta").permissions().mode();
+            assert_eq!(mode & 0o777, 0o600);
+            let dmode = std::fs::metadata(&sessions)
+                .expect("meta")
+                .permissions()
+                .mode();
+            assert_eq!(dmode & 0o777, 0o700);
+        }
+        assert!(path.is_file());
         // A damaged file and a future version are skipped, not fatal.
         std::fs::write(sessions.join("bad.json"), "{").expect("write");
         let mut future = sample();
@@ -341,6 +377,8 @@ mod tests {
     fn helpers() {
         assert_eq!(program_name("/usr/bin/nvim"), "nvim");
         assert_eq!(program_name("-bash"), "bash");
+        assert_eq!(program_name(r"C:\Tools\Vim.EXE"), "Vim");
+        assert_eq!(program_name("pwsh.exe"), "pwsh");
         assert_eq!(
             shell_quote(&["less".into(), "it's here.txt".into(), "-R".into()]),
             r"less 'it'\''s here.txt' -R"

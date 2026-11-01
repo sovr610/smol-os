@@ -80,7 +80,9 @@ impl ServerOptions {
             socket_path: paths.socket_path(name),
             paths,
             config_path,
-            env_shell: std::env::var("SHELL").ok(),
+            // On Windows $SHELL comes from Git Bash or MSYS and names a
+            // path that cannot be started; the default shell applies.
+            env_shell: std::env::var("SHELL").ok().filter(|_| cfg!(unix)),
             // Nobody can connect if our own identity is unknown.
             allowed_peer: PeerId::current().unwrap_or_else(|_| PeerId::nobody()),
             exit_when_empty: true,
@@ -2019,12 +2021,15 @@ impl Server {
     }
 }
 
+/// The signals that stop the server (it saves snapshots first).
+#[cfg(unix)]
 struct Signals {
     term: tokio::signal::unix::Signal,
     int: tokio::signal::unix::Signal,
     hup: tokio::signal::unix::Signal,
 }
 
+#[cfg(unix)]
 impl Signals {
     fn new() -> Option<Self> {
         use tokio::signal::unix::{SignalKind, signal};
@@ -2034,15 +2039,56 @@ impl Signals {
             hup: signal(SignalKind::hangup()).ok()?,
         })
     }
+
+    async fn recv(&mut self) -> &'static str {
+        tokio::select! {
+            _ = self.term.recv() => "SIGTERM",
+            _ = self.int.recv() => "SIGINT",
+            _ = self.hup.recv() => "SIGHUP",
+        }
+    }
+}
+
+/// The console events that stop the server. Logoff and shutdown are best
+/// effort: Windows may end the process before the snapshots are written,
+/// and the debounced snapshots are the safety net.
+#[cfg(windows)]
+struct Signals {
+    c: tokio::signal::windows::CtrlC,
+    brk: tokio::signal::windows::CtrlBreak,
+    close: tokio::signal::windows::CtrlClose,
+    logoff: tokio::signal::windows::CtrlLogoff,
+    shutdown: tokio::signal::windows::CtrlShutdown,
+}
+
+#[cfg(windows)]
+impl Signals {
+    fn new() -> Option<Self> {
+        use tokio::signal::windows;
+        Some(Self {
+            c: windows::ctrl_c().ok()?,
+            brk: windows::ctrl_break().ok()?,
+            close: windows::ctrl_close().ok()?,
+            logoff: windows::ctrl_logoff().ok()?,
+            shutdown: windows::ctrl_shutdown().ok()?,
+        })
+    }
+
+    async fn recv(&mut self) -> &'static str {
+        // TODO(M9): a hidden window for WM_ENDSESSION, so logoff and shutdown always save.
+        tokio::select! {
+            _ = self.c.recv() => "Ctrl+C",
+            _ = self.brk.recv() => "Ctrl+Break",
+            _ = self.close.recv() => "the console closing",
+            _ = self.logoff.recv() => "logoff",
+            _ = self.shutdown.recv() => "shutdown",
+        }
+    }
 }
 
 async fn recv_signal(signals: &mut Option<Signals>) -> &'static str {
     match signals {
-        Some(s) => tokio::select! {
-            _ = s.term.recv() => "SIGTERM",
-            _ = s.int.recv() => "SIGINT",
-            _ = s.hup.recv() => "SIGHUP",
-        },
+        Some(s) => s.recv().await,
         None => std::future::pending().await,
     }
 }

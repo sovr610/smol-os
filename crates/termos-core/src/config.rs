@@ -286,14 +286,51 @@ impl Config {
         }
     }
 
-    /// The program new panes run.
+    /// The program new panes run: the config's `shell`, else `$SHELL`
+    /// (Unix only), else [`default_shell`].
     pub fn shell_program(&self, env_shell: Option<String>) -> String {
         self.shell
             .clone()
             .or(env_shell)
             .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| String::from("/bin/sh"))
+            .unwrap_or_else(default_shell)
     }
+}
+
+/// The shell for new panes when nothing names one: `/bin/sh` on Unix;
+/// on Windows PowerShell 7, else Windows PowerShell, else `%COMSPEC%`
+/// (cmd).
+pub fn default_shell() -> String {
+    if cfg!(windows) {
+        windows_default_shell(
+            std::env::var_os("PATH").as_deref(),
+            std::env::var("COMSPEC").ok(),
+            |p| p.is_file(),
+        )
+    } else {
+        String::from("/bin/sh")
+    }
+}
+
+/// The Windows default shell, found on `path` (the `PATH` value).
+pub fn windows_default_shell(
+    path: Option<&std::ffi::OsStr>,
+    comspec: Option<String>,
+    is_file: impl Fn(&Path) -> bool,
+) -> String {
+    for exe in ["pwsh.exe", "powershell.exe"] {
+        let found = path
+            .into_iter()
+            .flat_map(std::env::split_paths)
+            .map(|dir| dir.join(exe))
+            .find(|p| is_file(p));
+        if let Some(p) = found {
+            return p.to_string_lossy().into_owned();
+        }
+    }
+    comspec
+        .filter(|c| !c.is_empty())
+        .unwrap_or_else(|| String::from("cmd.exe"))
 }
 
 /// 1-based line and column of byte offset `pos` in `src`.
@@ -444,12 +481,33 @@ position = "top"
     fn shell_fallbacks() {
         let c = Config::default();
         assert_eq!(c.shell_program(Some("/bin/zsh".into())), "/bin/zsh");
-        assert_eq!(c.shell_program(None), "/bin/sh");
+        assert_eq!(c.shell_program(None), default_shell());
+        if cfg!(unix) {
+            assert_eq!(default_shell(), "/bin/sh");
+        }
         let c = Config {
             shell: Some("fish".into()),
             ..Config::default()
         };
         assert_eq!(c.shell_program(Some("/bin/zsh".into())), "fish");
+    }
+
+    #[test]
+    fn windows_shell_order() {
+        let dirs = [PathBuf::from("/w/sys"), PathBuf::from("/w/ps7")];
+        let path = std::env::join_paths(&dirs).expect("joinable");
+        let has =
+            |names: &'static [&'static str]| move |p: &Path| names.iter().any(|n| p.ends_with(n));
+        let pick = |names: &'static [&'static str], comspec: Option<&str>| {
+            windows_default_shell(Some(&path), comspec.map(str::to_owned), has(names))
+        };
+        assert!(pick(&["ps7/pwsh.exe", "sys/powershell.exe"], None).ends_with("pwsh.exe"));
+        assert!(pick(&["sys/powershell.exe"], None).ends_with("powershell.exe"));
+        assert_eq!(
+            pick(&[], Some(r"C:\Windows\cmd.exe")),
+            r"C:\Windows\cmd.exe"
+        );
+        assert_eq!(pick(&[], None), "cmd.exe");
     }
 
     #[test]

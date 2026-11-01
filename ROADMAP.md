@@ -385,4 +385,5 @@ Generated from the `TODO(M<n>)` markers in the code. Don't edit by hand; run `ca
 | M8 | `crates/termos-image/src/lib.rs` | Buildroot external tree, image build driver, QEMU boot tests for x86_64 and aarch64 virt. |
 | M8 | `crates/termos-render/src/lib.rs` | DRM/KMS backend with font rasterizer and adjustable font size. |
 | M9 | `crates/termos-image/src/lib.rs` | installer and atomic A/B updates. |
+| M9 | `crates/termos-shell/src/server.rs` | a hidden window for WM_ENDSESSION, so logoff and shutdown always save. |
 <!-- open-work:end -->
