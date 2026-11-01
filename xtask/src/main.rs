@@ -74,6 +74,7 @@ fn ci() -> Result<()> {
         &root,
         &["test", "--workspace", "--all-features", "--locked"],
     )?;
+    windows_clippy(&root)?;
     check_repo()?;
     if cargo_subcommand_available(&root, "deny") {
         run_cargo(&root, &["deny", "check"])?;
@@ -85,6 +86,73 @@ fn ci() -> Result<()> {
     }
     println!("xtask: all CI checks passed");
     Ok(())
+}
+
+/// The Windows target CI type-checks from Linux (see the lint job).
+const WINDOWS_TARGET: &str = "x86_64-pc-windows-msvc";
+
+/// Crates whose tests build for Windows without a C toolchain for it
+/// (criterion's dependencies compile C), so their tests are linted too.
+const WINDOWS_TEST_CRATES: &[&str] = &[
+    "termos-core",
+    "termos-term",
+    "termos-wm",
+    "termos-plugin",
+    "termos-shell",
+    "termos-cli",
+];
+
+/// Clippy for the Windows target, when its standard library is installed,
+/// so Windows-only code is checked without a Windows machine.
+fn windows_clippy(root: &Path) -> Result<()> {
+    if cfg!(windows) {
+        // The plain clippy run above already covers it.
+        return Ok(());
+    }
+    if !target_installed(WINDOWS_TARGET) {
+        println!(
+            "xtask: SKIPPED clippy for {WINDOWS_TARGET}: the target is not installed \
+             (CI runs it; install with `rustup target add {WINDOWS_TARGET}`)"
+        );
+        return Ok(());
+    }
+    let common = [
+        "--all-features",
+        "--locked",
+        "--target",
+        WINDOWS_TARGET,
+        "--",
+        "-D",
+        "warnings",
+    ];
+    let mut args = vec!["clippy", "--workspace", "--lib", "--bins"];
+    args.extend(common);
+    run_cargo(root, &args)?;
+    let mut args = vec!["clippy"];
+    for krate in WINDOWS_TEST_CRATES {
+        args.extend(["-p", krate]);
+    }
+    args.push("--all-targets");
+    args.extend(common);
+    run_cargo(root, &args)
+}
+
+/// Whether the standard library for `target` is installed.
+fn target_installed(target: &str) -> bool {
+    let rustc = std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into());
+    let Ok(out) = Command::new(rustc)
+        .args(["--print", "target-libdir", "--target", target])
+        .output()
+    else {
+        return false;
+    };
+    if !out.status.success() {
+        return false;
+    }
+    let dir = String::from_utf8_lossy(&out.stdout);
+    std::fs::read_dir(dir.trim()).is_ok_and(|mut entries| {
+        entries.any(|e| e.is_ok_and(|e| e.file_name().to_string_lossy().starts_with("libstd-")))
+    })
 }
 
 /// Work-marker format and ROADMAP sync, plus SPDX headers.

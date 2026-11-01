@@ -34,6 +34,16 @@ jobs:
           tool: cargo-deny
       - name: cargo-deny (licenses, advisories, bans, sources)
         run: cargo deny check
+      # Windows-only code is type-checked here too, so most Windows
+      # breakage shows up without waiting for the Windows runner. Crates
+      # whose tests build C code for the target (criterion) are checked
+      # without their tests; the Windows job runs those. Keep the crate
+      # list in sync with WINDOWS_TEST_CRATES in xtask/src/main.rs.
+      - name: clippy for Windows
+        run: |
+          rustup target add x86_64-pc-windows-msvc
+          cargo clippy --workspace --lib --bins --all-features --locked --target x86_64-pc-windows-msvc -- -D warnings
+          cargo clippy -p termos-core -p termos-term -p termos-wm -p termos-plugin -p termos-shell -p termos-cli --all-targets --all-features --locked --target x86_64-pc-windows-msvc -- -D warnings
 
   test:
     name: Clippy + test (${{ matrix.name }})
@@ -48,17 +58,25 @@ jobs:
             os: ubuntu-24.04-arm
           - name: macos-arm64
             os: macos-latest
+          - name: windows-x86_64
+            os: windows-latest
     steps:
       - uses: actions/checkout@v5
       - uses: actions-rust-lang/setup-rust-toolchain@v1
-      # Clippy runs on every platform so cfg-gated (Linux-only / macOS-only)
-      # code is linted where it compiles.
+      # Clippy runs on every platform so cfg-gated (Linux-only / macOS-only
+      # / Windows-only) code is linted where it compiles.
       - name: clippy
         run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
       - name: test
         run: cargo test --workspace --all-features --locked
       - name: smoke
         run: cargo run --locked -p termos-cli -- --version
+      # The real daemon, started and driven by the CLI the way a user would.
+      - name: daemon smoke
+        shell: bash
+        run: |
+          cargo build --locked -p termos-cli
+          TERMOS_BIN=target/debug/termos ./.github/scripts/daemon-smoke.sh
 
   cross:
     name: Cross-build (${{ matrix.target }})
@@ -89,6 +107,116 @@ jobs:
         run: cargo zigbuild --release --locked -p termos-cli --target ${{ matrix.target }}.2.31
       - name: Inspect binary
         run: file target/${{ matrix.target }}/release/termos
+      # Test builds: a tar keeps the executable bit, which zip would lose.
+      - name: Package test build
+        id: package
+        shell: bash
+        run: |
+          arch="${{ matrix.target }}"; arch="${arch%%-*}"
+          name="termos-${GITHUB_SHA::7}-linux-${arch}"
+          mkdir -p "dist/$name"
+          cp "target/${{ matrix.target }}/release/termos" "dist/$name/"
+          ./.github/scripts/buildinfo.sh "${{ matrix.target }} (glibc 2.31 or newer)" > "dist/$name/BUILDINFO.txt"
+          tar -C dist -czf "dist/$name.tar.gz" "$name"
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.package.outputs.name }}
+          path: dist/${{ steps.package.outputs.name }}.tar.gz
+          retention-days: 14
+          compression-level: 0
+          if-no-files-found: error
+
+  # The Linux test builds, downloaded and run on matching machines: proves
+  # the glibc 2.31 cross-builds start and work.
+  artifact-smoke:
+    name: Test build smoke (linux-${{ matrix.arch }})
+    needs: cross
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            os: ubuntu-24.04
+          - arch: aarch64
+            os: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: termos-*-linux-${{ matrix.arch }}
+          path: dist
+          merge-multiple: true
+      - name: Run the test build
+        shell: bash
+        run: |
+          tar -C dist -xzf dist/termos-*-linux-${{ matrix.arch }}.tar.gz
+          bin=$(echo dist/termos-*-linux-${{ matrix.arch }}/termos)
+          "$bin" --version
+          cat dist/termos-*-linux-${{ matrix.arch }}/BUILDINFO.txt
+          TERMOS_BIN="$bin" ./.github/scripts/daemon-smoke.sh
+
+  package-macos:
+    name: Test build (macos-arm64)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - name: Build termos
+        run: cargo build --release --locked -p termos-cli
+      - name: Package test build
+        id: package
+        shell: bash
+        run: |
+          name="termos-${GITHUB_SHA::7}-macos-arm64"
+          mkdir -p "dist/$name"
+          cp target/release/termos "dist/$name/"
+          ./.github/scripts/buildinfo.sh "aarch64-apple-darwin (macOS 11 or newer)" > "dist/$name/BUILDINFO.txt"
+          "dist/$name/termos" --version
+          TERMOS_BIN="dist/$name/termos" ./.github/scripts/daemon-smoke.sh
+          tar -C dist -czf "dist/$name.tar.gz" "$name"
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.package.outputs.name }}
+          path: dist/${{ steps.package.outputs.name }}.tar.gz
+          retention-days: 14
+          compression-level: 0
+          if-no-files-found: error
+
+  package-windows:
+    name: Test build (windows-x86_64)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      # The setup action sets RUSTFLAGS, which overrides .cargo/config.toml's
+      # target rustflags: link the C runtime statically here explicitly, so
+      # the build runs without the Visual C++ redistributable.
+      - name: Build termos
+        env:
+          RUSTFLAGS: -D warnings -C target-feature=+crt-static
+        run: cargo build --release --locked -p termos-cli
+      - name: Package test build
+        id: package
+        shell: bash
+        run: |
+          name="termos-${GITHUB_SHA::7}-windows-x86_64"
+          mkdir -p "dist/$name"
+          cp target/release/termos.exe "dist/$name/"
+          ./.github/scripts/buildinfo.sh "x86_64-pc-windows-msvc (Windows 10 1809 or newer, Windows Terminal)" > "dist/$name/BUILDINFO.txt"
+          "dist/$name/termos.exe" --version
+          TERMOS_BIN="dist/$name/termos.exe" ./.github/scripts/daemon-smoke.sh
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+      # upload-artifact zips the directory: the download is a .zip holding
+      # termos.exe and BUILDINFO.txt.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.package.outputs.name }}
+          path: dist/${{ steps.package.outputs.name }}
+          retention-days: 14
+          if-no-files-found: error
 
   fuzz:
     name: Fuzz smoke (nightly, 60 s per target)

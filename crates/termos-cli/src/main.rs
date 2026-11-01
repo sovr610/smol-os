@@ -214,7 +214,7 @@ fn run(cli: &Cli, paths: &Paths, config_path: &Path, t: &Target) -> anyhow::Resu
             if !detached {
                 attach_checks(cli)?;
             }
-            ensure_server(t, config_path)?;
+            ensure_server(paths, t, config_path)?;
             let created = call(t, "session.new", Some(json!({"name": name, "cwd": cwd})))?;
             if *detached {
                 return Ok(ExitCode::SUCCESS);
@@ -271,7 +271,7 @@ fn run(cli: &Cli, paths: &Paths, config_path: &Path, t: &Target) -> anyhow::Resu
             Ok(ExitCode::SUCCESS)
         }
         Some(Cmd::Restore { names }) => {
-            let started = ensure_server(t, config_path)?;
+            let started = ensure_server(paths, t, config_path)?;
             let params = (!names.is_empty()).then(|| json!({"names": names}));
             match call(t, "session.restore", params) {
                 Ok(r) => {
@@ -324,7 +324,7 @@ fn call(t: &Target, method: &str, params: Option<Value>) -> anyhow::Result<Value
 
 /// Starts the server daemon unless one is running. Returns whether it
 /// started one.
-fn ensure_server(t: &Target, config_path: &Path) -> anyhow::Result<bool> {
+fn ensure_server(paths: &Paths, t: &Target, config_path: &Path) -> anyhow::Result<bool> {
     if termos_core::local::probe(&t.socket) {
         return Ok(false);
     }
@@ -352,7 +352,10 @@ fn ensure_server(t: &Target, config_path: &Path) -> anyhow::Result<bool> {
             if termos_core::local::probe(&t.socket) {
                 return Ok(false);
             }
-            bail!("the server did not start ({status}); see the logs in the state directory");
+            bail!(
+                "the server did not start ({status}); see the server log in {}",
+                paths.log_dir().display()
+            );
         }
         if Instant::now() > deadline {
             bail!("the server did not start within 10 seconds");
@@ -436,7 +439,7 @@ fn attach(
 ) -> anyhow::Result<ExitCode> {
     attach_checks(cli)?;
     if start_server {
-        ensure_server(t, config_path)?;
+        ensure_server(paths, t, config_path)?;
     }
     if let Err(e) = termos_core::log::init_file_logging(&paths.log_dir(), "termos") {
         eprintln!("termos: logging disabled: {e}");
@@ -535,9 +538,12 @@ fn run_server(paths: &Paths, config_path: &Path, t: &Target) -> anyhow::Result<E
     if let Some(e) = config_error {
         server.notice(Level::Error, format!("using default settings: {e}"));
     }
+    // Our stderr goes nowhere when a client started us: say it in the log
+    // the client points at, too.
     let listener = server
         .bind()
-        .context("cannot listen on the session socket")?;
+        .context("cannot listen on the session socket")
+        .inspect_err(|e| tracing::error!("{e:#}"))?;
     let (reload_tx, reload_rx) = mpsc::unbounded_channel();
     let watcher = match ConfigWatcher::spawn(config_path, reload_tx) {
         Ok(w) => {
