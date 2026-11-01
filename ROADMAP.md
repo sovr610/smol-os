@@ -119,7 +119,7 @@ cargo xtask todos
   | RSS | 5.8 MB | < 150 MB |
   | 300k-line flood | rendered in 0.23 s | — |
 
-- **Fuzzing:** 20 s locally on each target with no crashes; CI runs 60 s per target.
+- **Fuzzing:** CI runs 60 s per target. The VT target found an out-of-memory: alacritty_terminal reflowing a wide character into a one-column pane. It is fixed by never sizing the emulator below 2 columns (`MIN_COLS`), and a regression test keeps it fixed. 3 minutes of local fuzzing afterwards found nothing more.
 
 **Demo**
 ```bash
