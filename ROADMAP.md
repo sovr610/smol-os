@@ -276,6 +276,11 @@ ssh -t host termos
 - ConPTY asks for the cursor position when it starts and sends nothing until answered: panes were fine because the emulator answers, but the raw PTY tests and the e2e harness needed to answer too.
 - With one waiting pipe instance, plugins starting together could find the pipe busy; Python's `open()` doesn't retry. The server now keeps four instances waiting.
 - Git Bash has no `/dev/stderr`; macOS can't name the peer of a socket that already hung up; a CLI test hard-coded a Unix socket path.
+- A daemon started under a caller that captures output (`$out = termos restore`) inherited the caller's stdout pipe, so the caller waited for end of file as long as the server ran. Windows children inherit every inheritable handle; the client now clears the flag on its standard handles first.
+- A ConPTY reports NUL (the e2e harness's Ctrl+Space) as Ctrl+Shift+2; it now means Ctrl+Space on Windows, as Ctrl+@ does everywhere.
+- A ConPTY repaints full-width rows by letting them wrap, which `vt100` joined into one line; the e2e harness reads rows one by one.
+
+All 13 CI jobs, including the Windows tests and both Windows/macOS test builds, then passed (run 41351452891).
 
 **Not in this milestone:**
 - bracketed paste and Kitty keyboard input from the outer terminal on Windows (`TODO(M9)`);
@@ -461,7 +466,6 @@ Generated from the `TODO(M<n>)` markers in the code. Don't edit by hand; run `ca
 | M4 | `crates/termos-apps/src/lib.rs` | file manager, system monitor, image viewer, markdown viewer, settings, clipboard manager. |
 | M4 | `crates/termos-render/src/lib.rs` | image protocols (Kitty, Sixel, iTerm2, block/braille fallback) with occlusion handling. |
 | M4 | `crates/termos-shell/src/lib.rs` | optional WASM runtime for status-bar widgets (behind a cargo feature). |
-| M4 | `crates/termos-term/src/input.rs` | Kitty keyboard protocol encoding for child programs that enable it (CSI > u). |
 | M4 | `crates/termos-term/src/lib.rs` | intercept Kitty graphics / Sixel sequences so images work inside PTY windows. |
 | M5 | `crates/termos-apps/src/lib.rs` | package manager UI over mise, the dev rootfs and the host package manager. |
 | M5 | `crates/termos-devkit/src/lib.rs` | mise-backed toolchain manager, Neovim + LSP/DAP setup, dev rootfs, Git/build panels. |
@@ -474,4 +478,5 @@ Generated from the `TODO(M<n>)` markers in the code. Don't edit by hand; run `ca
 | M9 | `crates/termos-image/src/lib.rs` | installer and atomic A/B updates. |
 | M9 | `crates/termos-shell/src/server.rs` | a hidden window for WM_ENDSESSION, so logoff and shutdown always save. |
 | M9 | `crates/termos-term/src/pty.rs` | foreground program name, directory and command line on macOS (libproc) and Windows (process snapshot APIs), so snapshots there name and restore programs too. |
+| M9 | `crates/termos-term/src/vt.rs` | Kitty keyboard release events (flag 2) and alternate keys (flag 4) for programs in panes. |
 <!-- open-work:end -->

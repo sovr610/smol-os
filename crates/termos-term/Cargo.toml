@@ -16,6 +16,7 @@ portable-pty.workspace = true
 termos-core.workspace = true
 termos-render.workspace = true
 tokio.workspace = true
+tracing.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt", "macros", "time"] }

@@ -514,6 +514,15 @@ impl Desktop {
         self.session.active().focus()
     }
 
+    /// Terminal modes of the focused pane's program (for tests and
+    /// diagnostics); `None` for app windows.
+    pub fn focused_modes(&self) -> Option<termos_term::vt::VtModes> {
+        match &self.panes.get(&self.focused()?)?.kind {
+            PaneKind::Term { vt, .. } => Some(vt.modes()),
+            PaneKind::App(_) => None,
+        }
+    }
+
     pub fn config(&self) -> &Config {
         &self.config
     }

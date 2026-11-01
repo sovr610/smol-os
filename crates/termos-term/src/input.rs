@@ -12,8 +12,12 @@ fn modifier_param(mods: Mods) -> u8 {
         + 4 * u8::from(mods.contains(Mods::CTRL))
 }
 
-/// The bytes a key press sends to a program in legacy (xterm) encoding.
+/// The bytes a key press sends to a program: the Kitty keyboard protocol
+/// when the program enabled it, legacy (xterm) encoding otherwise.
 pub fn encode_key(key: KeyEvent, modes: &VtModes) -> Vec<u8> {
+    if modes.kitty_flags != 0 {
+        return encode_kitty(key, modes.kitty_flags);
+    }
     let mods = key.mods;
     let has_mods = mods.intersects(Mods::SHIFT | Mods::ALT | Mods::CTRL);
     let csi_mod = |final_byte: char| -> Vec<u8> {
@@ -111,7 +115,111 @@ pub fn encode_key(key: KeyEvent, modes: &VtModes) -> Vec<u8> {
     }
 }
 
-// TODO(M4): Kitty keyboard protocol encoding for child programs that enable it (CSI > u).
+/// Kitty's modifier parameter: 1 + shift(1) + alt(2) + ctrl(4) + super(8).
+fn kitty_mods(mods: Mods) -> u32 {
+    1 + u32::from(mods.contains(Mods::SHIFT))
+        + 2 * u32::from(mods.contains(Mods::ALT))
+        + 4 * u32::from(mods.contains(Mods::CTRL))
+        + 8 * u32::from(mods.contains(Mods::SUPER))
+}
+
+/// A key press in the Kitty keyboard protocol
+/// (<https://sw.kovidgoyal.net/kitty/keyboard-protocol/>) for the flags
+/// in [`crate::vt::KITTY_FLAGS_SUPPORTED`]:
+///
+/// - 1 (disambiguate): Esc and keys with Ctrl/Alt/Super become `CSI code ;
+///   mods u`; text, and unmodified Enter, Tab and Backspace, stay as they
+///   are; other keys use the `CSI 1 ; mods X` / `CSI n ; mods ~` forms.
+/// - 8 (all keys as escape codes): text keys and Enter/Tab/Backspace too.
+/// - 16 (associated text, with 8): the text a key types, as code points.
+///
+/// The key code of a shifted letter is the lowercase letter; other shifted
+/// symbols are reported as typed, since the base key depends on the
+/// keyboard layout (alternate keys, flag 4, are not implemented).
+fn encode_kitty(key: KeyEvent, flags: u8) -> Vec<u8> {
+    let all = flags & 8 != 0;
+    let with_text = all && flags & 16 != 0;
+    let mods = if key.code == KeyCode::BackTab {
+        key.mods | Mods::SHIFT
+    } else {
+        key.mods
+    };
+    let m = kitty_mods(mods);
+    let csi_u = |code: u32, m: u32, text: Option<char>| -> Vec<u8> {
+        let mut s = format!("\x1b[{code}");
+        let text = text.filter(|_| with_text);
+        if m != 1 || text.is_some() {
+            s.push(';');
+            if m != 1 {
+                s.push_str(&m.to_string());
+            }
+        }
+        if let Some(t) = text {
+            s.push(';');
+            s.push_str(&u32::from(t).to_string());
+        }
+        s.push('u');
+        s.into_bytes()
+    };
+    // `CSI 1 ; mods X` (or `CSI X`) and `CSI n ; mods ~` (or `CSI n ~`).
+    let functional = |n: u32, final_byte: char| -> Vec<u8> {
+        if m != 1 {
+            format!("\x1b[{n};{m}{final_byte}").into_bytes()
+        } else if n == 1 {
+            format!("\x1b[{final_byte}").into_bytes()
+        } else {
+            format!("\x1b[{n}{final_byte}").into_bytes()
+        }
+    };
+    let legacy_unless = |code: u32, legacy: u8| -> Vec<u8> {
+        if m == 1 && !all {
+            vec![legacy]
+        } else {
+            csi_u(code, m, None)
+        }
+    };
+    match key.code {
+        KeyCode::Char(c) => {
+            let types_text = !mods.intersects(Mods::CTRL | Mods::ALT | Mods::SUPER);
+            if types_text && !all {
+                return c.to_string().into_bytes();
+            }
+            // An uppercase letter was typed with Shift (tmux notation
+            // folds Shift into the letter).
+            let (code, m) = if c.is_ascii_uppercase() {
+                (c.to_ascii_lowercase(), kitty_mods(mods | Mods::SHIFT))
+            } else {
+                (c, m)
+            };
+            csi_u(u32::from(code), m, types_text.then_some(c))
+        }
+        KeyCode::Enter => legacy_unless(13, b'\r'),
+        KeyCode::Tab | KeyCode::BackTab => legacy_unless(9, b'\t'),
+        KeyCode::Backspace => legacy_unless(127, 0x7f),
+        KeyCode::Esc => csi_u(27, m, None),
+        KeyCode::Up => functional(1, 'A'),
+        KeyCode::Down => functional(1, 'B'),
+        KeyCode::Right => functional(1, 'C'),
+        KeyCode::Left => functional(1, 'D'),
+        KeyCode::Home => functional(1, 'H'),
+        KeyCode::End => functional(1, 'F'),
+        KeyCode::Insert => functional(2, '~'),
+        KeyCode::Delete => functional(3, '~'),
+        KeyCode::PageUp => functional(5, '~'),
+        KeyCode::PageDown => functional(6, '~'),
+        KeyCode::F(1) => functional(1, 'P'),
+        KeyCode::F(2) => functional(1, 'Q'),
+        KeyCode::F(3) => functional(13, '~'),
+        KeyCode::F(4) => functional(1, 'S'),
+        KeyCode::F(n @ 5..=12) => {
+            let code = [15, 17, 18, 19, 20, 21, 23, 24][usize::from(n - 5)];
+            functional(code, '~')
+        }
+        // F13 to F35 have private-use code points.
+        KeyCode::F(n @ 13..=35) => csi_u(57376 + u32::from(n - 13), m, None),
+        KeyCode::F(_) => Vec::new(),
+    }
+}
 
 /// The control byte for Ctrl+`c`, as xterm sends it.
 fn ctrl_byte(c: char) -> Option<u8> {
@@ -220,6 +328,86 @@ mod tests {
 
     fn enc(spec: &str) -> Vec<u8> {
         encode_key(key(spec), &VtModes::default())
+    }
+
+    /// The examples from the Kitty keyboard protocol specification, for
+    /// the flags we implement.
+    #[test]
+    fn kitty_protocol_table() {
+        let enc = |flags: u8, spec: &str| {
+            let m = VtModes {
+                kitty_flags: flags,
+                ..VtModes::default()
+            };
+            String::from_utf8(encode_key(key(spec), &m)).expect("utf-8")
+        };
+        let disambiguate: &[(&str, &str)] = &[
+            ("a", "a"),
+            ("A", "A"),
+            ("Escape", "\x1b[27u"),
+            ("M-Escape", "\x1b[27;3u"),
+            ("C-a", "\x1b[97;5u"),
+            ("M-a", "\x1b[97;3u"),
+            ("C-M-a", "\x1b[97;7u"),
+            ("M-A", "\x1b[97;4u"),
+            ("C-[", "\x1b[91;5u"),
+            ("Enter", "\r"),
+            ("S-Enter", "\x1b[13;2u"),
+            ("C-Enter", "\x1b[13;5u"),
+            ("Tab", "\t"),
+            ("BTab", "\x1b[9;2u"),
+            ("BSpace", "\x7f"),
+            ("C-BSpace", "\x1b[127;5u"),
+            ("Up", "\x1b[A"),
+            ("C-Up", "\x1b[1;5A"),
+            ("Home", "\x1b[H"),
+            ("S-End", "\x1b[1;2F"),
+            ("DC", "\x1b[3~"),
+            ("PPage", "\x1b[5~"),
+            ("F1", "\x1b[P"),
+            ("C-F1", "\x1b[1;5P"),
+            ("F3", "\x1b[13~"),
+            ("F5", "\x1b[15~"),
+            ("S-F5", "\x1b[15;2~"),
+            ("F12", "\x1b[24~"),
+        ];
+        for (k, want) in disambiguate {
+            assert_eq!(enc(1, k), *want, "flags 1, {k}");
+        }
+        let all_keys: &[(&str, &str)] = &[
+            ("a", "\x1b[97u"),
+            ("A", "\x1b[97;2u"),
+            ("Enter", "\x1b[13u"),
+            ("Tab", "\x1b[9u"),
+            ("BSpace", "\x1b[127u"),
+            ("Up", "\x1b[A"),
+        ];
+        for (k, want) in all_keys {
+            assert_eq!(enc(1 | 8, k), *want, "flags 9, {k}");
+        }
+        let with_text: &[(&str, &str)] = &[
+            ("a", "\x1b[97;;97u"),
+            ("A", "\x1b[97;2;65u"),
+            ("C-a", "\x1b[97;5u"),
+            ("Enter", "\x1b[13u"),
+        ];
+        for (k, want) in with_text {
+            assert_eq!(enc(1 | 8 | 16, k), *want, "flags 25, {k}");
+        }
+        // Text without flag 8 stays text.
+        assert_eq!(enc(1 | 16, "a"), "a");
+        let m = VtModes {
+            kitty_flags: 1 | 8 | 16,
+            ..VtModes::default()
+        };
+        assert_eq!(
+            encode_key(KeyEvent::ch('é'), &m),
+            b"\x1b[233;;233u".to_vec()
+        );
+        assert_eq!(
+            encode_key(KeyEvent::plain(KeyCode::F(13)), &m),
+            b"\x1b[57376u".to_vec()
+        );
     }
 
     #[test]

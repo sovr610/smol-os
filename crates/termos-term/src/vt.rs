@@ -51,7 +51,16 @@ pub struct VtModes {
     pub alt_screen: bool,
     /// Wheel becomes arrow keys on the alternate screen (1007).
     pub alternate_scroll: bool,
+    /// Kitty keyboard protocol flags the program enabled (`CSI > flags
+    /// u`), limited to [`KITTY_FLAGS_SUPPORTED`].
+    pub kitty_flags: u8,
 }
+
+/// Kitty keyboard flags TermOS implements for programs in panes:
+/// disambiguate (1), report all keys as escape codes (8), report
+/// associated text (16).
+// TODO(M9): Kitty keyboard release events (flag 2) and alternate keys (flag 4) for programs in panes.
+pub const KITTY_FLAGS_SUPPORTED: u8 = 1 | 8 | 16;
 
 /// A terminal emulator for one pane.
 pub trait VtBackend: Send {
@@ -112,6 +121,10 @@ pub struct AlacrittyVt {
     pending: Vec<VtEvent>,
     cols: u16,
     rows: u16,
+    scrollback: usize,
+    guard: crate::kbguard::KeyboardStackGuard,
+    /// Output after the guard, reused between calls.
+    filtered: Vec<u8>,
     /// Default foreground and background (see
     /// [`VtBackend::set_default_colors`]).
     defaults: (VtRgb, VtRgb),
@@ -147,10 +160,7 @@ impl AlacrittyVt {
     pub fn new(cols: u16, rows: u16, scrollback: usize) -> Self {
         let (cols, rows) = (cols.max(MIN_COLS), rows.max(1));
         let listener = Listener::default();
-        let config = TermConfig {
-            scrolling_history: scrollback,
-            ..TermConfig::default()
-        };
+        let config = term_config(scrollback);
         let size = Size {
             cols: usize::from(cols),
             rows: usize::from(rows),
@@ -162,8 +172,22 @@ impl AlacrittyVt {
             pending: Vec::new(),
             cols,
             rows,
+            scrollback,
+            guard: crate::kbguard::KeyboardStackGuard::default(),
+            filtered: Vec::new(),
             defaults: (default_rgb(256), default_rgb(257)),
         }
+    }
+
+    /// Replaces the emulator after it panicked (its state is unknown).
+    fn reset_emulator(&mut self) {
+        let size = Size {
+            cols: usize::from(self.cols),
+            rows: usize::from(self.rows),
+        };
+        self.term = Term::new(term_config(self.scrollback), &size, self.listener.clone());
+        self.parser = Processor::new();
+        self.guard = crate::kbguard::KeyboardStackGuard::default();
     }
 
     fn drain_listener(&mut self) {
@@ -176,7 +200,7 @@ impl AlacrittyVt {
                 Event::Title(t) => Some(VtEvent::Title(t)),
                 Event::ResetTitle => Some(VtEvent::ResetTitle),
                 Event::Bell => Some(VtEvent::Bell),
-                Event::PtyWrite(s) => Some(VtEvent::Reply(s.into_bytes())),
+                Event::PtyWrite(s) => Some(VtEvent::Reply(mask_keyboard_report(s.into_bytes()))),
                 Event::ClipboardStore(_, text) => Some(VtEvent::Clipboard(text)),
                 Event::ColorRequest(index, format) => {
                     let rgb = self.term.colors()[index].unwrap_or(match index {
@@ -211,6 +235,44 @@ impl AlacrittyVt {
             }
         }
     }
+}
+
+fn term_config(scrollback: usize) -> TermConfig {
+    TermConfig {
+        scrolling_history: scrollback,
+        kitty_keyboard: true,
+        ..TermConfig::default()
+    }
+}
+
+/// The supported Kitty keyboard flags in `mode`.
+fn kitty_flags(m: TermMode) -> u8 {
+    let mut flags = 0;
+    if m.contains(TermMode::DISAMBIGUATE_ESC_CODES) {
+        flags |= 1;
+    }
+    if m.contains(TermMode::REPORT_ALL_KEYS_AS_ESC) {
+        flags |= 8;
+    }
+    if m.contains(TermMode::REPORT_ASSOCIATED_TEXT) {
+        flags |= 16;
+    }
+    flags
+}
+
+/// The reply to `CSI ? u` lists only the flags we implement, so programs
+/// know what they get.
+fn mask_keyboard_report(reply: Vec<u8>) -> Vec<u8> {
+    let Some(flags) = reply
+        .strip_prefix(b"\x1b[?")
+        .and_then(|r| r.strip_suffix(b"u"))
+        .and_then(|n| std::str::from_utf8(n).ok())
+        .and_then(|n| n.parse::<u16>().ok())
+    else {
+        return reply;
+    };
+    let masked = flags & u16::from(KITTY_FLAGS_SUPPORTED);
+    format!("\x1b[?{masked}u").into_bytes()
 }
 
 /// Fallback colours for OSC 10/11/4 queries the program did not override.
@@ -343,7 +405,20 @@ impl VtBackend for AlacrittyVt {
         if let Some(cwd) = scan_osc7(bytes) {
             self.pending.push(VtEvent::Cwd(cwd));
         }
-        self.parser.advance(&mut self.term, bytes);
+        let mut filtered = std::mem::take(&mut self.filtered);
+        filtered.clear();
+        self.guard.filter(bytes, &mut filtered);
+        let (parser, term) = (&mut self.parser, &mut self.term);
+        let parsed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            parser.advance(term, &filtered);
+        }));
+        self.filtered = filtered;
+        if parsed.is_err() {
+            // A bug in the emulator must not take the server and every
+            // other session down: start this pane's terminal afresh.
+            tracing::error!("the terminal emulator panicked on program output; resetting the pane");
+            self.reset_emulator();
+        }
         self.drain_listener();
     }
 
@@ -382,6 +457,7 @@ impl VtBackend for AlacrittyVt {
             focus_events: m.contains(TermMode::FOCUS_IN_OUT),
             alt_screen: m.contains(TermMode::ALT_SCREEN),
             alternate_scroll: m.contains(TermMode::ALTERNATE_SCROLL),
+            kitty_flags: kitty_flags(m),
         }
     }
 
@@ -543,6 +619,26 @@ mod tests {
         vt.advance(b"\x1b]11;#000000\x07\x1b]11;?\x07");
         let ev = vt.take_events();
         assert!(ev.contains(&VtEvent::Reply(b"\x1b]11;rgb:0000/0000/0000\x07".to_vec())));
+    }
+
+    #[test]
+    fn kitty_keyboard_modes_are_tracked_and_bounded() {
+        let mut vt = AlacrittyVt::new(10, 2, 0);
+        vt.advance(b"\x1b[>3u\x1b[?u");
+        assert_eq!(vt.modes().kitty_flags, 1, "flag 2 is not implemented");
+        let replies: Vec<_> = vt.take_events();
+        assert!(
+            replies.contains(&VtEvent::Reply(b"\x1b[?1u".to_vec())),
+            "the reply lists only supported flags: {replies:?}"
+        );
+        vt.advance(b"\x1b[<u");
+        assert_eq!(vt.modes().kitty_flags, 0);
+        // Enough pushes to overflow the emulator's own stack (which would
+        // panic): the guard drops the excess.
+        vt.advance(&b"\x1b[>25u".repeat(5000));
+        assert_eq!(vt.modes().kitty_flags, 25);
+        vt.advance(b"still alive");
+        assert!(screen(&vt).contains("still"));
     }
 
     #[test]

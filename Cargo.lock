@@ -2041,6 +2041,7 @@ dependencies = [
  "termos-core",
  "termos-render",
  "tokio",
+ "tracing",
 ]
 
 [[package]]

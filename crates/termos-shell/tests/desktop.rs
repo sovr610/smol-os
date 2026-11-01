@@ -226,6 +226,24 @@ async fn themes_follow_each_terminal_and_can_be_picked() {
     );
 }
 
+/// A program that turns on the Kitty keyboard protocol gets Esc and
+/// Ctrl+letter as `CSI u`; when it turns the protocol off, legacy again.
+#[cfg(unix)]
+#[tokio::test]
+async fn programs_get_kitty_keys_when_they_ask() {
+    let mut h = Harness::new("");
+    h.type_text("printf '\\033[>1u'; cat -v\n");
+    h.wait_for("cat running", |_, d| {
+        d.focused_modes().is_some_and(|m| m.kitty_flags == 1)
+    })
+    .await;
+    h.key("Escape");
+    h.key("C-a");
+    h.type_text("x\n");
+    h.wait_text("^[[27u^[[97;5ux").await;
+    h.key("C-c");
+}
+
 #[tokio::test]
 async fn split_right_type_and_see_separator() {
     let mut h = Harness::new("");
