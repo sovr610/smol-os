@@ -42,6 +42,10 @@ impl Harness {
     }
 
     fn with_tutorial(extra: &str, tutorial: bool) -> Self {
+        Self::with_options(extra, tutorial, false)
+    }
+
+    fn with_options(extra: &str, tutorial: bool, animations: bool) -> Self {
         let dir = tempfile::tempdir().expect("tempdir");
         let paths = Paths {
             config_dir: dir.path().join("config"),
@@ -49,8 +53,10 @@ impl Harness {
             runtime_dir: dir.path().join("run"),
         };
         std::fs::create_dir_all(&paths.config_dir).expect("mkdir");
-        let tutorial_cfg =
-            format!("[tutorial]\nshow-on-first-run = {tutorial}\n[status]\nclock = false\n");
+        // Animations off: screens are read at arbitrary moments.
+        let tutorial_cfg = format!(
+            "[tutorial]\nshow-on-first-run = {tutorial}\n[status]\nclock = false\n[ui]\nanimations = {animations}\n"
+        );
         let text = base_config(&format!("{extra}\n{tutorial_cfg}"));
         std::fs::write(paths.config_file(), &text).expect("write config");
         let config = Config::load(&paths.config_file()).expect("valid test config");
@@ -215,7 +221,7 @@ async fn themes_follow_each_terminal_and_can_be_picked() {
     // the pick survives the reload.
     std::fs::write(
         h.config_path(),
-        base_config("[theme]\nbase = \"dark\"\n[status]\nclock = false\n[tutorial]\nshow-on-first-run = false\n"),
+        base_config("[theme]\nbase = \"dark\"\n[status]\nclock = false\n[tutorial]\nshow-on-first-run = false\n[ui]\nanimations = false\n"),
     )
     .expect("write config");
     h.desktop.reload_config();
@@ -242,6 +248,78 @@ async fn programs_get_kitty_keys_when_they_ask() {
     h.type_text("x\n");
     h.wait_text("^[[27u^[[97;5ux").await;
     h.key("C-c");
+}
+
+/// A float opening animates for a local client and not for one over SSH:
+/// about eight changed frames for one, none for the other, then no timer.
+#[tokio::test]
+async fn floats_animate_only_where_they_should() {
+    use termos_shell::anim::{DURATION, Kind};
+    use termos_shell::commands::Command;
+
+    let mut h = Harness::with_options("", false, true);
+    const SSH: ClientId = ClientId(2);
+    h.desktop.handle_client(
+        SSH,
+        ClientMsg::Hello {
+            version: termos_core::proto::PROTOCOL_VERSION,
+            caps: Caps {
+                remote: true,
+                ..Caps::default()
+            },
+            cols: COLS,
+            rows: ROWS,
+        },
+    );
+    // Settle both screens before the float opens.
+    let mut local = Grid::new(COLS, ROWS);
+    let mut remote = Grid::new(COLS, ROWS);
+    let t0 = Instant::now();
+    h.desktop.render_at(C, &mut local, t0);
+    h.desktop.render_at(SSH, &mut remote, t0);
+
+    // The tutorial is an app window: no program output changes it.
+    h.desktop.run(Command::Tutorial);
+    let id = h.desktop.focused().expect("the tutorial has focus");
+    let start = h
+        .desktop
+        .animations()
+        .started(Kind::FloatOpen(id))
+        .expect("animating");
+
+    // A frame mid-animation, at a fixed moment.
+    let mut mid = Grid::new(COLS, ROWS);
+    h.desktop.render_at(C, &mut mid, start + DURATION / 2);
+    insta::assert_snapshot!("float-opening-mid", mid.to_text());
+
+    let (mut local_changes, mut remote_changes) = (0, 0);
+    let mut frames = 0;
+    while let Some(d) = h.desktop.next_deadline() {
+        frames += 1;
+        assert!(frames < 30, "the animation never ends");
+        h.desktop.on_timer(d);
+        let (before_l, before_r) = (local.clone(), remote.clone());
+        h.desktop.render_at(C, &mut local, d);
+        h.desktop.render_at(SSH, &mut remote, d);
+        local_changes += usize::from(local != before_l);
+        remote_changes += usize::from(remote != before_r);
+    }
+    // The first remote render after opening shows the float; after that
+    // it never changes. The local one grows over ~8 frames.
+    let mut final_remote = Grid::new(COLS, ROWS);
+    h.desktop
+        .render_at(SSH, &mut final_remote, start + DURATION * 2);
+    assert_eq!(remote, final_remote, "the SSH client saw the final frame");
+    assert!(
+        remote_changes <= 1,
+        "SSH client got {remote_changes} changed frames"
+    );
+    assert!(
+        (5..=10).contains(&local_changes),
+        "{local_changes} changed frames"
+    );
+    assert_eq!(local.to_text(), remote.to_text(), "both end the same");
+    assert_eq!(h.desktop.next_deadline(), None, "no timer once it ends");
 }
 
 #[tokio::test]

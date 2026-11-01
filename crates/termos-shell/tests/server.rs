@@ -25,7 +25,7 @@ use tokio::task::JoinHandle;
 
 fn base_config() -> String {
     format!(
-        "{}[tutorial]\nshow-on-first-run = false\n[status]\nclock = false\n",
+        "{}[tutorial]\nshow-on-first-run = false\n[status]\nclock = false\n[ui]\nanimations = false\n",
         common::shell_config()
     )
 }

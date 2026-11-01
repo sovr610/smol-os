@@ -8,7 +8,7 @@ use termos_render::grid::{Grid, Rect};
 use termos_render::theme::Theme;
 
 use crate::notify::Level;
-use crate::ui::{truncate, width};
+use crate::ui::{cut, truncate, width};
 
 /// One workspace tab.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -32,6 +32,9 @@ pub struct StatusInfo<'a> {
     pub prefix: bool,
     pub copy_mode: bool,
     pub message: Option<(&'a str, Level)>,
+    /// How much of the message is shown while it slides in (0 to 1;
+    /// `None` is all of it).
+    pub message_reveal: Option<f32>,
     pub clock: Option<String>,
     /// Plugin widgets (styled runs; default colours mean the status line's).
     pub widgets: &'a [Vec<(String, termos_render::cell::Style)>],
@@ -106,7 +109,16 @@ pub fn draw(
             Level::Info => theme.status_message,
             Level::Warn | Level::Error => theme.status_prefix,
         };
-        right.push((format!(" {} ", truncate(msg, cols / 2)), style));
+        let text = format!(" {} ", truncate(msg, cols / 2));
+        let text = match info.message_reveal {
+            Some(f) if f < 1.0 => {
+                // In range: a fraction of a u16.
+                let keep = (f32::from(width(&text)) * f.clamp(0.0, 1.0)).round() as u16;
+                cut(&text, keep)
+            }
+            _ => text,
+        };
+        right.push((text, style));
     }
     for widget in info.widgets {
         right.push((" ".into(), theme.status));

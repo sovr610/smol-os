@@ -31,6 +31,22 @@ pub fn width(s: &str) -> u16 {
     u16::try_from(UnicodeWidthStr::width(s)).unwrap_or(u16::MAX)
 }
 
+/// The first `max` cells of `s` (no ellipsis; a wide character that does
+/// not fit is left out).
+pub fn cut(s: &str, max: u16) -> String {
+    let mut out = String::new();
+    let mut w = 0u16;
+    for ch in s.chars() {
+        let cw = width(ch.encode_utf8(&mut [0u8; 4]));
+        if w + cw > max {
+            break;
+        }
+        out.push(ch);
+        w += cw;
+    }
+    out
+}
+
 /// Truncates `s` to at most `max` cells, ending in `…` if cut.
 pub fn truncate(s: &str, max: u16) -> String {
     if width(s) <= max {

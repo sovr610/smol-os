@@ -50,7 +50,7 @@ impl Env {
         std::fs::write(
             cfg.join("config.toml"),
             format!(
-                "{shell}[tutorial]\nshow-on-first-run = false\n[status]\nclock = false\n{extra_config}\n"
+                "{shell}[tutorial]\nshow-on-first-run = false\n[status]\nclock = false\n[ui]\nanimations = false\n{extra_config}\n"
             ),
         )
         .expect("config");

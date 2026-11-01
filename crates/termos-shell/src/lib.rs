@@ -18,6 +18,7 @@
 //! - [`notify`] and [`apps`]: notifications, the notification center and
 //!   the first-run tutorial.
 
+pub mod anim;
 pub mod apps;
 pub mod commands;
 pub mod copymode;

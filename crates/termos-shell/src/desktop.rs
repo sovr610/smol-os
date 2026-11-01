@@ -19,6 +19,8 @@ use termos_core::proto::{ClientMsg, ServerMsg};
 use termos_render::caps::Caps;
 use termos_render::cell::Style;
 use termos_render::color::Rgb;
+
+use crate::anim::{self, Animations};
 use termos_render::encode::CursorState;
 use termos_render::grid::{Grid, Rect};
 use termos_render::theme::{Theme, ThemeBase, is_light};
@@ -246,6 +248,8 @@ pub struct Desktop {
     notes: Notifications,
     paste_buffer: Option<String>,
     clock_deadline: Option<Instant>,
+    /// Float and toast animations (drawn only for clients that animate).
+    anim: Animations,
     /// Messages for one client (`Some`) or all of them (`None`).
     outbox: Vec<(Option<ClientId>, ServerMsg)>,
     requests: Vec<SessionRequest>,
@@ -321,6 +325,7 @@ impl Desktop {
             notes: Notifications::new(),
             paste_buffer: None,
             clock_deadline: None,
+            anim: Animations::default(),
             outbox: Vec::new(),
             requests: Vec::new(),
             known_sessions: Vec::new(),
@@ -512,6 +517,11 @@ impl Desktop {
 
     pub fn focused(&self) -> Option<PaneId> {
         self.session.active().focus()
+    }
+
+    /// The animations in progress (for tests and diagnostics).
+    pub fn animations(&self) -> &Animations {
+        &self.anim
     }
 
     /// Terminal modes of the focused pane's program (for tests and
@@ -732,6 +742,7 @@ impl Desktop {
         );
         let area = self.layout_area();
         self.session.active_mut().add_float(id, area);
+        self.animate(anim::Kind::FloatOpen(id), Instant::now());
         self.dirty = true;
         self.layout_changed = true;
     }
@@ -746,6 +757,14 @@ impl Desktop {
     }
 
     fn close_pane(&mut self, id: PaneId) {
+        let active = self.session.active();
+        if active.is_floating(id) {
+            let area = self.layout_area();
+            if let Some(f) = active.placement(area).floats.iter().find(|f| f.pane == id) {
+                let outer = f.outer;
+                self.animate(anim::Kind::FloatClose(outer), Instant::now());
+            }
+        }
         if let Some(ws_idx) = self.session.find(id) {
             let ws = &mut self.session.workspaces[ws_idx];
             ws.remove(id);
@@ -785,8 +804,34 @@ impl Desktop {
             Level::Warn => tracing::warn!("{text}"),
             Level::Info => tracing::info!("{text}"),
         }
-        self.notes.push(level, text, Instant::now());
+        let now = Instant::now();
+        self.notes.push(level, text, now);
+        self.animate(anim::Kind::Toast, now);
         self.dirty = true;
+    }
+
+    /// Whether `ui`'s client sees animations: on in the config, and not
+    /// over SSH or with reduced motion (D-042).
+    fn animates(config: &Config, ui: &ClientUi) -> bool {
+        config.ui.animations
+            && !config.ui.reduced_motion
+            && !ui.caps.remote
+            && !ui.caps.reduced_motion
+    }
+
+    fn any_client_animates(&self) -> bool {
+        self.clients
+            .values()
+            .chain(self.current.map(|_| &self.ui))
+            .any(|ui| Self::animates(&self.config, ui))
+    }
+
+    /// Starts an animation, if anyone will see it (otherwise there would
+    /// be frames for nobody).
+    fn animate(&mut self, kind: anim::Kind, now: Instant) {
+        if self.any_client_animates() {
+            self.anim.start(kind, now);
+        }
     }
 
     fn write_to_pane(&mut self, id: PaneId, bytes: Vec<u8>) {
@@ -1373,7 +1418,10 @@ impl Desktop {
             Command::NewFloat => {
                 let cwd = self.focused_cwd();
                 match self.spawn_term(cwd, (area.w * 7 / 10, area.h * 7 / 10)) {
-                    Ok(id) => self.session.active_mut().add_float(id, area),
+                    Ok(id) => {
+                        self.session.active_mut().add_float(id, area);
+                        self.animate(anim::Kind::FloatOpen(id), Instant::now());
+                    }
                     Err(e) => self.notify(Level::Error, format!("cannot start shell: {e}")),
                 }
             }
@@ -1406,10 +1454,12 @@ impl Desktop {
             Command::Resize(d, n) => self.session.active_mut().resize_focused(d, n, area),
             Command::Zoom => self.session.active_mut().toggle_zoom(),
             Command::ToggleFloat => {
-                if let Some(id) = self.focused()
-                    && !self.session.active_mut().toggle_float(id, area)
-                {
-                    self.notify(Level::Warn, "no space to tile this window");
+                if let Some(id) = self.focused() {
+                    if !self.session.active_mut().toggle_float(id, area) {
+                        self.notify(Level::Warn, "no space to tile this window");
+                    } else if self.session.active().is_floating(id) {
+                        self.animate(anim::Kind::FloatOpen(id), Instant::now());
+                    }
                 }
             }
             Command::Minimize => match self.focused() {
@@ -2135,6 +2185,9 @@ impl Desktop {
         if let Some(d) = self.clock_deadline {
             t.push(d);
         }
+        if let Some(d) = self.anim.deadline() {
+            t.push(d);
+        }
         for p in self.panes.values() {
             if let PaneKind::Term { vt, .. } = &p.kind
                 && let Some(d) = vt.sync_deadline()
@@ -2166,6 +2219,14 @@ impl Desktop {
         }
         if self.clock_deadline.is_some_and(|d| d <= now) {
             self.clock_deadline = Some(next_minute(now));
+            self.dirty = true;
+        }
+        if self.anim.is_active() && !self.any_client_animates() {
+            // The client that would have seen it left: no frames for
+            // nobody.
+            self.anim.clear();
+        }
+        if self.anim.deadline().is_some_and(|d| d <= now) && self.anim.tick(now) {
             self.dirty = true;
         }
         let mut flushed = false;
@@ -2280,6 +2341,7 @@ impl Desktop {
             prefix: self.ui.key_state == KeyState::Prefix,
             copy_mode: self.copy.is_some(),
             message: self.notes.toast(),
+            message_reveal: None,
             clock: self
                 .config
                 .status
@@ -2297,15 +2359,26 @@ impl Desktop {
     /// Draws the whole screen as `client` sees it into `grid` (at the session
     /// size) and returns the cursor.
     pub fn render(&mut self, client: ClientId, grid: &mut Grid) -> Option<CursorState> {
+        self.render_at(client, grid, Instant::now())
+    }
+
+    /// [`Desktop::render`] as of `now` (animations are a function of time;
+    /// tests pass a fixed moment).
+    pub fn render_at(
+        &mut self,
+        client: ClientId,
+        grid: &mut Grid,
+        now: Instant,
+    ) -> Option<CursorState> {
         if !self.enter(client) {
             return None;
         }
-        let cursor = self.render_current(grid);
+        let cursor = self.render_current(grid, now);
         self.leave();
         cursor
     }
 
-    fn render_current(&mut self, grid: &mut Grid) -> Option<CursorState> {
+    fn render_current(&mut self, grid: &mut Grid, now: Instant) -> Option<CursorState> {
         if grid.cols() != self.cols || grid.rows() != self.rows {
             grid.resize(self.cols, self.rows);
         }
@@ -2315,6 +2388,17 @@ impl Desktop {
         let area = self.layout_area();
         let placement = self.placement();
         self.sync_sizes(&placement);
+        // Animations change only what this client sees (D-042).
+        let animates = Self::animates(&self.config, &self.ui) && self.anim.is_active();
+        let mut placement = placement;
+        if animates {
+            for f in &mut placement.floats {
+                if let Some(p) = self.anim.progress(anim::Kind::FloatOpen(f.pane), now) {
+                    f.outer = anim::scale(f.outer, 0.5 + 0.5 * p);
+                    f.inner = f.outer.inset(1);
+                }
+            }
+        }
         let focus = self.focused();
         // The active workspace's panes have been seen: clear their bells.
         for id in self.session.active().panes() {
@@ -2364,8 +2448,23 @@ impl Desktop {
             );
         }
 
+        if animates {
+            for (rect, p) in self.anim.closing(now) {
+                let r = anim::scale(rect, 1.0 - 0.5 * p);
+                grid.draw_box(
+                    r,
+                    self.config.floats.border.into(),
+                    self.ui.theme.float_border,
+                    None,
+                );
+            }
+        }
+
         let status_y = self.status_y();
-        let info = self.status_info();
+        let mut info = self.status_info();
+        if animates {
+            info.message_reveal = self.anim.progress(anim::Kind::Toast, now);
+        }
         let (regions, prompt_cursor) = status::draw(grid, status_y, &self.ui.theme, &info);
         self.ui.status_regions = regions;
 

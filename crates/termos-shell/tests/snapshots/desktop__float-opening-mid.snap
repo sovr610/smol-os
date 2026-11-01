@@ -1,0 +1,34 @@
+---
+source: crates/termos-shell/tests/desktop.rs
+expression: mid.to_text()
+---
+
+
+
+
+                 ╭─ Tutorial 1/6 ─────────────────────────────────────────────–─×─╮
+                 │ Welcome to TermOS                                              │
+                 │                                                                │
+                 │ TermOS is a desktop that lives in your terminal and works like │
+                 │ tmux.                                                          │
+                 │                                                                │
+                 │ Almost everything starts with the prefix key C-b: press it,    │
+                 │ let go, then press a command key. If you pause after C-b, a    │
+                 │ panel lists every key.                                         │
+                 │                                                                │
+                 │ Ctrl+Space opens the command palette: type a few letters of    │
+                 │ anything you want to do.                                       │
+                 │                                                                │
+                 │ Use → / n / Space for the next page, ← / p for the previous    │
+                 │ one, q to close.                                               │
+                 │                                                                │
+                 │                                                                │
+                 │ page 1/6   → next   ← back   q close                           │
+                 ╰────────────────────────────────────────────────────────────────╯
+
+
+
+
+
+
+[test]  0:Tutorial 1/6*
