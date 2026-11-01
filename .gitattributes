@@ -1,0 +1,14 @@
+# Keep LF everywhere, including Windows checkouts: snapshot files, the
+# ROADMAP work-marker table and the SPDX first-line checks compare text
+# byte for byte.
+* text=auto eol=lf
+
+# Binary files (test images, fuzz corpora, recorded terminal replies).
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.bmp binary
+*.bin binary
+*.six -text -diff

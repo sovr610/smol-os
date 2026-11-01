@@ -1,3 +1,7 @@
 [alias]
 # `cargo xtask <cmd>`: repository automation (ci, check-todos, todos).
 xtask = "run --quiet --package xtask --"
+
+# Windows test builds run without the Visual C++ runtime installed.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
