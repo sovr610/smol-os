@@ -131,6 +131,20 @@ pub(crate) fn convert(event: Event) -> Option<ClientMsg> {
                 _ => return None,
             };
             let mut mods = mods(k.modifiers);
+            // Ctrl+@ and Ctrl+Space are one key in terminals (both send
+            // NUL), and a ConPTY reports NUL as Ctrl+Shift+@. Not with Alt:
+            // Ctrl+Alt+@ is AltGr typing `@` on Windows.
+            let nul = matches!(code, KeyCode::Char('\0'))
+                || (matches!(code, KeyCode::Char('@'))
+                    && mods.contains(Mods::CTRL)
+                    && !mods.contains(Mods::ALT));
+            if nul {
+                let keep = mods & Mods::ALT;
+                return Some(ClientMsg::Key(KeyEvent::new(
+                    KeyCode::Char(' '),
+                    Mods::CTRL | keep,
+                )));
+            }
             // Windows reports AltGr as Ctrl+Alt along with the character it
             // produced ('@', '{', '€' on many layouts): that is a plain
             // character, not a shortcut.
@@ -255,6 +269,21 @@ mod tests {
         assert_eq!(
             convert(key(ct::KeyCode::Null, KeyModifiers::NONE)),
             Some(ClientMsg::Key(KeyEvent::ctrl(' ')))
+        );
+        // NUL in its other spellings is Ctrl+Space too.
+        for k in [
+            key(
+                ct::KeyCode::Char('@'),
+                KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+            ),
+            key(ct::KeyCode::Char('@'), KeyModifiers::CONTROL),
+            key(ct::KeyCode::Char('\0'), KeyModifiers::NONE),
+        ] {
+            assert_eq!(convert(k), Some(ClientMsg::Key(KeyEvent::ctrl(' '))));
+        }
+        assert_eq!(
+            convert(key(ct::KeyCode::Char('@'), KeyModifiers::NONE)),
+            Some(ClientMsg::Key(KeyEvent::ch('@')))
         );
         assert_eq!(
             convert(key(ct::KeyCode::Left, KeyModifiers::ALT)),
