@@ -12,6 +12,8 @@ publish.workspace = true
 
 [dependencies]
 alacritty_terminal.workspace = true
+base64.workspace = true
+flate2.workspace = true
 portable-pty.workspace = true
 termos-core.workspace = true
 termos-render.workspace = true

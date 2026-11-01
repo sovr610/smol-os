@@ -62,6 +62,9 @@ pub struct VtModes {
 // TODO(M9): Kitty keyboard release events (flag 2) and alternate keys (flag 4) for programs in panes.
 pub const KITTY_FLAGS_SUPPORTED: u8 = 1 | 8 | 16;
 
+/// The URI scheme of the hidden links that anchor images to text.
+const ANCHOR: &str = "termos-image:";
+
 /// A terminal emulator for one pane.
 pub trait VtBackend: Send {
     /// Feeds program output.
@@ -92,6 +95,11 @@ pub trait VtBackend: Send {
     /// (the outer terminal's), for answering OSC 10/11 queries the program
     /// did not override.
     fn set_default_colors(&mut self, fg: termos_render::color::Rgb, bg: termos_render::color::Rgb);
+    /// The size of a cell in pixels on the outer terminal, for images and
+    /// for programs that ask (`CSI 14 t`, `CSI 16 t`).
+    fn set_cell_px(&mut self, px: Option<termos_render::caps::PxSize>);
+    /// Images programs placed that are (at least partly) in view.
+    fn images(&self) -> Vec<crate::graphics::PaneImage>;
 }
 
 #[derive(Clone, Default)]
@@ -122,6 +130,9 @@ pub struct AlacrittyVt {
     cols: u16,
     rows: u16,
     scrollback: usize,
+    intercept: crate::intercept::Interceptor,
+    images: crate::graphics::PaneImages,
+    cell_px: Option<termos_render::caps::PxSize>,
     guard: crate::kbguard::KeyboardStackGuard,
     /// Output after the guard, reused between calls.
     filtered: Vec<u8>,
@@ -173,6 +184,9 @@ impl AlacrittyVt {
             cols,
             rows,
             scrollback,
+            intercept: crate::intercept::Interceptor::default(),
+            images: crate::graphics::PaneImages::default(),
+            cell_px: None,
             guard: crate::kbguard::KeyboardStackGuard::default(),
             filtered: Vec::new(),
             defaults: (default_rgb(256), default_rgb(257)),
@@ -200,6 +214,11 @@ impl AlacrittyVt {
                 Event::Title(t) => Some(VtEvent::Title(t)),
                 Event::ResetTitle => Some(VtEvent::ResetTitle),
                 Event::Bell => Some(VtEvent::Bell),
+                // Primary device attributes: a VT220 with Sixel (4) and
+                // ANSI colour (22), instead of alacritty's bare VT102.
+                Event::PtyWrite(s) if s == "\x1b[?6c" => {
+                    Some(VtEvent::Reply(b"\x1b[?62;4;22c".to_vec()))
+                }
                 Event::PtyWrite(s) => Some(VtEvent::Reply(mask_keyboard_report(s.into_bytes()))),
                 Event::ClipboardStore(_, text) => Some(VtEvent::Clipboard(text)),
                 Event::ColorRequest(index, format) => {
@@ -212,12 +231,12 @@ impl AlacrittyVt {
                     Some(VtEvent::Reply(format(rgb).into_bytes()))
                 }
                 Event::TextAreaSizeRequest(format) => {
+                    let (cell_width, cell_height) = self.cell();
                     let size = alacritty_terminal::event::WindowSize {
                         num_lines: self.rows,
                         num_cols: self.cols,
-                        // Cell pixel size is unknown in hosted mode.
-                        cell_width: 0,
-                        cell_height: 0,
+                        cell_width,
+                        cell_height,
                     };
                     Some(VtEvent::Reply(format(size).into_bytes()))
                 }
@@ -405,21 +424,69 @@ impl VtBackend for AlacrittyVt {
         if let Some(cwd) = scan_osc7(bytes) {
             self.pending.push(VtEvent::Cwd(cwd));
         }
-        let mut filtered = std::mem::take(&mut self.filtered);
-        filtered.clear();
-        self.guard.filter(bytes, &mut filtered);
-        let (parser, term) = (&mut self.parser, &mut self.term);
-        let parsed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            parser.advance(term, &filtered);
-        }));
-        self.filtered = filtered;
-        if parsed.is_err() {
-            // A bug in the emulator must not take the server and every
-            // other session down: start this pane's terminal afresh.
-            tracing::error!("the terminal emulator panicked on program output; resetting the pane");
-            self.reset_emulator();
+        let mut pieces = Vec::new();
+        self.intercept.feed(bytes, &mut pieces);
+        for piece in pieces {
+            match piece {
+                crate::intercept::Piece::Bytes(b) => self.parse(&b),
+                crate::intercept::Piece::Kitty(body) => self.kitty(&body),
+                crate::intercept::Piece::Sixel { data, .. } => self.sixel(&data),
+                crate::intercept::Piece::CellSizeQuery => {
+                    let (w, h) = self.cell();
+                    self.reply(format!("\x1b[6;{h};{w}t"));
+                }
+                crate::intercept::Piece::GraphicsAttr { item, action } => {
+                    self.graphics_attr(item, action);
+                }
+            }
         }
-        self.drain_listener();
+    }
+
+    fn set_cell_px(&mut self, px: Option<termos_render::caps::PxSize>) {
+        self.cell_px = px;
+    }
+
+    fn images(&self) -> Vec<crate::graphics::PaneImage> {
+        if self.images.is_empty() {
+            return Vec::new();
+        }
+        let grid = self.term.grid();
+        let offset = i32::try_from(grid.display_offset()).unwrap_or(0);
+        let history = i32::try_from(grid.history_size()).unwrap_or(0);
+        let above = i32::from(self.images.max_rows());
+        let mut out = Vec::new();
+        for view_y in -above..i32::from(self.rows) {
+            let line = view_y - offset;
+            if line < -history || line >= i32::from(self.rows) {
+                continue;
+            }
+            let row = &grid[Line(line)];
+            for x in 0..usize::from(self.cols) {
+                let Some(link) = row[Column(x)].hyperlink() else {
+                    continue;
+                };
+                let Some(anchor) = link
+                    .uri()
+                    .strip_prefix(ANCHOR)
+                    .and_then(|n| n.parse::<u64>().ok())
+                else {
+                    continue;
+                };
+                if let Some(p) = self.images.placed(anchor)
+                    && view_y + i32::from(p.rows) > 0
+                {
+                    out.push(crate::graphics::PaneImage {
+                        key: p.key,
+                        picture: std::sync::Arc::clone(&p.picture),
+                        x: u16::try_from(x).unwrap_or(u16::MAX),
+                        y: view_y,
+                        cols: p.cols,
+                        rows: p.rows,
+                    });
+                }
+            }
+        }
+        out
     }
 
     fn resize(&mut self, cols: u16, rows: u16) {
@@ -573,6 +640,242 @@ impl VtBackend for AlacrittyVt {
     }
 }
 
+/// How the cursor moves after an image, as the terminals that show them
+/// do.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum After {
+    /// Sixel (with sixel scrolling): to the line below the image, in the
+    /// image's first column.
+    Below,
+    /// Kitty: right of the image, on its last row.
+    Right,
+    /// Kitty with `C=1`: where it was.
+    Stay,
+}
+
+impl AlacrittyVt {
+    /// Feeds bytes to the emulator through the keyboard-stack guard,
+    /// surviving an emulator panic, and collects its replies so they stay
+    /// in order with ours.
+    fn parse(&mut self, bytes: &[u8]) {
+        let mut filtered = std::mem::take(&mut self.filtered);
+
+        filtered.clear();
+        self.guard.filter(bytes, &mut filtered);
+        let (parser, term) = (&mut self.parser, &mut self.term);
+        let parsed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            parser.advance(term, &filtered);
+        }));
+        self.filtered = filtered;
+        if parsed.is_err() {
+            // A bug in the emulator must not take the server and every
+            // other session down: start this pane's terminal afresh.
+            tracing::error!("the terminal emulator panicked on program output; resetting the pane");
+            self.reset_emulator();
+        }
+        self.drain_listener();
+    }
+
+    fn reply(&mut self, text: String) {
+        self.pending.push(VtEvent::Reply(text.into_bytes()));
+    }
+
+    /// The cell size images and pixel reports use.
+    fn cell(&self) -> (u16, u16) {
+        let c = self
+            .cell_px
+            .unwrap_or(termos_render::graphics::DEFAULT_CELL);
+        (
+            u16::try_from(c.width).unwrap_or(10).max(1),
+            u16::try_from(c.height).unwrap_or(20).max(1),
+        )
+    }
+
+    /// XTSMGRAPHICS: colour registers (1) and the largest Sixel image (2).
+    fn graphics_attr(&mut self, item: u32, action: u32) {
+        let (cw, ch) = self.cell();
+        let text = match (item, action) {
+            (1, 1 | 4) => "\x1b[?1;0;256S".to_owned(),
+            (2, 1 | 4) => format!(
+                "\x1b[?2;0;{};{}S",
+                u32::from(self.cols) * u32::from(cw),
+                u32::from(self.rows) * u32::from(ch)
+            ),
+            _ => format!("\x1b[?{item};1;0S"),
+        };
+        self.reply(text);
+    }
+
+    /// A Sixel image at the cursor.
+    fn sixel(&mut self, data: &[u8]) {
+        let budget = (crate::graphics::MAX_PANE_BYTES / 4) as u64;
+        match termos_render::graphics::sixel::decode(
+            data,
+            termos_render::graphics::MAX_SIDE,
+            budget,
+        ) {
+            Ok(picture) => {
+                let key = termos_core::app::new_image_key();
+                self.place(std::sync::Arc::new(picture), key, None, After::Below);
+            }
+            Err(e) => tracing::debug!("a Sixel image was dropped: {e}"),
+        }
+    }
+
+    /// A Kitty graphics command.
+    fn kitty(&mut self, body: &[u8]) {
+        use crate::graphics::{decode_kitty, parse_kitty};
+        let (cmd, payload) = parse_kitty(body);
+        // The next chunk of a transmission in progress.
+        if let Some((first, mut data)) = self.images.pending.take() {
+            data.extend_from_slice(payload);
+            if data.len() > crate::intercept::MAX_SEQUENCE {
+                self.kitty_reply(&first, Err("EFBIG:image too large".into()));
+            } else if cmd.more {
+                self.images.pending = Some((first, data));
+            } else {
+                self.kitty_transmitted(&first, &data);
+            }
+            return;
+        }
+        match cmd.action {
+            b'q' => {
+                let result = decode_kitty(&cmd, payload).map(|_| ());
+                self.kitty_reply(&cmd, result);
+            }
+            b't' | b'T' if cmd.more => self.images.pending = Some((cmd, payload.to_vec())),
+            b't' | b'T' => self.kitty_transmitted(&cmd, payload),
+            b'p' => {
+                let found = cmd.id.and_then(|id| self.images.transmitted(id));
+                match found {
+                    Some((pic, key)) => {
+                        self.kitty_place(&cmd, pic, key);
+                        self.kitty_reply(&cmd, Ok(()));
+                    }
+                    None => self.kitty_reply(&cmd, Err("ENOENT:no such image".into())),
+                }
+            }
+            b'd' => {
+                let what = if cmd.delete == 0 { b'a' } else { cmd.delete };
+                self.images.delete(what, cmd.id);
+            }
+            _ => self.kitty_reply(&cmd, Err("EINVAL:unsupported action".into())),
+        }
+    }
+
+    fn kitty_transmitted(&mut self, cmd: &crate::graphics::KittyCmd, data: &[u8]) {
+        if cmd.unicode {
+            self.kitty_reply(
+                cmd,
+                Err("EINVAL:unicode placeholders are not supported".into()),
+            );
+            return;
+        }
+        match crate::graphics::decode_kitty(cmd, data) {
+            Ok(picture) => {
+                let id = self.images.transmit(cmd.id, picture);
+                if cmd.action == b'T'
+                    && let Some((pic, key)) = self.images.transmitted(id)
+                {
+                    self.kitty_place(cmd, pic, key);
+                }
+                self.kitty_reply(cmd, Ok(()));
+            }
+            Err(e) => self.kitty_reply(cmd, Err(e)),
+        }
+    }
+
+    /// Shows a transmitted image at the cursor (cropped and sized as asked).
+    fn kitty_place(
+        &mut self,
+        cmd: &crate::graphics::KittyCmd,
+        picture: std::sync::Arc<termos_render::graphics::Picture>,
+        key: u64,
+    ) {
+        let [x, y, w, h] = cmd.src;
+        let (picture, key) = if x == 0 && y == 0 && w == 0 && h == 0 {
+            (picture, key)
+        } else {
+            let w = if w == 0 { picture.width() } else { w };
+            let h = if h == 0 { picture.height() } else { h };
+            (
+                std::sync::Arc::new(picture.crop(x, y, w, h)),
+                termos_core::app::new_image_key(),
+            )
+        };
+        let size = (cmd.cols > 0 || cmd.rows > 0).then_some((cmd.cols, cmd.rows));
+        let after = if cmd.stay { After::Stay } else { After::Right };
+        self.place(picture, key, size, after);
+    }
+
+    fn kitty_reply(&mut self, cmd: &crate::graphics::KittyCmd, result: Result<(), String>) {
+        // Kitty answers only commands that name an image, and `q` mutes
+        // the answers (1: successes, 2: everything).
+        let Some(id) = cmd
+            .id
+            .map(|i| format!("i={i}"))
+            .or_else(|| cmd.number.map(|n| format!("I={n}")))
+        else {
+            return;
+        };
+        let text = match result {
+            Ok(()) if cmd.quiet == 0 => "OK".to_owned(),
+            Err(e) if cmd.quiet < 2 => e,
+            _ => return,
+        };
+        self.reply(format!("\x1b_G{id};{text}\x1b\\"));
+    }
+
+    /// Anchors an image at the cursor: a hidden link on its top-left cell,
+    /// so it scrolls, reflows and clears with the text, then moves the
+    /// cursor as the image's protocol does.
+    fn place(
+        &mut self,
+        picture: std::sync::Arc<termos_render::graphics::Picture>,
+        key: u64,
+        size: Option<(u32, u32)>,
+        after: After,
+    ) {
+        let (cw, ch) = self.cell();
+        let natural = (
+            picture.width().div_ceil(u32::from(cw)),
+            picture.height().div_ceil(u32::from(ch)),
+        );
+        let (cols, rows) = match size {
+            Some((c, r)) if c > 0 && r > 0 => (c, r),
+            Some((c, _)) if c > 0 => (c, (c * natural.1).div_ceil(natural.0.max(1))),
+            Some((_, r)) if r > 0 => ((r * natural.0).div_ceil(natural.1.max(1)), r),
+            _ => natural,
+        };
+        // Images larger than a screen are possible but pointless; bound
+        // the cursor movement and the scan above the view.
+        let cols = u16::try_from(cols.clamp(1, 1000)).unwrap_or(1000);
+        let rows = u16::try_from(rows.clamp(1, 1000)).unwrap_or(1000);
+        let anchor = self.images.place(crate::graphics::Placed {
+            key,
+            picture,
+            cols,
+            rows,
+        });
+        let col = u16::try_from(self.term.grid().cursor.point.column.0).unwrap_or(0);
+        let mut seq = format!(
+            "\x1b7\x1b]8;id=termos-image-{anchor};{ANCHOR}{anchor}\x1b\\ \x1b]8;;\x1b\\\x1b8"
+        );
+        match after {
+            After::Below => {
+                seq.push_str(&"\n".repeat(usize::from(rows)));
+                seq.push_str(&format!("\x1b[{}G", u32::from(col) + 1));
+            }
+            After::Right => {
+                seq.push_str(&"\n".repeat(usize::from(rows) - 1));
+                seq.push_str(&format!("\x1b[{}G", u32::from(col) + u32::from(cols) + 1));
+            }
+            After::Stay => {}
+        }
+        self.parse(seq.as_bytes());
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -639,6 +942,116 @@ mod tests {
         assert_eq!(vt.modes().kitty_flags, 25);
         vt.advance(b"still alive");
         assert!(screen(&vt).contains("still"));
+    }
+
+    fn replies(vt: &mut AlacrittyVt) -> Vec<String> {
+        vt.take_events()
+            .into_iter()
+            .filter_map(|e| match e {
+                VtEvent::Reply(r) => Some(String::from_utf8_lossy(&r).into_owned()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn kitty_rgba(id: u32, w: u32, h: u32, extra: &str) -> Vec<u8> {
+        use base64::Engine as _;
+        let data =
+            base64::engine::general_purpose::STANDARD.encode(vec![200u8; (w * h * 4) as usize]);
+        format!("\x1b_Ga=T,f=32,s={w},v={h},i={id}{extra};{data}\x1b\\").into_bytes()
+    }
+
+    #[test]
+    fn kitty_images_anchor_to_the_text() {
+        let mut vt = AlacrittyVt::new(20, 6, 100);
+        vt.set_cell_px(Some(termos_render::caps::PxSize {
+            width: 10,
+            height: 20,
+        }));
+        vt.advance(b"ab");
+        // 30×40 px is 3×2 cells of 10×20.
+        vt.advance(&kitty_rgba(7, 30, 40, ""));
+        assert_eq!(replies(&mut vt), ["\x1b_Gi=7;OK\x1b\\"]);
+        let imgs = vt.images();
+        assert_eq!(imgs.len(), 1);
+        assert_eq!(
+            (imgs[0].x, imgs[0].y, imgs[0].cols, imgs[0].rows),
+            (2, 0, 3, 2)
+        );
+        // The cursor is right of the image, on its last row.
+        let c = vt.cursor().expect("cursor");
+        assert_eq!((c.x, c.y), (5, 1));
+        // Scrolling moves it up, past the top (partly visible), then away.
+        vt.advance(b"\r\n\n\n\n\n");
+        let imgs = vt.images();
+        assert_eq!(imgs.len(), 1);
+        assert_eq!(imgs[0].y, -1, "one row above the view, one still in it");
+        vt.advance(b"\n\n");
+        assert!(vt.images().is_empty(), "scrolled away");
+        // Clearing the screen clears images with the text.
+        vt.advance(&kitty_rgba(8, 10, 20, ",C=1"));
+        assert_eq!(vt.images().len(), 1);
+        vt.advance(b"\x1b[H\x1b[2J");
+        assert!(vt.images().is_empty());
+        // The anchor never shows as a link or in the text.
+        assert!(!screen(&vt).contains("termos-image"));
+    }
+
+    #[test]
+    fn kitty_transmissions_in_chunks_files_refused_and_queries() {
+        use base64::Engine as _;
+        let mut vt = AlacrittyVt::new(20, 4, 0);
+        let b64 = base64::engine::general_purpose::STANDARD.encode(vec![9u8; 2 * 2 * 4]);
+        let (a, b) = b64.split_at(8);
+        vt.advance(format!("\x1b_Ga=T,f=32,s=2,v=2,i=3,m=1;{a}\x1b\\").as_bytes());
+        assert!(vt.images().is_empty(), "not complete yet");
+        vt.advance(format!("\x1b_Gm=0;{b}\x1b\\").as_bytes());
+        assert_eq!(vt.images().len(), 1);
+        assert_eq!(replies(&mut vt), ["\x1b_Gi=3;OK\x1b\\"]);
+        // A file transmission is refused, visibly.
+        let path = base64::engine::general_purpose::STANDARD.encode("/etc/passwd");
+        vt.advance(format!("\x1b_Ga=T,t=f,f=100,i=4;{path}\x1b\\").as_bytes());
+        let r = replies(&mut vt);
+        assert!(r[0].starts_with("\x1b_Gi=4;EBADF"), "{r:?}");
+        // The support query, quiet errors, put by id.
+        vt.advance(b"\x1b_Ga=q,i=31,s=1,v=1,f=24;AAAA\x1b\\");
+        assert_eq!(replies(&mut vt), ["\x1b_Gi=31;OK\x1b\\"]);
+        vt.advance(b"\x1b_Ga=p,i=99,q=2\x1b\\");
+        assert!(replies(&mut vt).is_empty(), "q=2 mutes errors");
+        vt.advance(b"\x1b_Ga=p,i=3\x1b\\");
+        assert_eq!(vt.images().len(), 2, "placed again");
+        vt.advance(b"\x1b_Ga=d,d=A\x1b\\");
+        assert!(vt.images().is_empty());
+    }
+
+    #[test]
+    fn sixel_images_and_graphics_queries() {
+        let mut vt = AlacrittyVt::new(20, 6, 0);
+        vt.set_cell_px(Some(termos_render::caps::PxSize {
+            width: 10,
+            height: 20,
+        }));
+        vt.advance(b"\x1b[3C\x1bP0;1;0q\"1;1;20;6#1;2;100;0;0!20~\x1b\\");
+        let imgs = vt.images();
+        assert_eq!(imgs.len(), 1);
+        assert_eq!(
+            (imgs[0].x, imgs[0].y, imgs[0].cols, imgs[0].rows),
+            (3, 0, 2, 1)
+        );
+        assert_eq!(imgs[0].picture.pixel(19, 5), [255, 0, 0, 255]);
+        let c = vt.cursor().expect("cursor");
+        assert_eq!((c.x, c.y), (3, 1), "below the image, in its column");
+        vt.advance(b"\x1b[16t\x1b[14t\x1b[c\x1b[?1;1;0S\x1b[?2;1;0S");
+        assert_eq!(
+            replies(&mut vt),
+            [
+                "\x1b[6;20;10t",
+                "\x1b[4;120;200t",
+                "\x1b[?62;4;22c",
+                "\x1b[?1;0;256S",
+                "\x1b[?2;0;200;120S"
+            ]
+        );
     }
 
     #[test]

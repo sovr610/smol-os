@@ -754,6 +754,88 @@ async fn images_reach_kitty_clients_once_and_follow_occlusion() {
     assert!(quiet.is_err(), "idle server sent {quiet:?}");
 }
 
+/// Reads messages until a frame's image list satisfies `pred`.
+#[cfg(unix)]
+async fn until_images(
+    s: &mut Screen,
+    what: &str,
+    pred: impl Fn(&[ImagePlacement]) -> bool,
+) -> Vec<ImagePlacement> {
+    loop {
+        let msg = tokio::time::timeout(Duration::from_secs(15), s.client.rx.recv())
+            .await
+            .unwrap_or_else(|_| panic!("timed out waiting for {what}:\n{}", s.text()));
+        match msg {
+            Some(ServerMsg::Frame(f)) => {
+                if f.clear {
+                    s.grid.resize(f.cols, f.rows);
+                }
+                apply(&mut s.grid, &f.spans);
+                if let Some(p) = f.images
+                    && pred(&p)
+                {
+                    return p;
+                }
+            }
+            Some(_) => {}
+            None => panic!("server went away waiting for {what}"),
+        }
+    }
+}
+
+/// A program prints a Kitty image: a Kitty client sees it where the
+/// program put it, scrolling with the text and cleared with it.
+#[cfg(unix)]
+#[tokio::test]
+async fn images_printed_by_programs_follow_their_text() {
+    use base64::Engine as _;
+    use termos_render::caps::{Graphics, PxSize};
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    // A 20×40 px image is 2×2 cells of 10×20.
+    let data = base64::engine::general_purpose::STANDARD.encode(vec![200u8; 20 * 40 * 4]);
+    let file = dir.path().join("image.kitty");
+    std::fs::write(
+        &file,
+        format!("\x1b_Ga=T,f=32,s=20,v=40,i=5,q=2;{data}\x1b\\\n"),
+    )
+    .expect("write");
+    let srv = start_in(dir.path(), "", |_| {});
+    let caps = Caps {
+        graphics: Graphics {
+            kitty: true,
+            ..Graphics::default()
+        },
+        cell_px: Some(PxSize {
+            width: 10,
+            height: 20,
+        }),
+        ..Caps::default()
+    };
+    let mut s = Screen::attach_with(&srv.socket, frontend(None, true), 80, 24, caps).await;
+    s.ready().await;
+    s.type_text(&format!("cat '{}'\r", file.display()));
+    let shown = until_images(&mut s, "the printed image", |p| !p.is_empty()).await;
+    assert_eq!(shown.len(), 1, "{shown:?}");
+    assert_eq!((shown[0].cols, shown[0].rows), (2, 2));
+    assert_eq!(shown[0].src, [0, 0, 20, 40]);
+
+    // Output scrolls it up and away: crops of its lower part, then nothing.
+    s.type_text("seq 1 60\r");
+    until_images(
+        &mut s,
+        "the image scrolled away",
+        <[ImagePlacement]>::is_empty,
+    )
+    .await;
+
+    // Printed again and then cleared with the screen.
+    s.type_text(&format!("cat '{}'\r", file.display()));
+    until_images(&mut s, "the image again", |p| !p.is_empty()).await;
+    s.type_text("clear\r");
+    until_images(&mut s, "the image cleared", <[ImagePlacement]>::is_empty).await;
+}
+
 fn write_plugin(dir: &Path, name: &str, exec: &[&str], permissions: &str) {
     let d = paths_in(dir).plugins_dir().join(name);
     std::fs::create_dir_all(&d).expect("mkdir");

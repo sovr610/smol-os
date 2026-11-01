@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//! How app images reach each client (ARCHITECTURE.md §5.8).
+//! How images reach each client (ARCHITECTURE.md §5.8): those apps show
+//! and those programs print inside panes.
 //!
 //! For every client and image the desktop picks one way to show it:
 //!
@@ -25,15 +26,60 @@ use termos_render::graphics::blocks::{self, BlockMode};
 use termos_render::graphics::{Picture, fit_cells};
 use termos_render::grid::{Grid, Rect};
 
+/// Where an image is on screen: its top-left cell (which may be above or
+/// left of the screen, for an image partly scrolled out of a pane) and
+/// its size in cells.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Place {
+    pub x: i32,
+    pub y: i32,
+    pub cols: u16,
+    pub rows: u16,
+}
+
+impl Place {
+    pub fn of(rect: Rect) -> Self {
+        Self {
+            x: i32::from(rect.x),
+            y: i32::from(rect.y),
+            cols: rect.w,
+            rows: rect.h,
+        }
+    }
+
+    /// The part within `clip` (empty when none).
+    pub fn visible(&self, clip: Rect) -> Rect {
+        let x0 = self.x.max(i32::from(clip.x));
+        let y0 = self.y.max(i32::from(clip.y));
+        let x1 = (self.x + i32::from(self.cols)).min(i32::from(clip.right()));
+        let y1 = (self.y + i32::from(self.rows)).min(i32::from(clip.bottom()));
+        if x1 <= x0 || y1 <= y0 {
+            return Rect::new(0, 0, 0, 0);
+        }
+        // In range: within `clip`, which is in u16 coordinates.
+        Rect::new(x0 as u16, y0 as u16, (x1 - x0) as u16, (y1 - y0) as u16)
+    }
+
+    /// The whole image as a screen rectangle, when it starts on screen.
+    pub fn rect(&self) -> Option<Rect> {
+        Some(Rect::new(
+            u16::try_from(self.x).ok()?,
+            u16::try_from(self.y).ok()?,
+            self.cols,
+            self.rows,
+        ))
+    }
+}
+
 /// A pixel image a client shows: what the server sends it.
 #[derive(Debug, Clone)]
 pub struct ShownImage {
     pub key: u64,
     pub picture: Arc<Picture>,
     pub protocol: ImageProtocol,
-    /// The whole image, in screen cells.
-    pub rect: Rect,
-    /// Its visible parts (all of `rect` for Sixel and iTerm2).
+    /// The whole image.
+    pub place: Place,
+    /// Its visible parts (the whole image for Sixel and iTerm2).
     pub pieces: Vec<Rect>,
 }
 
@@ -44,7 +90,7 @@ pub(crate) struct Candidate {
     pub pane: PaneId,
     pub key: u64,
     pub picture: Arc<Picture>,
-    pub rect: Rect,
+    pub place: Place,
     /// The pane's content area: the image is clipped to it.
     pub clip: Rect,
 }
@@ -68,9 +114,10 @@ pub(crate) fn fit(area: Rect, picture: &Picture, cell: PxSize, upscale: bool) ->
     )
 }
 
-/// The parts of `rect` (clipped to `clip`) that nothing in `above` covers.
-pub(crate) fn visible_pieces(rect: Rect, clip: Rect, above: &[Rect]) -> Vec<Rect> {
-    let mut pieces = vec![rect.intersect(&clip)];
+/// The parts of an image (clipped to `clip`) that nothing in `above`
+/// covers.
+pub(crate) fn visible_pieces(place: Place, clip: Rect, above: &[Rect]) -> Vec<Rect> {
+    let mut pieces = vec![place.visible(clip)];
     pieces.retain(|r| !r.is_empty());
     for cover in above {
         pieces = pieces.iter().flat_map(|p| p.subtract(cover)).collect();
@@ -93,17 +140,17 @@ impl BlockCache {
         &mut self,
         key: u64,
         picture: &Picture,
-        rect: Rect,
+        place: Place,
         bg: Rgb,
     ) -> Arc<Vec<Cell>> {
-        let k = (key, rect.w, rect.h, bg);
+        let k = (key, place.cols, place.rows, bg);
         if let Some(cells) = self.map.get(&k) {
             return Arc::clone(cells);
         }
         let cells = Arc::new(blocks::render(
             picture,
-            rect.w,
-            rect.h,
+            place.cols,
+            place.rows,
             BlockMode::Quadrant,
             bg,
         ));
@@ -118,14 +165,17 @@ impl BlockCache {
     }
 }
 
-/// Copies block `cells` for an image at `rect` into `grid`, only within
+/// Copies block `cells` for an image at `place` into `grid`, only within
 /// `within`.
-pub(crate) fn draw_blocks(grid: &mut Grid, cells: &[Cell], rect: Rect, within: &[Rect]) {
+pub(crate) fn draw_blocks(grid: &mut Grid, cells: &[Cell], place: Place, within: &[Rect]) {
     for piece in within {
-        let p = piece.intersect(&rect);
+        let p = place.visible(*piece);
         for y in p.y..p.bottom() {
             for x in p.x..p.right() {
-                let i = usize::from(y - rect.y) * usize::from(rect.w) + usize::from(x - rect.x);
+                // Non-negative: (x, y) lies within the image.
+                let dx = (i32::from(x) - place.x) as usize;
+                let dy = (i32::from(y) - place.y) as usize;
+                let i = dy * usize::from(place.cols) + dx;
                 if let (Some(src), Some(dst)) = (cells.get(i), grid.get_mut(x, y)) {
                     *dst = src.clone();
                 }
@@ -136,12 +186,14 @@ pub(crate) fn draw_blocks(grid: &mut Grid, cells: &[Cell], rect: Rect, within: &
 
 /// Whether a Sixel or iTerm2 image may be shown in pixels right now.
 pub(crate) fn whole_image_allowed(
-    rect: Rect,
+    place: Place,
     pieces: &[Rect],
     screen_rows: u16,
     moving: bool,
 ) -> bool {
-    pieces.len() == 1 && pieces[0] == rect && rect.bottom() < screen_rows && !moving
+    place.rect().is_some_and(|rect| {
+        pieces.len() == 1 && pieces[0] == rect && rect.bottom() < screen_rows && !moving
+    })
 }
 
 #[cfg(test)]
@@ -170,26 +222,43 @@ mod tests {
     fn pieces_exclude_what_lies_above() {
         let rect = Rect::new(0, 0, 10, 4);
         let clip = Rect::new(0, 0, 8, 4);
-        let pieces = visible_pieces(rect, clip, &[Rect::new(2, 1, 3, 2)]);
+        let pieces = visible_pieces(Place::of(rect), clip, &[Rect::new(2, 1, 3, 2)]);
         let area: u32 = pieces.iter().map(Rect::area).sum();
         assert_eq!(area, 8 * 4 - 3 * 2);
         assert!(pieces.iter().all(|p| !p.intersects(&Rect::new(2, 1, 3, 2))));
-        assert!(visible_pieces(rect, clip, &[Rect::new(0, 0, 20, 20)]).is_empty());
+        assert!(visible_pieces(Place::of(rect), clip, &[Rect::new(0, 0, 20, 20)]).is_empty());
+        // Partly scrolled above the pane: only its lower rows.
+        let up = Place {
+            x: 2,
+            y: -3,
+            cols: 4,
+            rows: 5,
+        };
+        assert_eq!(visible_pieces(up, clip, &[]), vec![Rect::new(2, 0, 4, 2)]);
+        assert_eq!(up.rect(), None);
     }
 
     #[test]
     fn whole_images_need_to_be_whole_and_still() {
         let r = Rect::new(0, 0, 10, 4);
-        assert!(whole_image_allowed(r, &[r], 10, false));
+        let p = Place::of(r);
+        assert!(whole_image_allowed(p, &[r], 10, false));
         assert!(
-            !whole_image_allowed(r, &[r], 4, false),
+            !whole_image_allowed(p, &[r], 4, false),
             "touches the last row"
         );
         assert!(
-            !whole_image_allowed(r, &[r], 10, true),
+            !whole_image_allowed(p, &[r], 10, true),
             "a drag is going on"
         );
-        assert!(!whole_image_allowed(r, &[Rect::new(0, 0, 5, 4)], 10, false));
+        assert!(!whole_image_allowed(p, &[Rect::new(0, 0, 5, 4)], 10, false));
+        let above = Place { y: -1, ..p };
+        assert!(!whole_image_allowed(
+            above,
+            &[Rect::new(0, 0, 10, 3)],
+            10,
+            false
+        ));
     }
 
     #[test]
@@ -199,9 +268,24 @@ mod tests {
         draw_blocks(
             &mut g,
             &cells,
-            Rect::new(1, 0, 4, 2),
+            Place::of(Rect::new(1, 0, 4, 2)),
             &[Rect::new(0, 0, 3, 2)],
         );
         assert_eq!(g.to_text(), " ##\n ##\n");
+        // An image starting above the grid: its lower half shows.
+        let mut g = Grid::new(4, 2);
+        let cells: Vec<Cell> = "abcdefgh"
+            .chars()
+            .map(|c| Cell::new(c, termos_render::cell::Style::new()))
+            .collect();
+        let place = Place {
+            x: 0,
+            y: -1,
+            cols: 4,
+            rows: 2,
+        };
+        let area = g.area();
+        draw_blocks(&mut g, &cells, place, &[area]);
+        assert_eq!(g.to_text(), "efgh\n\n");
     }
 }

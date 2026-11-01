@@ -12,7 +12,9 @@
 //!
 //! The VT input path is fuzzed by `fuzz/fuzz_targets/vt_advance.rs`.
 
+pub mod graphics;
 pub mod input;
+pub mod intercept;
 mod kbguard;
 pub mod pty;
 pub mod vt;

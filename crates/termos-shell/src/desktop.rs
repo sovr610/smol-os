@@ -21,7 +21,7 @@ use termos_render::cell::Style;
 use termos_render::color::Rgb;
 
 use crate::anim::{self, Animations};
-use crate::images::{self, BlockCache, Candidate, ShownImage};
+use crate::images::{self, BlockCache, Candidate, Place, ShownImage};
 use termos_render::encode::CursorState;
 use termos_render::grid::{Grid, Rect};
 use termos_render::theme::{Theme, ThemeBase, is_light};
@@ -237,6 +237,8 @@ pub struct Desktop {
     /// Default foreground and background of the panes: the colours of the
     /// most recently active client's terminal (OSC 10/11 answers).
     term_colors: (Rgb, Rgb),
+    /// That terminal's cell size in pixels, for images in panes.
+    cell_px: Option<termos_render::caps::PxSize>,
     session: Session,
     panes: BTreeMap<PaneId, Pane>,
     pty_tx: mpsc::Sender<PtyEvent>,
@@ -319,6 +321,7 @@ impl Desktop {
             opts,
             keys,
             term_colors: default_term_colors(None),
+            cell_px: None,
             session: placeholder,
             panes: BTreeMap::new(),
             pty_tx,
@@ -556,14 +559,14 @@ impl Desktop {
                 .map(|f| f.outer)
                 .collect();
             above.extend_from_slice(overlays);
-            let pieces = images::visible_pieces(c.rect, c.clip, &above);
+            let pieces = images::visible_pieces(c.place, c.clip, &above);
             if pieces.is_empty() {
                 continue;
             }
             let pixels = match protocol {
                 ImageProtocol::Kitty => true,
                 ImageProtocol::Sixel | ImageProtocol::Iterm2 => {
-                    images::whole_image_allowed(c.rect, &pieces, grid.rows(), moving)
+                    images::whole_image_allowed(c.place, &pieces, grid.rows(), moving)
                 }
                 ImageProtocol::Blocks => false,
             };
@@ -572,12 +575,12 @@ impl Desktop {
                     key: c.key,
                     picture: c.picture,
                     protocol,
-                    rect: c.rect,
+                    place: c.place,
                     pieces,
                 });
             } else {
-                let cells = self.block_cache.get(c.key, &c.picture, c.rect, bg);
-                images::draw_blocks(grid, &cells, c.rect, &pieces);
+                let cells = self.block_cache.get(c.key, &c.picture, c.place, bg);
+                images::draw_blocks(grid, &cells, c.place, &pieces);
             }
         }
         shown
@@ -779,6 +782,7 @@ impl Desktop {
         let pty = PtyPane::spawn(id, &spec, self.pty_tx.clone())?;
         let mut vt: Box<dyn VtBackend> = Box::new(AlacrittyVt::new(w, h, self.config.scrollback));
         vt.set_default_colors(self.term_colors.0, self.term_colors.1);
+        vt.set_cell_px(self.cell_px);
         self.panes.insert(
             id,
             Pane {
@@ -1005,21 +1009,30 @@ impl Desktop {
         self.dirty = true;
     }
 
-    /// Gives the panes the default colours of the most recently active
-    /// client's terminal, so programs that ask (OSC 10/11) get them.
+    /// Gives the panes the default colours and cell size of the most
+    /// recently active client's terminal, so programs that ask (OSC 10/11,
+    /// pixel sizes) get them and images in panes are sized to match.
     fn update_term_colors(&mut self) {
-        let bg = self
+        let caps = self
             .last_active
             .and_then(|c| self.ui_of(c))
-            .and_then(|u| u.caps.background);
-        let colors = default_term_colors(bg);
-        if colors == self.term_colors {
+            .map(|u| &u.caps);
+        let colors = default_term_colors(caps.and_then(|c| c.background));
+        let cell_px = caps.and_then(|c| c.cell_px);
+        if colors == self.term_colors && cell_px == self.cell_px {
             return;
         }
+        let new_cell = cell_px != self.cell_px;
         self.term_colors = colors;
+        self.cell_px = cell_px;
         for pane in self.panes.values_mut() {
-            if let PaneKind::Term { vt, .. } = &mut pane.kind {
+            if let PaneKind::Term { vt, pty } = &mut pane.kind {
                 vt.set_default_colors(colors.0, colors.1);
+                vt.set_cell_px(cell_px);
+                if new_cell {
+                    let (cols, rows) = vt.size();
+                    let _ = pty.resize(cols, rows, cell_px);
+                }
             }
         }
     }
@@ -2385,7 +2398,7 @@ impl Desktop {
                 // The emulator may be larger than the pane (MIN_COLS); the
                 // program must see the emulator's size.
                 let (cols, rows) = vt.size();
-                if let Err(e) = pty.resize(cols, rows) {
+                if let Err(e) = pty.resize(cols, rows, self.cell_px) {
                     tracing::warn!("resize of pane {id} failed: {e}");
                 }
             }
@@ -2551,6 +2564,29 @@ impl Desktop {
                             if let Some(cm) = copy.as_ref().filter(|c| c.pane == id) {
                                 cm.decorate(g, rect, vt.as_ref(), theme);
                             }
+                            // Images the program printed, where their
+                            // anchors are now.
+                            for img in vt.images() {
+                                let place = Place {
+                                    x: i32::from(rect.x) + i32::from(img.x),
+                                    y: i32::from(rect.y) + img.y,
+                                    cols: img.cols,
+                                    rows: img.rows,
+                                };
+                                if protocol == ImageProtocol::Blocks {
+                                    let cells =
+                                        block_cache.get(img.key, &img.picture, place, image_bg);
+                                    images::draw_blocks(g, &cells, place, &[rect]);
+                                } else {
+                                    candidates.push(Candidate {
+                                        pane: id,
+                                        key: img.key,
+                                        picture: img.picture,
+                                        place,
+                                        clip: rect,
+                                    });
+                                }
+                            }
                         }
                         PaneKind::App(app) => {
                             render_app(app.as_mut(), theme, g, rect);
@@ -2567,15 +2603,19 @@ impl Desktop {
                                 }
                                 let target = images::fit(area, &img.picture, cell, img.upscale);
                                 if protocol == ImageProtocol::Blocks {
-                                    let cells =
-                                        block_cache.get(img.key, &img.picture, target, image_bg);
-                                    images::draw_blocks(g, &cells, target, &[rect]);
+                                    let cells = block_cache.get(
+                                        img.key,
+                                        &img.picture,
+                                        Place::of(target),
+                                        image_bg,
+                                    );
+                                    images::draw_blocks(g, &cells, Place::of(target), &[rect]);
                                 } else {
                                     candidates.push(Candidate {
                                         pane: id,
                                         key: img.key,
                                         picture: img.picture,
-                                        rect: target,
+                                        place: Place::of(target),
                                         clip: rect,
                                     });
                                 }

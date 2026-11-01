@@ -229,8 +229,8 @@ fn update_images(
     let mut live = HashSet::new();
     for img in shown {
         let (w, h) = (
-            u32::from(img.rect.w) * cell.width,
-            u32::from(img.rect.h) * cell.height,
+            u32::from(img.place.cols) * cell.width,
+            u32::from(img.place.rows) * cell.height,
         );
         let id = match conn.images.sent.get(&(img.key, w, h)) {
             Some(id) => *id,
@@ -267,8 +267,9 @@ fn update_images(
                         cols: p.w,
                         rows: p.h,
                         src: [
-                            u32::from(p.x - img.rect.x) * cell.width,
-                            u32::from(p.y - img.rect.y) * cell.height,
+                            // Non-negative: pieces lie within the image.
+                            (i32::from(p.x) - img.place.x).unsigned_abs() * cell.width,
+                            (i32::from(p.y) - img.place.y).unsigned_abs() * cell.height,
                             u32::from(p.w) * cell.width,
                             u32::from(p.h) * cell.height,
                         ],
@@ -277,16 +278,19 @@ fn update_images(
             }
             // Whole images only; one cut off by a smaller terminal is left
             // out.
-            _ if img.rect.intersect(&screen) == img.rect => placements.push(ImagePlacement {
-                image: id,
-                protocol: img.protocol,
-                x: img.rect.x,
-                y: img.rect.y,
-                cols: img.rect.w,
-                rows: img.rect.h,
-                src: [0, 0, w, h],
-            }),
-            _ => {}
+            _ => {
+                if let Some(rect) = img.place.rect().filter(|r| r.intersect(&screen) == *r) {
+                    placements.push(ImagePlacement {
+                        image: id,
+                        protocol: img.protocol,
+                        x: rect.x,
+                        y: rect.y,
+                        cols: rect.w,
+                        rows: rect.h,
+                        src: [0, 0, w, h],
+                    });
+                }
+            }
         }
     }
     if conn.images.sent.len() > live.len() + SPARE_IMAGES {

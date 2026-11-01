@@ -201,7 +201,17 @@ impl PtyPane {
 
     /// Resizes the PTY (the child receives SIGWINCH). A pane whose child
     /// has exited has nothing left to resize.
-    pub fn resize(&self, cols: u16, rows: u16) -> io::Result<()> {
+    /// Resizes the terminal, telling the program the pixel size too when
+    /// the cell size is known (image tools size their output by it).
+    pub fn resize(
+        &self,
+        cols: u16,
+        rows: u16,
+        cell_px: Option<termos_render::caps::PxSize>,
+    ) -> io::Result<()> {
+        let px = |n: u16, cell: Option<u32>| {
+            cell.map_or(0, |c| u16::try_from(u32::from(n) * c).unwrap_or(u16::MAX))
+        };
         let master = self
             .master
             .lock()
@@ -211,8 +221,8 @@ impl PtyPane {
                 .resize(PtySize {
                     rows: rows.max(1),
                     cols: cols.max(1),
-                    pixel_width: 0,
-                    pixel_height: 0,
+                    pixel_width: px(cols, cell_px.map(|c| c.width)),
+                    pixel_height: px(rows, cell_px.map(|c| c.height)),
                 })
                 .map_err(io_err),
             None => Ok(()),
@@ -443,7 +453,7 @@ mod tests {
         let text = String::from_utf8_lossy(&out);
         assert!(text.contains("got:hello"), "{text:?}");
         assert_eq!(code, Some(0));
-        pane.resize(60, 10)
+        pane.resize(60, 10, None)
             .expect("resizing after exit is harmless");
     }
 }

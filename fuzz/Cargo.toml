@@ -60,3 +60,10 @@ path = "fuzz_targets/sixel_decode.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "apc_dcs_intercept"
+path = "fuzz_targets/apc_dcs_intercept.rs"
+test = false
+doc = false
+bench = false

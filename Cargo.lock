@@ -2173,6 +2173,7 @@ dependencies = [
 name = "termos-shell"
 version = "0.0.0"
 dependencies = [
+ "base64 0.23.1",
  "getrandom",
  "insta",
  "jiff",
@@ -2199,6 +2200,8 @@ name = "termos-term"
 version = "0.0.0"
 dependencies = [
  "alacritty_terminal",
+ "base64 0.23.1",
+ "flate2",
  "portable-pty",
  "termos-core",
  "termos-render",
