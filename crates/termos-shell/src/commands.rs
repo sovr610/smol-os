@@ -13,7 +13,7 @@ use termos_wm::layout::{Direction, Preset};
 use termos_wm::workspace::{Snap, SplitHow};
 
 /// Something the desktop can do.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
     Split(SplitHow),
     NewFloat,
@@ -49,6 +49,13 @@ pub enum Command {
     ReloadConfig,
     SendPrefix,
     Quit,
+    /// Detach this client; the session keeps running.
+    Detach,
+    SessionNew,
+    SessionNext,
+    SessionPrev,
+    SessionSwitch(String),
+    SessionRename,
 }
 
 /// Static description of a command name.
@@ -149,7 +156,17 @@ pub const COMMANDS: &[CommandInfo] = &[
     info("tutorial", "Open the tutorial"),
     info("config.reload", "Reload config.toml"),
     info("send-prefix", "Send the prefix key to the pane"),
-    info("session.quit", "Quit TermOS (closes all panes)"),
+    info("session.quit", "Close this session and all its panes"),
+    info("client.detach", "Detach (the session keeps running)"),
+    info("session.new", "New session"),
+    info("session.next", "Next session"),
+    info("session.prev", "Previous session"),
+    CommandInfo {
+        name: "session.switch",
+        description: "Switch to session",
+        arg: Some("main"),
+    },
+    info("session.rename", "Rename this session"),
 ];
 
 /// Error for an unknown or malformed command.
@@ -283,6 +300,14 @@ impl FromStr for Command {
             "config.reload" => no_arg(Command::ReloadConfig),
             "send-prefix" => no_arg(Command::SendPrefix),
             "session.quit" => no_arg(Command::Quit),
+            "client.detach" => no_arg(Command::Detach),
+            "session.new" => no_arg(Command::SessionNew),
+            "session.next" => no_arg(Command::SessionNext),
+            "session.prev" => no_arg(Command::SessionPrev),
+            "session.rename" => no_arg(Command::SessionRename),
+            "session.switch" => arg
+                .map(|a| Command::SessionSwitch(a.to_owned()))
+                .ok_or_else(|| CommandError("`session.switch` needs a session name".into())),
             "" => Err(CommandError("empty command".into())),
             _ => Err(CommandError(format!("unknown command `{name}`"))),
         }
@@ -329,6 +354,12 @@ impl fmt::Display for Command {
             Command::ReloadConfig => f.write_str("config.reload"),
             Command::SendPrefix => f.write_str("send-prefix"),
             Command::Quit => f.write_str("session.quit"),
+            Command::Detach => f.write_str("client.detach"),
+            Command::SessionNew => f.write_str("session.new"),
+            Command::SessionNext => f.write_str("session.next"),
+            Command::SessionPrev => f.write_str("session.prev"),
+            Command::SessionSwitch(name) => write!(f, "session.switch {name}"),
+            Command::SessionRename => f.write_str("session.rename"),
         }
     }
 }
@@ -346,6 +377,7 @@ impl Command {
             Command::Resize(_, n) if *n > 1 => format!("{base} by {n}"),
             Command::LayoutSelect(p) => format!("{base}: {}", p.name()),
             Command::WorkspaceSelect(n) => format!("{base} {n}"),
+            Command::SessionSwitch(name) => format!("{base} {name}"),
             _ => base.to_owned(),
         }
     }

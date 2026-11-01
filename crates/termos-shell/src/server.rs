@@ -17,7 +17,12 @@ use termos_render::grid::Grid;
 use termos_term::pty::PtyEvent;
 use tokio::sync::mpsc;
 
+use termos_core::ids::ClientId;
+
 use crate::desktop::Desktop;
+
+/// The in-process loop serves exactly one client.
+const CLIENT: ClientId = ClientId(0);
 
 /// Minimum time between frames during output floods (~120 fps cap).
 pub const FRAME_INTERVAL: Duration = Duration::from_millis(8);
@@ -77,7 +82,7 @@ pub async fn run(mut desktop: Desktop, mut ch: ServerChannels) -> String {
                         previous = None;
                         hello = true;
                     }
-                    desktop.handle_client(m);
+                    desktop.handle_client(CLIENT, m);
                 }
                 None => return "the client disconnected".into(),
             },
@@ -95,7 +100,7 @@ pub async fn run(mut desktop: Desktop, mut ch: ServerChannels) -> String {
             () = sleep_until(timer) => desktop.on_timer(Instant::now()),
         }
 
-        for msg in desktop.take_outbox() {
+        for (_, msg) in desktop.take_outbox() {
             if ch.client.tx.send(msg).is_err() {
                 return "the client disconnected".into();
             }
@@ -127,7 +132,7 @@ pub async fn run(mut desktop: Desktop, mut ch: ServerChannels) -> String {
         if frame_due.is_some_and(|d| d <= now) {
             frame_due = None;
             last_frame = Some(now);
-            let cursor = desktop.render(&mut current);
+            let cursor = desktop.render(CLIENT, &mut current);
             let (spans, clear) = match &previous {
                 Some(prev) if prev.cols() == current.cols() && prev.rows() == current.rows() => {
                     (diff(prev, &current), false)

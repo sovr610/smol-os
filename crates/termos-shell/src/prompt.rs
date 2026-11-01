@@ -19,6 +19,7 @@ pub enum Confirmed {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PromptKind {
     RenameWorkspace(usize),
+    RenameSession,
     Confirm(Confirmed),
 }
 
@@ -43,6 +44,14 @@ impl Prompt {
         Self {
             kind: PromptKind::RenameWorkspace(index),
             label: "(rename-workspace) ".into(),
+            input: current.to_owned(),
+        }
+    }
+
+    pub fn rename_session(current: &str) -> Self {
+        Self {
+            kind: PromptKind::RenameSession,
+            label: "(rename-session) ".into(),
             input: current.to_owned(),
         }
     }

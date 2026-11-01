@@ -38,6 +38,8 @@ fn start() -> (ClientEnd, tempfile::TempDir) {
             config_path: paths.config_file(),
             paths,
             env_shell: None,
+            pane_ids: termos_core::ids::PaneIds::new(),
+            pane_env: Vec::new(),
         },
         config,
         pty_tx,

@@ -16,8 +16,8 @@ pub fn entries(keys: &KeyTables) -> Vec<(String, String)> {
     let mut saw_digits = false;
     let mut saw_presets = false;
     for b in &keys.prefix {
-        match b.command {
-            Command::WorkspaceSelect(n) if n <= 9 && b.key.to_string() == n.to_string() => {
+        match &b.command {
+            Command::WorkspaceSelect(n) if *n <= 9 && b.key.to_string() == n.to_string() => {
                 if !saw_digits {
                     out.push(("0-9".into(), "Go to workspace N".into()));
                     saw_digits = true;

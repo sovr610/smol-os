@@ -11,8 +11,8 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use termos_core::app::{App, AppEffect, render_app};
-use termos_core::config::{Config, StatusPosition};
-use termos_core::ids::PaneId;
+use termos_core::config::{Config, StatusPosition, WindowSize};
+use termos_core::ids::{ClientId, PaneId, PaneIds};
 use termos_core::input::{KeyEvent, Mods, MouseButton, MouseEvent, MouseKind};
 use termos_core::paths::Paths;
 use termos_core::proto::{ClientMsg, ServerMsg};
@@ -93,6 +93,10 @@ pub struct DesktopOptions {
     pub paths: Paths,
     /// `$SHELL` from the environment.
     pub env_shell: Option<String>,
+    /// Server-wide pane id allocator.
+    pub pane_ids: PaneIds,
+    /// Extra environment for panes (e.g. `TERMOS=<socket>,<pid>,<session>`).
+    pub pane_env: Vec<(String, String)>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -132,7 +136,60 @@ enum Drag {
     },
 }
 
-/// All server-side state.
+/// One attached client's UI state (D-032): every terminal has its own
+/// prefix state, overlays, drags and size.
+#[derive(Debug)]
+struct ClientUi {
+    caps: Caps,
+    cols: u16,
+    rows: u16,
+    key_state: KeyState,
+    whichkey_deadline: Option<Instant>,
+    whichkey_visible: bool,
+    whichkey_full: bool,
+    palette: Option<Palette>,
+    prompt: Option<Prompt>,
+    drag: Option<Drag>,
+    mouse_owner: Option<PaneId>,
+    status_regions: StatusRegions,
+    title_sent: String,
+}
+
+impl Default for ClientUi {
+    fn default() -> Self {
+        Self {
+            caps: Caps::default(),
+            cols: 80,
+            rows: 24,
+            key_state: KeyState::Normal,
+            whichkey_deadline: None,
+            whichkey_visible: false,
+            whichkey_full: false,
+            palette: None,
+            prompt: None,
+            drag: None,
+            mouse_owner: None,
+            status_regions: StatusRegions::default(),
+            title_sent: String::new(),
+        }
+    }
+}
+
+/// What the desktop asks of the server it cannot do alone.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SessionRequest {
+    /// Move a client to another session.
+    Switch { client: ClientId, to: String },
+    /// Move a client to the next (`true`) or previous session.
+    Cycle { client: ClientId, forward: bool },
+    /// Create a session and move the client to it.
+    New { client: ClientId },
+    /// Rename a session (the server keeps names unique).
+    Rename { from: String, to: String },
+}
+
+/// All state of one session: its workspaces and panes, plus the UI state of
+/// every attached client.
 pub struct Desktop {
     opts: DesktopOptions,
     config: Config,
@@ -140,28 +197,29 @@ pub struct Desktop {
     keys: KeyTables,
     session: Session,
     panes: BTreeMap<PaneId, Pane>,
-    next_id: u64,
     pty_tx: mpsc::Sender<PtyEvent>,
+    /// The session size (from the attached clients, D-032).
     cols: u16,
     rows: u16,
-    caps: Caps,
-    key_state: KeyState,
-    whichkey_deadline: Option<Instant>,
-    whichkey_visible: bool,
-    whichkey_full: bool,
-    palette: Option<Palette>,
-    prompt: Option<Prompt>,
+    /// The client being served; its state is swapped into `ui`.
+    current: Option<ClientId>,
+    ui: ClientUi,
+    clients: BTreeMap<ClientId, ClientUi>,
+    /// The client that most recently sent input (`window-size = latest`).
+    last_active: Option<ClientId>,
     copy: Option<CopyMode>,
     notes: Notifications,
     paste_buffer: Option<String>,
-    drag: Option<Drag>,
-    mouse_owner: Option<PaneId>,
-    status_regions: StatusRegions,
     clock_deadline: Option<Instant>,
-    outbox: Vec<ServerMsg>,
+    /// Messages for one client (`Some`) or all of them (`None`).
+    outbox: Vec<(Option<ClientId>, ServerMsg)>,
+    requests: Vec<SessionRequest>,
+    /// Names of all sessions on the server (for the palette).
+    known_sessions: Vec<String>,
     dirty: bool,
+    /// The workspace/pane structure changed since the last snapshot.
+    layout_changed: bool,
     quit: Option<String>,
-    title_sent: String,
     /// Bytes of visible pane output since the last render.
     output_since_render: usize,
 }
@@ -206,28 +264,23 @@ impl Desktop {
             keys,
             session: placeholder,
             panes: BTreeMap::new(),
-            next_id: 0,
             pty_tx,
             cols: cols.max(2),
             rows: rows.max(2),
-            caps: Caps::default(),
-            key_state: KeyState::Normal,
-            whichkey_deadline: None,
-            whichkey_visible: false,
-            whichkey_full: false,
-            palette: None,
-            prompt: None,
+            current: None,
+            ui: ClientUi::default(),
+            clients: BTreeMap::new(),
+            last_active: None,
             copy: None,
             notes: Notifications::new(),
             paste_buffer: None,
-            drag: None,
-            mouse_owner: None,
-            status_regions: StatusRegions::default(),
             clock_deadline: None,
             outbox: Vec::new(),
+            requests: Vec::new(),
+            known_sessions: Vec::new(),
             dirty: true,
+            layout_changed: true,
             quit: None,
-            title_sent: String::new(),
             output_since_render: 0,
             config,
         };
@@ -286,16 +339,25 @@ impl Desktop {
         self.copy.is_some()
     }
 
-    pub fn palette_open(&self) -> bool {
-        self.palette.is_some()
+    fn ui_of(&self, client: ClientId) -> Option<&ClientUi> {
+        if self.current == Some(client) {
+            Some(&self.ui)
+        } else {
+            self.clients.get(&client)
+        }
     }
 
-    pub fn prompt_open(&self) -> bool {
-        self.prompt.is_some()
+    pub fn palette_open(&self, client: ClientId) -> bool {
+        self.ui_of(client).is_some_and(|u| u.palette.is_some())
     }
 
-    pub fn whichkey_visible(&self) -> bool {
-        self.whichkey_visible || self.whichkey_full
+    pub fn prompt_open(&self, client: ClientId) -> bool {
+        self.ui_of(client).is_some_and(|u| u.prompt.is_some())
+    }
+
+    pub fn whichkey_visible(&self, client: ClientId) -> bool {
+        self.ui_of(client)
+            .is_some_and(|u| u.whichkey_visible || u.whichkey_full)
     }
 
     pub fn paste_buffer(&self) -> Option<&str> {
@@ -306,9 +368,55 @@ impl Desktop {
         self.notes.toast().map(|(t, _)| t)
     }
 
-    /// Takes messages for the client (clipboard, bell, title).
-    pub fn take_outbox(&mut self) -> Vec<ServerMsg> {
+    /// The session's name.
+    pub fn name(&self) -> &str {
+        &self.session.name
+    }
+
+    /// Renames the session.
+    pub fn rename(&mut self, name: impl Into<String>) {
+        self.session.name = name.into();
+        self.layout_changed = true;
+        self.dirty = true;
+    }
+
+    /// Attached clients.
+    pub fn client_ids(&self) -> Vec<ClientId> {
+        let mut v: Vec<ClientId> = self.clients.keys().copied().collect();
+        v.extend(self.current);
+        v.sort();
+        v
+    }
+
+    /// A client's terminal size.
+    pub fn client_size(&self, client: ClientId) -> Option<(u16, u16)> {
+        self.ui_of(client).map(|u| (u.cols, u.rows))
+    }
+
+    /// Every pane id in this session (for routing PTY events).
+    pub fn has_pane(&self, id: PaneId) -> bool {
+        self.panes.contains_key(&id)
+    }
+
+    /// Takes messages for clients: `Some(id)` for one client, `None` for all.
+    pub fn take_outbox(&mut self) -> Vec<(Option<ClientId>, ServerMsg)> {
         std::mem::take(&mut self.outbox)
+    }
+
+    /// Tells the desktop which sessions exist (for the palette).
+    pub fn set_known_sessions(&mut self, names: Vec<String>) {
+        self.known_sessions = names;
+    }
+
+    /// Takes requests for the server (session switching and creation).
+    pub fn take_requests(&mut self) -> Vec<SessionRequest> {
+        std::mem::take(&mut self.requests)
+    }
+
+    /// Whether the session's structure changed since the last call (the
+    /// server then schedules a snapshot).
+    pub fn take_layout_changed(&mut self) -> bool {
+        std::mem::take(&mut self.layout_changed)
     }
 
     /// Whether a redraw is needed (and clears the flag).
@@ -353,9 +461,7 @@ impl Desktop {
     // ----- panes ------------------------------------------------------
 
     fn alloc_id(&mut self) -> PaneId {
-        let id = PaneId(self.next_id);
-        self.next_id += 1;
-        id
+        self.opts.pane_ids.next()
     }
 
     fn spawn_term(&mut self, cwd: Option<PathBuf>, size: (u16, u16)) -> io::Result<PaneId> {
@@ -370,6 +476,7 @@ impl Desktop {
             ("TERMOS".into(), std::process::id().to_string()),
             ("TERMOS_PANE".into(), id.to_string()),
         ];
+        spec.env.extend(self.opts.pane_env.iter().cloned());
         let pty = PtyPane::spawn(id, &spec, self.pty_tx.clone())?;
         let vt: Box<dyn VtBackend> = Box::new(AlacrittyVt::new(w, h, self.config.scrollback));
         self.panes.insert(
@@ -434,11 +541,12 @@ impl Desktop {
         if self.copy.as_ref().is_some_and(|c| c.pane == id) {
             self.copy = None;
         }
-        if self.mouse_owner == Some(id) {
-            self.mouse_owner = None;
+        if self.ui.mouse_owner == Some(id) {
+            self.ui.mouse_owner = None;
         }
-        self.drag = None;
+        self.ui.drag = None;
         self.dirty = true;
+        self.layout_changed = true;
     }
 
     /// Shows a notification (e.g. a startup problem found by the caller).
@@ -473,7 +581,8 @@ impl Desktop {
 
     fn copy_text(&mut self, text: String) {
         let n = text.chars().count();
-        self.outbox.push(ServerMsg::Clipboard(text.clone()));
+        self.outbox
+            .push((self.current, ServerMsg::Clipboard(text.clone())));
         self.paste_buffer = Some(text);
         self.notify(Level::Info, format!("copied {n} characters"));
     }
@@ -501,15 +610,114 @@ impl Desktop {
 
     // ----- client messages --------------------------------------------
 
-    pub fn handle_client(&mut self, msg: ClientMsg) {
-        match msg {
-            ClientMsg::Hello {
-                caps, cols, rows, ..
-            } => {
-                self.caps = caps;
-                self.resize(cols, rows);
+    /// Makes `client` the one being served: its UI state moves into `ui`.
+    /// Returns `false` for an unknown client.
+    fn enter(&mut self, client: ClientId) -> bool {
+        if self.current == Some(client) {
+            return true;
+        }
+        self.leave();
+        match self.clients.remove(&client) {
+            Some(ui) => {
+                self.ui = ui;
+                self.current = Some(client);
+                true
             }
-            ClientMsg::Resize { cols, rows } => self.resize(cols, rows),
+            None => false,
+        }
+    }
+
+    /// Puts the served client's UI state back.
+    fn leave(&mut self) {
+        if let Some(client) = self.current.take() {
+            let ui = std::mem::take(&mut self.ui);
+            self.clients.insert(client, ui);
+        }
+    }
+
+    /// Detaches a client (it disconnected or was detached).
+    pub fn detach_client(&mut self, client: ClientId) {
+        if self.current == Some(client) {
+            self.current = None;
+            self.ui = ClientUi::default();
+        }
+        self.clients.remove(&client);
+        if self.last_active == Some(client) {
+            self.last_active = self.clients.keys().next_back().copied();
+        }
+        self.recompute_size();
+    }
+
+    /// The session size under the `window-size` policy.
+    fn recompute_size(&mut self) {
+        let sizes: Vec<(u16, u16)> = self
+            .clients
+            .values()
+            .chain(self.current.map(|_| &self.ui))
+            .map(|u| (u.cols, u.rows))
+            .collect();
+        if sizes.is_empty() {
+            return;
+        }
+        let (cols, rows) = match self.config.session.window_size {
+            WindowSize::Latest => self
+                .last_active
+                .and_then(|c| self.ui_of(c))
+                .map_or(sizes[sizes.len() - 1], |u| (u.cols, u.rows)),
+            WindowSize::Smallest => (
+                sizes.iter().map(|s| s.0).min().unwrap_or(80),
+                sizes.iter().map(|s| s.1).min().unwrap_or(24),
+            ),
+            WindowSize::Largest => (
+                sizes.iter().map(|s| s.0).max().unwrap_or(80),
+                sizes.iter().map(|s| s.1).max().unwrap_or(24),
+            ),
+        };
+        if (cols.max(2), rows.max(2)) != (self.cols, self.rows) {
+            self.resize(cols, rows);
+        }
+    }
+
+    /// Handles a message from `client`. A `Hello` attaches it.
+    pub fn handle_client(&mut self, client: ClientId, msg: ClientMsg) {
+        if let ClientMsg::Hello {
+            caps, cols, rows, ..
+        } = &msg
+        {
+            self.leave();
+            let ui = self.clients.entry(client).or_default();
+            ui.caps = caps.clone();
+            ui.cols = (*cols).max(2);
+            ui.rows = (*rows).max(2);
+            // A fresh client must not inherit a stale title.
+            ui.title_sent.clear();
+            self.last_active = Some(client);
+            self.recompute_size();
+            self.dirty = true;
+            return;
+        }
+        if !self.enter(client) {
+            return;
+        }
+        if matches!(
+            msg,
+            ClientMsg::Key(_)
+                | ClientMsg::Mouse(_)
+                | ClientMsg::Paste(_)
+                | ClientMsg::Resize { .. }
+        ) && self.last_active != Some(client)
+        {
+            self.last_active = Some(client);
+            self.recompute_size();
+        }
+        match msg {
+            ClientMsg::Hello { .. } => {}
+            ClientMsg::Resize { cols, rows } => {
+                self.ui.cols = cols.max(2);
+                self.ui.rows = rows.max(2);
+                self.recompute_size();
+                self.dirty = true;
+            }
             ClientMsg::Key(k) => self.on_key(k),
             ClientMsg::Mouse(m) => {
                 if self.config.mouse {
@@ -530,6 +738,7 @@ impl Desktop {
             }
         }
         self.after_focus_change();
+        self.leave();
     }
 
     fn resize(&mut self, cols: u16, rows: u16) {
@@ -547,9 +756,9 @@ impl Desktop {
     }
 
     fn on_paste(&mut self, text: &str) {
-        if let Some(p) = &mut self.prompt {
+        if let Some(p) = &mut self.ui.prompt {
             p.insert_str(text);
-        } else if let Some(p) = &mut self.palette {
+        } else if let Some(p) = &mut self.ui.palette {
             p.insert_str(text);
         } else if let Some(id) = self.focused() {
             let bytes = match self.panes.get(&id) {
@@ -570,28 +779,28 @@ impl Desktop {
 
     fn on_key(&mut self, k: KeyEvent) {
         let now = Instant::now();
-        if let Some(prompt) = &mut self.prompt {
+        if let Some(prompt) = &mut self.ui.prompt {
             let action = prompt.handle_key(k);
             self.dirty = true;
             match action {
                 PromptAction::None => {}
-                PromptAction::Cancel => self.prompt = None,
+                PromptAction::Cancel => self.ui.prompt = None,
                 PromptAction::Submit(text) => {
-                    if let Some(p) = self.prompt.take() {
+                    if let Some(p) = self.ui.prompt.take() {
                         self.finish_prompt(p.kind, text);
                     }
                 }
             }
             return;
         }
-        if let Some(palette) = &mut self.palette {
+        if let Some(palette) = &mut self.ui.palette {
             let action = palette.handle_key(k);
             self.dirty = true;
             match action {
                 PaletteAction::None => {}
-                PaletteAction::Close => self.palette = None,
+                PaletteAction::Close => self.ui.palette = None,
                 PaletteAction::Run(cmd) => {
-                    self.palette = None;
+                    self.ui.palette = None;
                     match cmd.parse::<Command>() {
                         Ok(c) => self.run(c),
                         Err(e) => self.notify(Level::Error, e.to_string()),
@@ -600,21 +809,21 @@ impl Desktop {
             }
             return;
         }
-        if self.whichkey_full {
-            self.whichkey_full = false;
+        if self.ui.whichkey_full {
+            self.ui.whichkey_full = false;
             self.dirty = true;
             return;
         }
 
-        match self.key_state {
+        match self.ui.key_state {
             KeyState::Prefix => {
-                self.key_state = KeyState::Normal;
-                self.whichkey_deadline = None;
-                self.whichkey_visible = false;
+                self.ui.key_state = KeyState::Normal;
+                self.ui.whichkey_deadline = None;
+                self.ui.whichkey_visible = false;
                 self.dirty = true;
                 if let Some(b) = self.keys.lookup_prefix(k) {
                     if b.repeat {
-                        self.key_state = KeyState::Repeat(
+                        self.ui.key_state = KeyState::Repeat(
                             now + Duration::from_millis(self.config.repeat_time_ms),
                         );
                     }
@@ -626,20 +835,20 @@ impl Desktop {
                 if now < until
                     && let Some(b) = self.keys.lookup_prefix(k).filter(|b| b.repeat)
                 {
-                    self.key_state =
+                    self.ui.key_state =
                         KeyState::Repeat(now + Duration::from_millis(self.config.repeat_time_ms));
                     self.run(b.command);
                     return;
                 }
-                self.key_state = KeyState::Normal;
+                self.ui.key_state = KeyState::Normal;
             }
             KeyState::Normal => {}
         }
 
         if k == self.keys.prefix_key {
-            self.key_state = KeyState::Prefix;
+            self.ui.key_state = KeyState::Prefix;
             if self.config.whichkey.enabled {
-                self.whichkey_deadline =
+                self.ui.whichkey_deadline =
                     Some(now + Duration::from_millis(self.config.whichkey.delay_ms));
             }
             self.dirty = true;
@@ -726,6 +935,14 @@ impl Desktop {
                     }
                 }
             }
+            PromptKind::RenameSession => {
+                if !text.is_empty() {
+                    self.requests.push(SessionRequest::Rename {
+                        from: self.session.name.clone(),
+                        to: text,
+                    });
+                }
+            }
             PromptKind::Confirm(Confirmed::KillPane(id)) => self.close_pane(id),
             PromptKind::Confirm(Confirmed::KillWorkspace(idx)) => {
                 let panes = self
@@ -761,6 +978,7 @@ impl Desktop {
     pub fn run(&mut self, cmd: Command) {
         let area = self.layout_area();
         self.dirty = true;
+        self.layout_changed = true;
         match cmd {
             Command::Split(how) => {
                 let cwd = self.focused_cwd();
@@ -787,7 +1005,7 @@ impl Desktop {
                     match self.panes.get(&id).map(|p| &p.kind) {
                         Some(PaneKind::App(_)) => self.close_pane(id),
                         Some(PaneKind::Term { .. }) => {
-                            self.prompt = Some(Prompt::confirm(
+                            self.ui.prompt = Some(Prompt::confirm(
                                 Confirmed::KillPane(id),
                                 format!("kill-pane {id}"),
                             ));
@@ -872,11 +1090,11 @@ impl Desktop {
             Command::WorkspaceRename => {
                 let idx = self.session.active_index();
                 let name = self.session.active().name.clone();
-                self.prompt = Some(Prompt::rename(idx, &name));
+                self.ui.prompt = Some(Prompt::rename(idx, &name));
             }
             Command::WorkspaceKill => {
                 let idx = self.session.active_index();
-                self.prompt = Some(Prompt::confirm(
+                self.ui.prompt = Some(Prompt::confirm(
                     Confirmed::KillWorkspace(idx),
                     format!("kill-workspace {idx}"),
                 ));
@@ -893,7 +1111,7 @@ impl Desktop {
             },
             Command::Palette => self.open_palette(),
             Command::Keys => {
-                self.whichkey_full = true;
+                self.ui.whichkey_full = true;
             }
             Command::Notifications => {
                 let app = NotificationCenter::new(self.notes.history());
@@ -918,10 +1136,39 @@ impl Desktop {
                     }
                 }
             }
+            Command::Detach => {
+                let session = self.session.name.clone();
+                if self.current.is_some() {
+                    self.outbox
+                        .push((self.current, ServerMsg::Detached { session }));
+                }
+            }
+            Command::SessionNew => {
+                if let Some(client) = self.current {
+                    self.requests.push(SessionRequest::New { client });
+                }
+            }
+            Command::SessionNext | Command::SessionPrev => {
+                if let Some(client) = self.current {
+                    self.requests.push(SessionRequest::Cycle {
+                        client,
+                        forward: cmd == Command::SessionNext,
+                    });
+                }
+            }
+            Command::SessionSwitch(to) => {
+                if let Some(client) = self.current {
+                    self.requests.push(SessionRequest::Switch { client, to });
+                }
+            }
+            Command::SessionRename => {
+                let name = self.session.name.clone();
+                self.ui.prompt = Some(Prompt::rename_session(&name));
+            }
             Command::Quit => {
-                self.prompt = Some(Prompt::confirm(
+                self.ui.prompt = Some(Prompt::confirm(
                     Confirmed::Quit,
-                    "quit TermOS and close every pane",
+                    "close this session and all its panes",
                 ));
             }
         }
@@ -961,13 +1208,15 @@ impl Desktop {
                 continue;
             };
             match cmd {
-                Command::LayoutSelect(_) | Command::WorkspaceSelect(_) => continue,
+                Command::LayoutSelect(_)
+                | Command::WorkspaceSelect(_)
+                | Command::SessionSwitch(_) => continue,
                 _ => {}
             }
             items.push(PaletteItem {
                 label: cmd.description(),
                 command: cmd.to_string(),
-                hint: self.keys.key_for(cmd).unwrap_or_default(),
+                hint: self.keys.key_for(&cmd).unwrap_or_default(),
             });
         }
         for p in termos_wm::layout::Preset::ALL {
@@ -975,7 +1224,7 @@ impl Desktop {
             items.push(PaletteItem {
                 label: cmd.description(),
                 command: cmd.to_string(),
-                hint: self.keys.key_for(cmd).unwrap_or_default(),
+                hint: self.keys.key_for(&cmd).unwrap_or_default(),
             });
         }
         for (i, ws) in self.session.workspaces.iter().enumerate() {
@@ -983,10 +1232,22 @@ impl Desktop {
             items.push(PaletteItem {
                 label: format!("Go to workspace {i}: {}", ws.name),
                 command: cmd.to_string(),
-                hint: self.keys.key_for(cmd).unwrap_or_default(),
+                hint: self.keys.key_for(&cmd).unwrap_or_default(),
             });
         }
-        self.palette = Some(Palette::new(items));
+        for name in self
+            .known_sessions
+            .iter()
+            .filter(|n| **n != self.session.name)
+        {
+            let cmd = Command::SessionSwitch(name.clone());
+            items.push(PaletteItem {
+                label: format!("Switch to session {name}"),
+                command: cmd.to_string(),
+                hint: String::new(),
+            });
+        }
+        self.ui.palette = Some(Palette::new(items));
         self.dirty = true;
     }
 
@@ -1005,7 +1266,7 @@ impl Desktop {
                     self.clock_deadline = None;
                 }
                 self.config = config;
-                self.key_state = KeyState::Normal;
+                self.ui.key_state = KeyState::Normal;
                 if errors.is_empty() {
                     self.notify(Level::Info, "config reloaded");
                 } else {
@@ -1061,11 +1322,11 @@ impl Desktop {
         let area = self.layout_area();
         self.dirty = true;
         // Status line.
-        if m.y == self.status_y() && self.drag.is_none() {
+        if m.y == self.status_y() && self.ui.drag.is_none() {
             if let MouseKind::Down(MouseButton::Left) = m.kind {
-                if let Some(idx) = self.status_regions.tab_at(m.x, m.y) {
+                if let Some(idx) = self.ui.status_regions.tab_at(m.x, m.y) {
                     self.session.select(idx);
-                } else if let Some(p) = self.status_regions.minimized_at(m.x, m.y) {
+                } else if let Some(p) = self.ui.status_regions.minimized_at(m.x, m.y) {
                     self.session.active_mut().toggle_minimize(p);
                 }
             }
@@ -1093,7 +1354,7 @@ impl Desktop {
         if button != MouseButton::Left {
             if let Hit::Pane { pane, .. } = hit {
                 if self.pane_wants_mouse(pane, &m) {
-                    self.mouse_owner = Some(pane);
+                    self.ui.mouse_owner = Some(pane);
                     self.forward_mouse(pane, m);
                 } else if button == MouseButton::Middle {
                     self.session.active_mut().set_focus(pane);
@@ -1114,7 +1375,7 @@ impl Desktop {
             Hit::FloatTitle(pane) => {
                 self.session.active_mut().set_focus(pane);
                 if let Some(r) = self.session.active().float_rect(pane) {
-                    self.drag = Some(Drag::Move {
+                    self.ui.drag = Some(Drag::Move {
                         pane,
                         dx: m.x.saturating_sub(r.x),
                         dy: m.y.saturating_sub(r.y),
@@ -1124,7 +1385,7 @@ impl Desktop {
             Hit::FloatEdge(pane, edge) => {
                 self.session.active_mut().set_focus(pane);
                 if let Some(start) = self.session.active().float_rect(pane) {
-                    self.drag = Some(Drag::Resize {
+                    self.ui.drag = Some(Drag::Resize {
                         pane,
                         edge,
                         start,
@@ -1134,7 +1395,7 @@ impl Desktop {
                 }
             }
             Hit::Separator(sep) => {
-                self.drag = Some(Drag::Separator {
+                self.ui.drag = Some(Drag::Separator {
                     path: sep.path,
                     index: sep.index,
                     dir: sep.dir,
@@ -1143,7 +1404,7 @@ impl Desktop {
             Hit::Pane { pane, x, y } => {
                 self.session.active_mut().set_focus(pane);
                 if self.pane_wants_mouse(pane, &m) {
-                    self.mouse_owner = Some(pane);
+                    self.ui.mouse_owner = Some(pane);
                     self.forward_mouse(pane, m);
                 } else if let Some(Pane {
                     kind: PaneKind::Term { vt, .. },
@@ -1151,7 +1412,7 @@ impl Desktop {
                 }) = self.panes.get(&pane)
                 {
                     let off = i32::try_from(vt.display_offset()).unwrap_or(0);
-                    self.drag = Some(Drag::Select {
+                    self.ui.drag = Some(Drag::Select {
                         pane,
                         col: x,
                         line: i32::from(y) - off,
@@ -1166,8 +1427,8 @@ impl Desktop {
     }
 
     fn mouse_drag(&mut self, m: MouseEvent, button: MouseButton, area: Rect) {
-        let Some(drag) = self.drag.clone() else {
-            if let Some(owner) = self.mouse_owner {
+        let Some(drag) = self.ui.drag.clone() else {
+            if let Some(owner) = self.ui.mouse_owner {
                 self.forward_mouse(owner, m);
             }
             return;
@@ -1249,7 +1510,7 @@ impl Desktop {
                         cm.move_to(col, line, vt.as_ref());
                         cm.begin_selection(false);
                     }
-                    self.drag = Some(Drag::Select {
+                    self.ui.drag = Some(Drag::Select {
                         pane,
                         col,
                         line,
@@ -1272,8 +1533,14 @@ impl Desktop {
     }
 
     fn mouse_up(&mut self, m: MouseEvent, button: MouseButton, area: Rect) {
-        let drag = self.drag.take();
-        if let Some(owner) = self.mouse_owner.take() {
+        let drag = self.ui.drag.take();
+        if matches!(
+            drag,
+            Some(Drag::Move { .. } | Drag::Resize { .. } | Drag::Separator { .. })
+        ) {
+            self.layout_changed = true;
+        }
+        if let Some(owner) = self.ui.mouse_owner.take() {
             self.forward_mouse(owner, m);
             return;
         }
@@ -1401,7 +1668,7 @@ impl Desktop {
                         VtEvent::ResetTitle => pane.title.clear(),
                         VtEvent::Bell => {
                             if visible {
-                                self.outbox.push(ServerMsg::Bell);
+                                self.outbox.push((None, ServerMsg::Bell));
                             } else {
                                 pane.bell = true;
                                 self.dirty = true;
@@ -1409,10 +1676,13 @@ impl Desktop {
                         }
                         VtEvent::Reply(bytes) => pty.write(bytes),
                         VtEvent::Clipboard(text) => {
-                            self.outbox.push(ServerMsg::Clipboard(text.clone()));
+                            self.outbox.push((None, ServerMsg::Clipboard(text.clone())));
                             self.paste_buffer = Some(text);
                         }
-                        VtEvent::Cwd(p) => pane.cwd = Some(p),
+                        VtEvent::Cwd(p) => {
+                            pane.cwd = Some(p);
+                            self.layout_changed = true;
+                        }
                     }
                 }
                 if visible {
@@ -1435,11 +1705,13 @@ impl Desktop {
     /// idle with the clock disabled: no wakeups at all (D-028).
     pub fn next_deadline(&self) -> Option<Instant> {
         let mut t: Vec<Instant> = Vec::new();
-        if let Some(d) = self.whichkey_deadline {
-            t.push(d);
-        }
-        if let KeyState::Repeat(until) = self.key_state {
-            t.push(until);
+        for ui in self.clients.values().chain(self.current.map(|_| &self.ui)) {
+            if let Some(d) = ui.whichkey_deadline {
+                t.push(d);
+            }
+            if let KeyState::Repeat(until) = ui.key_state {
+                t.push(until);
+            }
         }
         if let Some(d) = self.notes.deadline() {
             t.push(d);
@@ -1458,17 +1730,20 @@ impl Desktop {
     }
 
     pub fn on_timer(&mut self, now: Instant) {
-        if self.whichkey_deadline.is_some_and(|d| d <= now) {
-            self.whichkey_deadline = None;
-            if self.key_state == KeyState::Prefix {
-                self.whichkey_visible = true;
-                self.dirty = true;
+        self.leave();
+        for ui in self.clients.values_mut() {
+            if ui.whichkey_deadline.is_some_and(|d| d <= now) {
+                ui.whichkey_deadline = None;
+                if ui.key_state == KeyState::Prefix {
+                    ui.whichkey_visible = true;
+                    self.dirty = true;
+                }
             }
-        }
-        if let KeyState::Repeat(until) = self.key_state
-            && until <= now
-        {
-            self.key_state = KeyState::Normal;
+            if let KeyState::Repeat(until) = ui.key_state
+                && until <= now
+            {
+                ui.key_state = KeyState::Normal;
+            }
         }
         if self.notes.expire(now) {
             self.dirty = true;
@@ -1582,7 +1857,7 @@ impl Desktop {
             session: &self.session.name,
             tabs,
             minimized,
-            prefix: self.key_state == KeyState::Prefix,
+            prefix: self.ui.key_state == KeyState::Prefix,
             copy_mode: self.copy.is_some(),
             message: self.notes.toast(),
             clock: self
@@ -1591,14 +1866,25 @@ impl Desktop {
                 .clock
                 .then(|| jiff::Zoned::now().strftime("%H:%M").to_string()),
             prompt: self
+                .ui
                 .prompt
                 .as_ref()
                 .map(|p| (p.label.as_str(), p.input.as_str())),
         }
     }
 
-    /// Draws the whole screen into `grid` and returns the cursor.
-    pub fn render(&mut self, grid: &mut Grid) -> Option<CursorState> {
+    /// Draws the whole screen as `client` sees it into `grid` (at the session
+    /// size) and returns the cursor.
+    pub fn render(&mut self, client: ClientId, grid: &mut Grid) -> Option<CursorState> {
+        if !self.enter(client) {
+            return None;
+        }
+        let cursor = self.render_current(grid);
+        self.leave();
+        cursor
+    }
+
+    fn render_current(&mut self, grid: &mut Grid) -> Option<CursorState> {
         if grid.cols() != self.cols || grid.rows() != self.rows {
             grid.resize(self.cols, self.rows);
         }
@@ -1660,20 +1946,22 @@ impl Desktop {
         let status_y = self.status_y();
         let info = self.status_info();
         let (regions, prompt_cursor) = status::draw(grid, status_y, &self.theme, &info);
-        self.status_regions = regions;
+        self.ui.status_regions = regions;
 
-        if self.whichkey_visible || self.whichkey_full {
-            whichkey::draw(grid, area, &self.theme, &self.keys, self.whichkey_full);
+        if self.ui.whichkey_visible || self.ui.whichkey_full {
+            whichkey::draw(grid, area, &self.theme, &self.keys, self.ui.whichkey_full);
         }
         let palette_cursor = self
+            .ui
             .palette
             .as_ref()
             .map(|p| p.render(grid, area, &self.theme));
 
         let title = format!("TermOS · {}", self.session.active().name);
-        if title != self.title_sent {
-            self.outbox.push(ServerMsg::Title(title.clone()));
-            self.title_sent = title;
+        if title != self.ui.title_sent {
+            self.outbox
+                .push((self.current, ServerMsg::Title(title.clone())));
+            self.ui.title_sent = title;
         }
 
         let bar = |x: u16, y: u16| CursorState {
@@ -1688,7 +1976,7 @@ impl Desktop {
         if let Some((x, y)) = palette_cursor {
             return Some(bar(x, y));
         }
-        if self.whichkey_visible || self.whichkey_full {
+        if self.ui.whichkey_visible || self.ui.whichkey_full {
             return None;
         }
         let focus = focus?;

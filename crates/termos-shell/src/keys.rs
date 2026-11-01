@@ -10,7 +10,7 @@ use termos_wm::workspace::SplitHow;
 use crate::commands::Command;
 
 /// A key bound to a command.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Binding {
     pub key: KeyEvent,
     pub command: Command,
@@ -96,6 +96,10 @@ pub fn default_prefix_bindings() -> Vec<Binding> {
         b("N", C::Notifications),
         b("F1", C::Tutorial),
         b("r", C::ReloadConfig),
+        b("d", C::Detach),
+        b("(", C::SessionPrev),
+        b(")", C::SessionNext),
+        b("$", C::SessionRename),
     ];
     for (i, preset) in Preset::ALL.iter().enumerate() {
         v.push(b(&format!("M-{}", i + 1), C::LayoutSelect(*preset)));
@@ -111,7 +115,7 @@ pub fn default_root_bindings() -> Vec<Binding> {
     vec![b("C-Space", Command::Palette)]
 }
 
-fn is_repeatable(c: Command) -> bool {
+fn is_repeatable(c: &Command) -> bool {
     matches!(c, Command::Resize(..))
 }
 
@@ -129,11 +133,14 @@ fn apply_overrides(
             continue;
         }
         match value.parse::<Command>() {
-            Ok(command) => table.push(Binding {
-                key: *k,
-                command,
-                repeat: is_repeatable(command),
-            }),
+            Ok(command) => {
+                let repeat = is_repeatable(&command);
+                table.push(Binding {
+                    key: *k,
+                    command,
+                    repeat,
+                });
+            }
             Err(e) => errors.push(format!("[keys.{section}] \"{k}\": {e}")),
         }
     }
@@ -172,21 +179,21 @@ impl KeyTables {
     }
 
     pub fn lookup_prefix(&self, key: KeyEvent) -> Option<Binding> {
-        self.prefix.iter().rev().find(|b| b.key == key).copied()
+        self.prefix.iter().rev().find(|b| b.key == key).cloned()
     }
 
     pub fn lookup_root(&self, key: KeyEvent) -> Option<Binding> {
-        self.root.iter().rev().find(|b| b.key == key).copied()
+        self.root.iter().rev().find(|b| b.key == key).cloned()
     }
 
     /// The first key bound to `command` (prefix table first), for hints.
-    pub fn key_for(&self, command: Command) -> Option<String> {
-        if let Some(b) = self.root.iter().find(|b| b.command == command) {
+    pub fn key_for(&self, command: &Command) -> Option<String> {
+        if let Some(b) = self.root.iter().find(|b| b.command == *command) {
             return Some(b.key.to_string());
         }
         self.prefix
             .iter()
-            .find(|b| b.command == command)
+            .find(|b| b.command == *command)
             .map(|b| format!("{} {}", self.prefix_key, b.key))
     }
 }
@@ -236,8 +243,8 @@ mod tests {
             t.lookup_root(KeyEvent::ctrl(' ')).map(|b| b.command),
             Some(Command::Palette)
         );
-        assert_eq!(t.key_for(Command::Palette).as_deref(), Some("C-Space"));
-        assert_eq!(t.key_for(Command::Zoom).as_deref(), Some("C-b z"));
+        assert_eq!(t.key_for(&Command::Palette).as_deref(), Some("C-Space"));
+        assert_eq!(t.key_for(&Command::Zoom).as_deref(), Some("C-b z"));
         // No duplicate keys in the default prefix table.
         let mut keys: Vec<String> = t.prefix.iter().map(|b| b.key.to_string()).collect();
         let n = keys.len();

@@ -163,6 +163,8 @@ fn run_desktop(force: bool, paths: &Paths, config_path: &Path) -> anyhow::Result
         config_path: config_path.to_owned(),
         paths: paths.clone(),
         env_shell: std::env::var("SHELL").ok(),
+        pane_ids: termos_core::ids::PaneIds::new(),
+        pane_env: Vec::new(),
     };
     let mut desktop =
         Desktop::new(opts, config, pty_tx, cols, rows).context("cannot start the first shell")?;

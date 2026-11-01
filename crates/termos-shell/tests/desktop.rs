@@ -6,7 +6,10 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use termos_core::config::Config;
-use termos_core::ids::PaneId;
+use termos_core::ids::{ClientId, PaneId};
+
+/// The one client these tests attach.
+const C: ClientId = ClientId(1);
 use termos_core::input::{KeyEvent, Mods, MouseButton, MouseEvent, MouseKind};
 use termos_core::paths::Paths;
 use termos_core::proto::{ClientMsg, ServerMsg};
@@ -55,14 +58,19 @@ impl Harness {
             config_path: paths.config_file(),
             paths,
             env_shell: None,
+            pane_ids: termos_core::ids::PaneIds::new(),
+            pane_env: Vec::new(),
         };
         let mut desktop = Desktop::new(opts, config, tx, COLS, ROWS).expect("desktop starts");
-        desktop.handle_client(ClientMsg::Hello {
-            version: termos_core::proto::PROTOCOL_VERSION,
-            caps: Caps::default(),
-            cols: COLS,
-            rows: ROWS,
-        });
+        desktop.handle_client(
+            C,
+            ClientMsg::Hello {
+                version: termos_core::proto::PROTOCOL_VERSION,
+                caps: Caps::default(),
+                cols: COLS,
+                rows: ROWS,
+            },
+        );
         Self {
             desktop,
             pty_rx,
@@ -78,8 +86,9 @@ impl Harness {
 
     fn key(&mut self, spec: &str) {
         let k: KeyEvent = spec.parse().expect("key spec");
-        self.desktop.handle_client(ClientMsg::Key(k));
-        self.outbox.extend(self.desktop.take_outbox());
+        self.desktop.handle_client(C, ClientMsg::Key(k));
+        self.outbox
+            .extend(self.desktop.take_outbox().into_iter().map(|(_, m)| m));
     }
 
     fn keys(&mut self, specs: &str) {
@@ -94,22 +103,26 @@ impl Harness {
                 '\n' => KeyEvent::plain(termos_core::input::KeyCode::Enter),
                 c => KeyEvent::ch(c),
             };
-            self.desktop.handle_client(ClientMsg::Key(k));
+            self.desktop.handle_client(C, ClientMsg::Key(k));
         }
     }
 
     fn mouse(&mut self, kind: MouseKind, x: u16, y: u16) {
-        self.desktop.handle_client(ClientMsg::Mouse(MouseEvent {
-            kind,
-            x,
-            y,
-            mods: Mods::empty(),
-        }));
+        self.desktop.handle_client(
+            C,
+            ClientMsg::Mouse(MouseEvent {
+                kind,
+                x,
+                y,
+                mods: Mods::empty(),
+            }),
+        );
     }
 
     fn screen(&mut self) -> String {
-        self.desktop.render(&mut self.grid);
-        self.outbox.extend(self.desktop.take_outbox());
+        self.desktop.render(C, &mut self.grid);
+        self.outbox
+            .extend(self.desktop.take_outbox().into_iter().map(|(_, m)| m));
         self.grid.to_text()
     }
 
@@ -215,10 +228,10 @@ async fn workspaces_new_switch_rename() {
     h.keys("C-b 0");
     assert_eq!(h.desktop.session().active_index(), 0);
     h.keys("C-b ,");
-    assert!(h.desktop.prompt_open());
+    assert!(h.desktop.prompt_open(C));
     h.key("C-u");
     h.type_text("web\n");
-    assert!(!h.desktop.prompt_open());
+    assert!(!h.desktop.prompt_open(C));
     let screen = h.screen();
     let status = screen.lines().last().unwrap_or("");
     assert!(status.contains("0:web*"), "{status:?}");
@@ -262,37 +275,37 @@ async fn palette_runs_commands() {
     let mut h = Harness::new("");
     h.keys("C-b %");
     h.key("C-Space");
-    assert!(h.desktop.palette_open());
+    assert!(h.desktop.palette_open(C));
     let screen = h.screen();
     assert!(screen.contains("Command palette"), "{screen}");
     h.type_text("zoom");
     h.key("Enter");
-    assert!(!h.desktop.palette_open());
+    assert!(!h.desktop.palette_open(C));
     assert!(h.desktop.session().active().zoomed().is_some());
     h.keys("C-b :");
-    assert!(h.desktop.palette_open());
+    assert!(h.desktop.palette_open(C));
     h.key("Escape");
-    assert!(!h.desktop.palette_open());
+    assert!(!h.desktop.palette_open(C));
 }
 
 #[tokio::test]
 async fn which_key_appears_after_a_pause() {
     let mut h = Harness::new("");
     h.key("C-b");
-    assert!(!h.desktop.whichkey_visible());
+    assert!(!h.desktop.whichkey_visible(C));
     let deadline = h.desktop.next_deadline().expect("which-key timer armed");
     h.desktop.on_timer(deadline);
-    assert!(h.desktop.whichkey_visible());
+    assert!(h.desktop.whichkey_visible(C));
     let screen = h.screen();
     assert!(screen.contains("C-b …"), "{screen}");
     assert!(screen.contains("PREFIX"), "{screen}");
     h.key("z");
-    assert!(!h.desktop.whichkey_visible());
+    assert!(!h.desktop.whichkey_visible(C));
     // prefix ? shows everything until a key is pressed.
     h.keys("C-b ?");
     assert!(h.screen().contains("Key bindings"));
     h.key("q");
-    assert!(!h.desktop.whichkey_visible());
+    assert!(!h.desktop.whichkey_visible(C));
 }
 
 #[tokio::test]
@@ -300,7 +313,7 @@ async fn kill_pane_needs_confirmation_and_exit_closes() {
     let mut h = Harness::new("");
     h.keys("C-b %");
     h.keys("C-b x");
-    assert!(h.desktop.prompt_open());
+    assert!(h.desktop.prompt_open(C));
     h.key("n");
     assert_eq!(h.panes().len(), 2);
     h.keys("C-b x y");
@@ -322,7 +335,7 @@ async fn send_prefix_and_unbound_keys() {
     // C-b C-b sends C-b to the shell; C-b <unbound> does nothing.
     h.keys("C-b C-b C-b Q");
     assert_eq!(h.panes().len(), 1);
-    assert!(!h.desktop.prompt_open());
+    assert!(!h.desktop.prompt_open(C));
 }
 
 #[tokio::test]
@@ -439,4 +452,81 @@ async fn tutorial_on_first_run_and_notification_center() {
     assert!(screen.contains("Notifications"), "{screen}");
     h.key("Escape");
     assert_eq!(h.panes().len(), 1);
+}
+
+fn hello(cols: u16, rows: u16) -> ClientMsg {
+    ClientMsg::Hello {
+        version: termos_core::proto::PROTOCOL_VERSION,
+        caps: Caps::default(),
+        cols,
+        rows,
+    }
+}
+
+#[tokio::test]
+async fn two_clients_share_the_session_but_not_overlays() {
+    let mut h = Harness::new("");
+    let d2 = ClientId(2);
+    h.desktop.handle_client(d2, hello(COLS, ROWS));
+    assert_eq!(h.desktop.client_ids(), vec![C, d2]);
+    // Client 2 opens the palette; client 1 does not see it.
+    h.desktop
+        .handle_client(d2, ClientMsg::Key(KeyEvent::ctrl(' ')));
+    assert!(h.desktop.palette_open(d2));
+    assert!(!h.desktop.palette_open(C));
+    // Client 1 splits; both see the new layout.
+    h.keys("C-b %");
+    assert_eq!(h.panes().len(), 2);
+    let mut g2 = Grid::new(COLS, ROWS);
+    h.desktop.render(d2, &mut g2);
+    assert!(g2.to_text().contains('│'));
+    assert!(g2.to_text().contains("Command palette"));
+    assert!(!h.screen().contains("Command palette"));
+    // A prefix pressed on client 2 does not arm client 1.
+    h.desktop.handle_client(
+        d2,
+        ClientMsg::Key(KeyEvent::plain(termos_core::input::KeyCode::Esc)),
+    );
+    h.desktop
+        .handle_client(d2, ClientMsg::Key(KeyEvent::ctrl('b')));
+    h.key("z");
+    assert!(
+        h.desktop.session().active().zoomed().is_none(),
+        "z went to the shell, not the WM"
+    );
+    // Detach is addressed to the client that asked.
+    h.desktop
+        .handle_client(d2, ClientMsg::Key(KeyEvent::ch('d')));
+    let out = h.desktop.take_outbox();
+    assert!(out.iter().any(|(to, m)| *to == Some(d2)
+        && *m
+            == ServerMsg::Detached {
+                session: "test".into()
+            }));
+    h.desktop.detach_client(d2);
+    assert_eq!(h.desktop.client_ids(), vec![C]);
+}
+
+#[tokio::test]
+async fn window_size_policies() {
+    for (policy, expect) in [
+        ("latest", (90, 20)),
+        ("smallest", (90, 20)),
+        ("largest", (COLS, ROWS)),
+    ] {
+        let mut h = Harness::new(&format!("[session]\nwindow-size = \"{policy}\""));
+        h.desktop.handle_client(ClientId(2), hello(90, 20));
+        assert_eq!((h.desktop.cols(), h.desktop.rows()), expect, "{policy}");
+        // Under `latest`, typing on client 1 makes it the size again.
+        if policy == "latest" {
+            h.key("a");
+            assert_eq!((h.desktop.cols(), h.desktop.rows()), (COLS, ROWS));
+        }
+        h.desktop.detach_client(ClientId(2));
+        assert_eq!(
+            (h.desktop.cols(), h.desktop.rows()),
+            (COLS, ROWS),
+            "{policy}"
+        );
+    }
 }
