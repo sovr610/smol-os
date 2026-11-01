@@ -10,7 +10,7 @@ use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
 
-use crate::color::{ColorDepth, Rgb};
+use crate::color::{ColorDepth, Rgb, xterm_256_to_rgb};
 use crate::probe::Replies;
 
 /// A size in pixels.
@@ -18,6 +18,13 @@ use crate::probe::Replies;
 pub struct PxSize {
     pub width: u32,
     pub height: u32,
+}
+
+/// The background from `COLORFGBG` (`fg;bg` or rxvt's `fg;default;bg`,
+/// ANSI indexes), until the terminal answers OSC 11.
+fn colorfgbg(v: &str) -> Option<Rgb> {
+    let bg: u8 = v.rsplit(';').next()?.trim().parse().ok()?;
+    (bg < 16).then(|| xterm_256_to_rgb(bg))
 }
 
 /// Image protocols a terminal understands.
@@ -214,6 +221,7 @@ impl Caps {
                 || get("SSH_CLIENT").is_some()
                 || get("SSH_TTY").is_some(),
             reduced_motion: truthy("TERMOS_REDUCED_MOTION"),
+            background: get("COLORFGBG").as_deref().and_then(colorfgbg),
             ..Self::default()
         }
     }
@@ -475,6 +483,16 @@ mod tests {
             "the override wins"
         );
         assert!(!detect(&[]).remote);
+        // COLORFGBG hints at the background until OSC 11 answers.
+        assert_eq!(
+            detect(&[("COLORFGBG", "0;15")]).background,
+            Some(Rgb::new(255, 255, 255))
+        );
+        assert_eq!(
+            detect(&[("COLORFGBG", "15;default;0")]).background,
+            Some(Rgb::BLACK)
+        );
+        assert_eq!(detect(&[("COLORFGBG", "junk")]).background, None);
         assert!("sixel".parse::<ImageProtocol>().is_ok());
         assert!("png".parse::<ImageProtocol>().is_err());
     }

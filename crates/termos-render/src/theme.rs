@@ -1,44 +1,46 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//! Themes: a few base colours (user-configurable) from which every UI style
-//! is derived.
+//! Themes: a few base colours from which every UI style is derived.
+//!
+//! Three presets (dark, light, high contrast); `[theme]` in config.toml
+//! picks one (`base`, default `auto`: dark or light to match the
+//! terminal's background) and can override any colour.
+
+use std::fmt;
+use std::str::FromStr;
 
 use serde::{Deserialize, Deserializer};
 
 use crate::cell::{Attrs, Style};
 use crate::color::{Color, Palette, Rgb, XTERM_ANSI};
 
-fn color_from_str<'de, D: Deserializer<'de>>(d: D) -> Result<Color, D::Error> {
+fn opt_color<'de, D: Deserializer<'de>>(d: D) -> Result<Option<Color>, D::Error> {
     let s = String::deserialize(d)?;
-    s.parse().map_err(serde::de::Error::custom)
+    s.parse().map(Some).map_err(serde::de::Error::custom)
 }
 
-/// The configurable base colours (`[theme]` in config.toml).
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(default, rename_all = "kebab-case", deny_unknown_fields)]
+/// The base colours of a theme.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ThemeColors {
-    #[serde(deserialize_with = "color_from_str")]
     pub accent: Color,
-    #[serde(deserialize_with = "color_from_str")]
     pub fg: Color,
-    #[serde(deserialize_with = "color_from_str")]
     pub muted: Color,
-    #[serde(deserialize_with = "color_from_str")]
     pub border: Color,
-    #[serde(deserialize_with = "color_from_str")]
     pub status_bg: Color,
-    #[serde(deserialize_with = "color_from_str")]
     pub status_fg: Color,
-    #[serde(deserialize_with = "color_from_str")]
     pub overlay_bg: Color,
-    #[serde(deserialize_with = "color_from_str")]
     pub selection_bg: Color,
-    #[serde(deserialize_with = "color_from_str")]
     pub warn: Color,
 }
 
 impl Default for ThemeColors {
-    /// The built-in dark theme.
     fn default() -> Self {
+        Self::dark()
+    }
+}
+
+impl ThemeColors {
+    /// The dark preset.
+    pub const fn dark() -> Self {
         Self {
             accent: Color::rgb(0x6c, 0xb6, 0xff),
             fg: Color::rgb(0xd0, 0xd7, 0xe2),
@@ -50,6 +52,151 @@ impl Default for ThemeColors {
             selection_bg: Color::rgb(0x2d, 0x4a, 0x6e),
             warn: Color::rgb(0xe5, 0xa5, 0x4b),
         }
+    }
+
+    /// The light preset, for terminals with a light background.
+    pub const fn light() -> Self {
+        Self {
+            accent: Color::rgb(0x09, 0x69, 0xda),
+            fg: Color::rgb(0x1f, 0x23, 0x28),
+            muted: Color::rgb(0x59, 0x63, 0x6e),
+            border: Color::rgb(0xb0, 0xb8, 0xc1),
+            status_bg: Color::rgb(0xea, 0xee, 0xf2),
+            status_fg: Color::rgb(0x1f, 0x23, 0x28),
+            overlay_bg: Color::rgb(0xf6, 0xf8, 0xfa),
+            selection_bg: Color::rgb(0xb6, 0xe3, 0xff),
+            warn: Color::rgb(0x9a, 0x67, 0x00),
+        }
+    }
+
+    /// The high-contrast preset: white and black with saturated accents,
+    /// every text colour at least 7:1 against its background (WCAG AAA).
+    pub const fn high_contrast() -> Self {
+        Self {
+            accent: Color::rgb(0xff, 0xd7, 0x00),
+            fg: Color::rgb(0xff, 0xff, 0xff),
+            muted: Color::rgb(0xd0, 0xd0, 0xd0),
+            border: Color::rgb(0xc0, 0xc0, 0xc0),
+            status_bg: Color::rgb(0x00, 0x00, 0x00),
+            status_fg: Color::rgb(0xff, 0xff, 0xff),
+            overlay_bg: Color::rgb(0x00, 0x00, 0x00),
+            selection_bg: Color::rgb(0x00, 0x3d, 0xa5),
+            warn: Color::rgb(0xff, 0x9e, 0x3d),
+        }
+    }
+}
+
+/// Which preset a theme starts from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ThemeBase {
+    /// Dark or light, to match the terminal's background.
+    #[default]
+    Auto,
+    Dark,
+    Light,
+    HighContrast,
+}
+
+impl ThemeBase {
+    pub const ALL: [ThemeBase; 4] = [Self::Auto, Self::Dark, Self::Light, Self::HighContrast];
+
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Dark => "dark",
+            Self::Light => "light",
+            Self::HighContrast => "high-contrast",
+        }
+    }
+
+    /// `auto` becomes dark or light: light when the terminal's background
+    /// is light, dark when it is dark or unknown.
+    pub fn resolve(self, background: Option<Rgb>) -> ThemeBase {
+        match self {
+            Self::Auto if background.is_some_and(is_light) => Self::Light,
+            Self::Auto => Self::Dark,
+            other => other,
+        }
+    }
+
+    fn colors(self) -> ThemeColors {
+        match self {
+            Self::Auto | Self::Dark => ThemeColors::dark(),
+            Self::Light => ThemeColors::light(),
+            Self::HighContrast => ThemeColors::high_contrast(),
+        }
+    }
+}
+
+impl fmt::Display for ThemeBase {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.name())
+    }
+}
+
+impl FromStr for ThemeBase {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::ALL
+            .into_iter()
+            .find(|b| b.name() == s.trim())
+            .ok_or_else(|| {
+                format!("unknown theme `{s}` (expected auto, dark, light or high-contrast)")
+            })
+    }
+}
+
+/// Whether a background colour is light (Rec. 709 luma above half).
+pub fn is_light(bg: Rgb) -> bool {
+    let luma = 0.2126 * f32::from(bg.r) + 0.7152 * f32::from(bg.g) + 0.0722 * f32::from(bg.b);
+    luma > 127.5
+}
+
+/// `[theme]` in config.toml: a preset plus colour overrides.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize)]
+#[serde(default, rename_all = "kebab-case", deny_unknown_fields)]
+pub struct ThemeConfig {
+    pub base: ThemeBase,
+    #[serde(deserialize_with = "opt_color")]
+    pub accent: Option<Color>,
+    #[serde(deserialize_with = "opt_color")]
+    pub fg: Option<Color>,
+    #[serde(deserialize_with = "opt_color")]
+    pub muted: Option<Color>,
+    #[serde(deserialize_with = "opt_color")]
+    pub border: Option<Color>,
+    #[serde(deserialize_with = "opt_color")]
+    pub status_bg: Option<Color>,
+    #[serde(deserialize_with = "opt_color")]
+    pub status_fg: Option<Color>,
+    #[serde(deserialize_with = "opt_color")]
+    pub overlay_bg: Option<Color>,
+    #[serde(deserialize_with = "opt_color")]
+    pub selection_bg: Option<Color>,
+    #[serde(deserialize_with = "opt_color")]
+    pub warn: Option<Color>,
+}
+
+impl ThemeConfig {
+    /// The theme for a terminal with this background, from `base` (or
+    /// `base_override`, a theme picked at run time) plus the overrides.
+    pub fn theme(&self, base_override: Option<ThemeBase>, background: Option<Rgb>) -> Theme {
+        let base = base_override.unwrap_or(self.base).resolve(background);
+        let p = base.colors();
+        let colors = ThemeColors {
+            accent: self.accent.unwrap_or(p.accent),
+            fg: self.fg.unwrap_or(p.fg),
+            muted: self.muted.unwrap_or(p.muted),
+            border: self.border.unwrap_or(p.border),
+            status_bg: self.status_bg.unwrap_or(p.status_bg),
+            status_fg: self.status_fg.unwrap_or(p.status_fg),
+            overlay_bg: self.overlay_bg.unwrap_or(p.overlay_bg),
+            selection_bg: self.selection_bg.unwrap_or(p.selection_bg),
+            warn: self.warn.unwrap_or(p.warn),
+        };
+        Theme::with_background(colors, base, background)
     }
 }
 
@@ -78,6 +225,8 @@ pub struct Theme {
     pub overlay_muted: Style,
     pub selection: Style,
     pub copy_mode_badge: Style,
+    /// The preset this theme was built from (never `Auto`).
+    pub base: ThemeBase,
 }
 
 impl Default for Theme {
@@ -87,26 +236,42 @@ impl Default for Theme {
 }
 
 impl Theme {
+    /// A dark theme from these colours, for an unknown dark background.
     pub fn from_colors(c: ThemeColors) -> Self {
+        Self::with_background(c, ThemeBase::Dark, None)
+    }
+
+    /// A theme from these colours. `background` is the terminal's real
+    /// background (OSC 11), which drop shadows blend toward; without it a
+    /// typical background for the preset is assumed.
+    pub fn with_background(c: ThemeColors, base: ThemeBase, background: Option<Rgb>) -> Self {
         let on = |fg: Color, bg: Color| Style::new().fg(fg).bg(bg);
-        // The terminal's real default colours are unknown until M4 queries
-        // them (OSC 10/11); assume a dark background.
-        let base = Palette {
-            fg: Rgb::new(0xd0, 0xd7, 0xe2),
-            bg: Rgb::new(0x10, 0x14, 0x18),
+        let light = base == ThemeBase::Light;
+        let palette = Palette {
+            fg: if light {
+                Rgb::new(0x1f, 0x23, 0x28)
+            } else {
+                Rgb::new(0xd0, 0xd7, 0xe2)
+            },
+            bg: background.unwrap_or(if light {
+                Rgb::new(0xff, 0xff, 0xff)
+            } else {
+                Rgb::new(0x10, 0x14, 0x18)
+            }),
             ansi: XTERM_ANSI,
         };
         Self {
             palette: Palette {
-                fg: c.fg.resolve(&base, true),
-                ..base
+                fg: c.fg.resolve(&palette, true),
+                ..palette
             },
             border: Style::new().fg(c.border),
             border_active: Style::new().fg(c.accent),
             float_border: Style::new().fg(c.accent),
             float_title: Style::new().fg(c.accent).attrs(Attrs::BOLD),
             shadow: Rgb::BLACK,
-            shadow_amount: 0.6,
+            // A light background needs a lighter touch to read as shadow.
+            shadow_amount: if light { 0.25 } else { 0.6 },
             status: on(c.status_fg, c.status_bg),
             status_tab: on(c.status_fg, c.status_bg),
             status_tab_active: on(c.status_bg, c.accent).attrs(Attrs::BOLD),
@@ -121,6 +286,7 @@ impl Theme {
             selection: Style::new().bg(c.selection_bg),
             copy_mode_badge: on(c.status_bg, c.warn).attrs(Attrs::BOLD),
             colors: c,
+            base,
         }
     }
 }
@@ -131,21 +297,97 @@ mod tests {
 
     #[derive(Deserialize)]
     struct Wrapper {
-        theme: ThemeColors,
+        theme: ThemeConfig,
     }
 
     #[test]
     fn partial_overrides_keep_defaults() {
         let w: Wrapper = toml::from_str("[theme]\naccent = \"colour208\"\n").expect("valid");
-        assert_eq!(w.theme.accent, Color::Indexed(208));
-        assert_eq!(w.theme.fg, ThemeColors::default().fg);
-        let t = Theme::from_colors(w.theme);
+        assert_eq!(w.theme.base, ThemeBase::Auto);
+        let t = w.theme.theme(None, None);
         assert_eq!(t.border_active.fg, Color::Indexed(208));
+        assert_eq!(t.colors.fg, ThemeColors::dark().fg);
     }
 
     #[test]
     fn bad_colours_and_keys_are_rejected() {
         assert!(toml::from_str::<Wrapper>("[theme]\naccent = \"nope\"\n").is_err());
         assert!(toml::from_str::<Wrapper>("[theme]\nunknown = \"red\"\n").is_err());
+        assert!(toml::from_str::<Wrapper>("[theme]\nbase = \"pink\"\n").is_err());
+    }
+
+    #[test]
+    fn auto_follows_the_background() {
+        let cfg = ThemeConfig::default();
+        let white = Some(Rgb::new(0xfa, 0xfa, 0xfa));
+        let black = Some(Rgb::new(0x10, 0x10, 0x10));
+        assert_eq!(cfg.theme(None, white).base, ThemeBase::Light);
+        assert_eq!(cfg.theme(None, black).base, ThemeBase::Dark);
+        assert_eq!(cfg.theme(None, None).base, ThemeBase::Dark, "unknown: dark");
+        // A picked theme wins over auto, and a fixed base ignores the
+        // background.
+        assert_eq!(
+            cfg.theme(Some(ThemeBase::HighContrast), white).base,
+            ThemeBase::HighContrast
+        );
+        let fixed = ThemeConfig {
+            base: ThemeBase::Dark,
+            ..ThemeConfig::default()
+        };
+        assert_eq!(fixed.theme(None, white).base, ThemeBase::Dark);
+        // Shadows blend toward the real background.
+        assert_eq!(
+            cfg.theme(None, white).palette.bg,
+            Rgb::new(0xfa, 0xfa, 0xfa)
+        );
+    }
+
+    #[test]
+    fn names_round_trip() {
+        for b in ThemeBase::ALL {
+            assert_eq!(b.name().parse::<ThemeBase>(), Ok(b));
+        }
+        assert!("solarized".parse::<ThemeBase>().is_err());
+    }
+
+    /// WCAG contrast ratio of two colours.
+    fn contrast(a: Color, b: Color) -> f32 {
+        let lum = |c: Color| {
+            let Color::Rgb(Rgb { r, g, b }) = c else {
+                panic!("presets use RGB colours")
+            };
+            let lin = |v: u8| {
+                let v = f32::from(v) / 255.0;
+                if v <= 0.039_28 {
+                    v / 12.92
+                } else {
+                    ((v + 0.055) / 1.055).powf(2.4)
+                }
+            };
+            0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b)
+        };
+        let (x, y) = (lum(a), lum(b));
+        (x.max(y) + 0.05) / (x.min(y) + 0.05)
+    }
+
+    #[test]
+    fn high_contrast_meets_aaa() {
+        let c = ThemeColors::high_contrast();
+        for (fg, bg, what) in [
+            (c.fg, c.overlay_bg, "text on overlays"),
+            (c.muted, c.overlay_bg, "muted text"),
+            (c.accent, c.overlay_bg, "accent"),
+            (c.warn, c.overlay_bg, "warnings"),
+            (c.status_fg, c.status_bg, "status line"),
+            (c.status_bg, c.accent, "active tab"),
+            (c.fg, c.selection_bg, "selected text"),
+        ] {
+            assert!(contrast(fg, bg) >= 7.0, "{what}: {:.1}", contrast(fg, bg));
+        }
+        // The other presets meet AA for their main text.
+        for c in [ThemeColors::dark(), ThemeColors::light()] {
+            assert!(contrast(c.fg, c.overlay_bg) >= 4.5);
+            assert!(contrast(c.status_fg, c.status_bg) >= 4.5);
+        }
     }
 }

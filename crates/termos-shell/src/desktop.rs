@@ -280,7 +280,7 @@ impl Desktop {
         cols: u16,
         rows: u16,
     ) -> Self {
-        let theme = Theme::from_colors(config.theme.clone());
+        let theme = config.theme.theme(None, None);
         let (keys, key_errors) = KeyTables::from_config(&config);
         let placeholder = Session::new(
             opts.session_name.clone(),
@@ -1584,7 +1584,7 @@ impl Desktop {
         match Config::load(&self.opts.config_path) {
             Ok(config) => {
                 let (keys, errors) = KeyTables::from_config(&config);
-                self.theme = Theme::from_colors(config.theme.clone());
+                self.theme = config.theme.theme(None, None);
                 self.keys = keys;
                 if config.status.clock && self.clock_deadline.is_none() {
                     self.clock_deadline = Some(next_minute(Instant::now()));

@@ -8,8 +8,9 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Deserializer};
+use termos_render::caps::ImageProtocol;
 use termos_render::grid::BorderKind;
-use termos_render::theme::ThemeColors;
+use termos_render::theme::ThemeConfig;
 
 use crate::input::KeyEvent;
 
@@ -35,7 +36,9 @@ pub struct Config {
     pub whichkey: WhichKeyConfig,
     pub tutorial: TutorialConfig,
     pub floats: FloatConfig,
-    pub theme: ThemeColors,
+    pub theme: ThemeConfig,
+    pub ui: UiConfig,
+    pub graphics: GraphicsConfig,
     pub session: SessionConfig,
     pub plugins: PluginsConfig,
 }
@@ -53,7 +56,9 @@ impl Default for Config {
             whichkey: WhichKeyConfig::default(),
             tutorial: TutorialConfig::default(),
             floats: FloatConfig::default(),
-            theme: ThemeColors::default(),
+            theme: ThemeConfig::default(),
+            ui: UiConfig::default(),
+            graphics: GraphicsConfig::default(),
             session: SessionConfig::default(),
             plugins: PluginsConfig::default(),
         }
@@ -219,6 +224,59 @@ impl Default for SessionConfig {
             save_scrollback: false,
             scrollback_lines: 2000,
             snapshot_delay_ms: 2000,
+        }
+    }
+}
+
+/// Motion (D-042).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(default, deny_unknown_fields, rename_all = "kebab-case")]
+pub struct UiConfig {
+    /// Animate floats opening and closing and toasts. Off anyway for
+    /// clients over SSH and with `reduced-motion`.
+    pub animations: bool,
+    /// No animations for any client (also per terminal:
+    /// `TERMOS_REDUCED_MOTION=1`).
+    pub reduced_motion: bool,
+}
+
+impl Default for UiConfig {
+    fn default() -> Self {
+        Self {
+            animations: true,
+            reduced_motion: false,
+        }
+    }
+}
+
+/// How images are shown (ARCHITECTURE.md §5.8).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(default, deny_unknown_fields, rename_all = "kebab-case")]
+pub struct GraphicsConfig {
+    /// `auto` picks the best protocol each terminal supports.
+    pub protocol: ProtocolSetting,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ProtocolSetting {
+    #[default]
+    Auto,
+    Kitty,
+    Sixel,
+    Iterm2,
+    Blocks,
+}
+
+impl ProtocolSetting {
+    /// The protocol to force, if any.
+    pub const fn forced(self) -> Option<ImageProtocol> {
+        match self {
+            Self::Auto => None,
+            Self::Kitty => Some(ImageProtocol::Kitty),
+            Self::Sixel => Some(ImageProtocol::Sixel),
+            Self::Iterm2 => Some(ImageProtocol::Iterm2),
+            Self::Blocks => Some(ImageProtocol::Blocks),
         }
     }
 }
@@ -389,17 +447,28 @@ snapshot-delay-ms = 2000
 [plugins]
 enabled = []             # plugin directory names under ~/.config/termos/plugins
 
-# Colours: "default", "#rrggbb", "colourN" (0-255) or names like "brightblue".
 [theme]
-accent = "#6cb6ff"
-fg = "#d0d7e2"
-muted = "#7d8590"
-border = "#444c56"
-status-bg = "#1c2128"
-status-fg = "#adbac7"
-overlay-bg = "#22272e"
-selection-bg = "#2d4a6e"
-warn = "#e5a54b"
+# auto | dark | light | high-contrast. "auto" is dark or light to match each
+# terminal's background. Switch while running: palette → "theme".
+base = "auto"
+# Override any colour of the preset: "default", "#rrggbb", "colourN"
+# (0-255) or names like "brightblue".
+# accent = "#6cb6ff"
+# fg = "#d0d7e2"
+# muted = "#7d8590"
+# border = "#444c56"
+# status-bg = "#1c2128"
+# status-fg = "#adbac7"
+# overlay-bg = "#22272e"
+# selection-bg = "#2d4a6e"
+# warn = "#e5a54b"
+
+[ui]
+animations = true        # floats and toasts; never over SSH
+reduced-motion = false   # no animations at all (or TERMOS_REDUCED_MOTION=1)
+
+[graphics]
+protocol = "auto"        # auto | kitty | sixel | iterm2 | blocks
 
 # Extra or changed bindings. Values are command names (see the palette,
 # Ctrl+Space); "none" removes a default binding.
