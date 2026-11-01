@@ -298,7 +298,6 @@ Generated from the `TODO(M<n>)` markers in the code. Don't edit by hand; run `ca
 | --- | --- | --- |
 | M1 | `crates/termos-cli/src/main.rs` | run the hosted desktop (server + terminal client) when invoked without a subcommand. |
 | M1 | `crates/termos-core/src/lib.rs` | event loop, in-memory Transport and the frame/input protocol types. |
-| M1 | `crates/termos-render/src/lib.rs` | Grid/Cell, frame diffing, the crossterm terminal backend and the headless backend. |
 | M1 | `crates/termos-term/src/lib.rs` | PTY spawning, VtBackend over alacritty_terminal, blitting into the grid, VT fuzz target. |
 | M2 | `crates/termos-core/src/lib.rs` | the `App` trait, TOML config loading with span-accurate errors, hot reload via `notify`. |
 | M2 | `crates/termos-shell/src/lib.rs` | Desktop state, command palette, which-key, status bar, notifications, first-run tutorial. |
@@ -306,7 +305,8 @@ Generated from the `TODO(M<n>)` markers in the code. Don't edit by hand; run `ca
 | M3 | `crates/termos-core/src/lib.rs` | Unix-socket transport with SO_PEERCRED checks and the JSON-RPC control API. |
 | M3 | `crates/termos-shell/src/lib.rs` | out-of-process plugin host over the JSON-RPC control API. |
 | M4 | `crates/termos-apps/src/lib.rs` | file manager, system monitor, image viewer, markdown viewer, settings, clipboard manager. |
-| M4 | `crates/termos-render/src/lib.rs` | capability detection, image protocols (Kitty, Sixel, iTerm2, block fallback), themes. |
+| M4 | `crates/termos-render/src/caps.rs` | active capability queries (DA1, XTVERSION, Kitty graphics, DECRQM 2026, OSC 11, cell size). |
+| M4 | `crates/termos-render/src/lib.rs` | image protocols (Kitty, Sixel, iTerm2, block/braille fallback) with occlusion handling. |
 | M4 | `crates/termos-shell/src/lib.rs` | optional WASM runtime for status-bar widgets (behind a cargo feature). |
 | M4 | `crates/termos-term/src/lib.rs` | intercept Kitty graphics / Sixel sequences so images work inside PTY windows. |
 | M5 | `crates/termos-apps/src/lib.rs` | package manager UI over mise, the dev rootfs and the host package manager. |
