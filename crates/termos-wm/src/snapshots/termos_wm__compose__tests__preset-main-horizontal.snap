@@ -1,0 +1,16 @@
+---
+source: crates/termos-wm/src/compose.rs
+expression: draw(&ws)
+---
+aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+─────────────┬─────────────┬────────────
+bbbbbbbbbbbbb│ccccccccccccc│dddddddddddd
+bbbbbbbbbbbbb│ccccccccccccc│dddddddddddd
+bbbbbbbbbbbbb│ccccccccccccc│dddddddddddd
+bbbbbbbbbbbbb│ccccccccccccc│dddddddddddd

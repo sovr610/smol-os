@@ -1,0 +1,16 @@
+---
+source: crates/termos-wm/src/compose.rs
+expression: draw(&ws)
+---
+╭─ pane 7 ─────–─×─╮│bbbbbbbbbbbbbbbbbbb
+│hhhhhhhhhhhhhhhhhh││bbbbbbbbbbbbbbbbbbb
+│hhhhhhhhhhhhhhhhhh││bbbbbbbbbbbbbbbbbbb
+│hhhhhhhhhhhhhhhhhh││bbbbbbbbbbbbbbbbbbb
+│hhhhhhhhhhhhhhhhhh││bbbbbbbbbbbbbbbbbbb
+│hhhhhhhhhhhhhhhhhh││bbbbbbbbbbbbbbbbbbb
+│hhhhhhhhhhhhhhhhhh│├───────────────────
+│hhhhhhhhhhhhhhhhhh││ccccccccccccccccccc
+│hhhhhhhhhhhhhhhhhh││ccccccccccccccccccc
+│hhhhhhhhhhhhhhhhhh││ccccccccccccccccccc
+│hhhhhhhhhhhhhhhhhh││ccccccccccccccccccc
+╰──────────────────╯│ccccccccccccccccccc

@@ -1,19 +1,29 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! # termos-wm
 //!
-//! The TermOS window manager: "tmux grown into a desktop".
+//! The TermOS window manager, tmux-style (DECISIONS.md D-023, D-024):
 //!
-//! **Status:** not started. Scheduled for M2 (see `ROADMAP.md`).
+//! - [`layout`]: the tiling tree of panes with one-cell separators, splits,
+//!   BSP auto-splits, resizing, directional focus and preset arrangements
+//!   (even-horizontal, even-vertical, main-vertical = master-stack,
+//!   main-horizontal, tiled = grid).
+//! - [`workspace`]: workspaces (tmux "windows") with a floating layer
+//!   (z-order, minimize, snapping, zoom), and the [`workspace::Session`].
+//! - [`hit`]: mouse hit testing (separators, float title bars, edges and
+//!   buttons, pane content).
+//! - [`compose`]: drawing it all, with junction-aware separators, an accent
+//!   on the focused pane's borders, and floats with rounded borders and
+//!   drop shadows.
 //!
-//! Planned modules (see `ARCHITECTURE.md`, "Window manager"):
-//! - `tree` — session → workspaces → a floating layer plus a tiling tree of
-//!   containers (splits, tabs, stacks).
-//! - `layout` — master-stack, grid and BSP layouts.
-//! - `floating` — move/resize, snapping to edges and halves/quarters,
-//!   minimize/maximize, z-order.
-//! - `input` — routing keys and mouse (drag, resize, focus) to the WM or to
-//!   the focused window, translating coordinates for child apps.
-//! - `compose` — drawing windows, borders, title bars and drop shadows into the
-//!   render grid in z-order.
+//! This crate is pure logic: it never touches a PTY or the terminal. Pane
+//! content is drawn through a callback.
 
-// TODO(M2): window tree, floating + tiled layouts, workspaces, mouse move/resize, compositor.
+pub mod compose;
+pub mod hit;
+pub mod layout;
+pub mod workspace;
+
+pub use compose::{ComposeOptions, compose};
+pub use hit::{Button, Edge, Hit};
+pub use layout::{Dir, Direction, Layout, Preset};
+pub use workspace::{Floating, Placement, Session, Snap, SplitHow, Workspace};
