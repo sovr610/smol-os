@@ -24,6 +24,7 @@ fn start() -> (ClientEnd, tempfile::TempDir) {
     let paths = Paths {
         config_dir: dir.path().join("config"),
         state_dir: dir.path().join("state"),
+        runtime_dir: dir.path().join("run"),
     };
     let config = Config::parse(
         "shell = \"/bin/sh\"\n[tutorial]\nshow-on-first-run = false\n[status]\nclock = false\n",

@@ -36,6 +36,8 @@ pub struct Config {
     pub tutorial: TutorialConfig,
     pub floats: FloatConfig,
     pub theme: ThemeColors,
+    pub session: SessionConfig,
+    pub plugins: PluginsConfig,
 }
 
 impl Default for Config {
@@ -52,6 +54,8 @@ impl Default for Config {
             tutorial: TutorialConfig::default(),
             floats: FloatConfig::default(),
             theme: ThemeColors::default(),
+            session: SessionConfig::default(),
+            plugins: PluginsConfig::default(),
         }
     }
 }
@@ -159,6 +163,71 @@ impl Default for FloatConfig {
             border: BorderStyle::Rounded,
         }
     }
+}
+
+/// How a session's size follows its clients (tmux `window-size`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum WindowSize {
+    /// The most recently active client's size.
+    #[default]
+    Latest,
+    /// The smallest attached client (nothing is ever clipped).
+    Smallest,
+    /// The largest attached client (smaller clients see a clipped view).
+    Largest,
+}
+
+/// What a fresh server does with saved sessions (D-033).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum RestorePolicy {
+    /// Restore without asking.
+    Always,
+    /// Ask in the status line of the first attached client.
+    #[default]
+    Ask,
+    /// Keep snapshots but restore only on request (`termos restore`).
+    Never,
+}
+
+/// Sessions: sizing, snapshots and restore.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(default, deny_unknown_fields, rename_all = "kebab-case")]
+pub struct SessionConfig {
+    pub window_size: WindowSize,
+    pub restore: RestorePolicy,
+    /// Programs that are started again when a session is restored (by
+    /// command name). Anything else running at save time is only listed.
+    pub restore_programs: Vec<String>,
+    /// Also save each pane's scrollback text (stored with mode 0600).
+    pub save_scrollback: bool,
+    /// How many lines of scrollback to save per pane.
+    pub scrollback_lines: usize,
+    /// Snapshots are written this long after the last change.
+    pub snapshot_delay_ms: u64,
+}
+
+impl Default for SessionConfig {
+    fn default() -> Self {
+        Self {
+            window_size: WindowSize::Latest,
+            restore: RestorePolicy::Ask,
+            restore_programs: ["vim", "nvim", "less", "man", "htop", "top"]
+                .map(String::from)
+                .to_vec(),
+            save_scrollback: false,
+            scrollback_lines: 2000,
+            snapshot_delay_ms: 2000,
+        }
+    }
+}
+
+/// Out-of-process plugins (D-034). Only plugins listed here are started.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize)]
+#[serde(default, deny_unknown_fields, rename_all = "kebab-case")]
+pub struct PluginsConfig {
+    pub enabled: Vec<String>,
 }
 
 fn de_key<'de, D: Deserializer<'de>>(d: D) -> Result<KeyEvent, D::Error> {
@@ -271,6 +340,17 @@ show-on-first-run = true
 [floats]
 shadow = true
 border = "rounded"    # rounded | square | heavy | double
+
+[session]
+window-size = "latest"   # latest | smallest | largest: which client sets the size
+restore = "ask"          # always | ask | never: saved sessions after a crash/reboot
+restore-programs = ["vim", "nvim", "less", "man", "htop", "top"]  # re-run on restore
+save-scrollback = false  # also save pane text (stored readable only by you)
+scrollback-lines = 2000
+snapshot-delay-ms = 2000
+
+[plugins]
+enabled = []             # plugin directory names under ~/.config/termos/plugins
 
 # Colours: "default", "#rrggbb", "colourN" (0-255) or names like "brightblue".
 [theme]

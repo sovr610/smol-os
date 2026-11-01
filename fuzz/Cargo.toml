@@ -39,3 +39,10 @@ path = "fuzz_targets/keyspec_parse.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "proto_decode"
+path = "fuzz_targets/proto_decode.rs"
+test = false
+doc = false
+bench = false

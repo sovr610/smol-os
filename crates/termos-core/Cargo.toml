@@ -14,8 +14,11 @@ publish.workspace = true
 bitflags = { workspace = true, features = ["serde"] }
 notify.workspace = true
 notify-debouncer-mini.workspace = true
+postcard.workspace = true
 ratatui-core.workspace = true
+rustix.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 termos-render.workspace = true
 thiserror.workspace = true
 tokio.workspace = true

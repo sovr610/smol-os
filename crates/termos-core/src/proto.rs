@@ -62,4 +62,9 @@ pub enum ServerMsg {
     Exit {
         reason: String,
     },
+    /// The client was detached (`C-b d`, `termos detach`); the session keeps
+    /// running in the server.
+    Detached {
+        session: String,
+    },
 }

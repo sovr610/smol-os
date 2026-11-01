@@ -208,6 +208,9 @@ pub(crate) async fn run(
                     out.flush()?;
                 }
                 Some(ServerMsg::Exit { reason }) => return Ok(reason),
+                Some(ServerMsg::Detached { session }) => {
+                    return Ok(format!("detached (from session {session})"));
+                }
                 None => return Ok("the desktop server stopped".into()),
             },
         }

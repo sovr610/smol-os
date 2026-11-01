@@ -41,6 +41,7 @@ impl Harness {
         let paths = Paths {
             config_dir: dir.path().join("config"),
             state_dir: dir.path().join("state"),
+            runtime_dir: dir.path().join("run"),
         };
         std::fs::create_dir_all(&paths.config_dir).expect("mkdir");
         let tutorial_cfg =

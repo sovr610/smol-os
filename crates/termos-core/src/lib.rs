@@ -6,8 +6,10 @@
 //! - [`ids`]: identifiers such as [`ids::PaneId`].
 //! - [`input`]: transport-neutral key/mouse events and tmux key notation.
 //! - [`proto`]: the messages between server and frontends.
-//! - [`transport`]: the channel pair a frontend and the server talk over
-//!   (in-process in M1; a socket adapter bridges to it in M3).
+//! - [`wire`]: the session-socket format: handshake, length-prefixed
+//!   postcard frames, JSON-RPC 2.0.
+//! - [`transport`]: the channel pair a frontend and the server talk over,
+//!   in-process or bridged to the socket, and control calls.
 //! - [`config`] and [`watch`]: `config.toml` with precise errors and hot
 //!   reload.
 //! - [`paths`]: XDG directories. [`log`]: file logging.
@@ -26,3 +28,4 @@ pub mod paths;
 pub mod proto;
 pub mod transport;
 pub mod watch;
+pub mod wire;
