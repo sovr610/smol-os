@@ -149,12 +149,16 @@ pub(crate) fn convert(event: Event) -> Option<ClientMsg> {
             };
             let mut mods = mods(k.modifiers);
             // Ctrl+@ and Ctrl+Space are one key in terminals (both send
-            // NUL), and a ConPTY reports NUL as Ctrl+Shift+@. Not with Alt:
-            // Ctrl+Alt+@ is AltGr typing `@` on Windows.
+            // NUL). A ConPTY turns NUL into the key that types it, Ctrl+
+            // Shift+2 on US layouts, which crossterm reports as `2`. Not
+            // with Alt: Ctrl+Alt+@ is AltGr typing `@` on Windows.
+            let ctrl_only = mods.contains(Mods::CTRL) && !mods.contains(Mods::ALT);
             let nul = matches!(code, KeyCode::Char('\0'))
-                || (matches!(code, KeyCode::Char('@'))
-                    && mods.contains(Mods::CTRL)
-                    && !mods.contains(Mods::ALT));
+                || (ctrl_only && matches!(code, KeyCode::Char('@')))
+                || (cfg!(windows)
+                    && ctrl_only
+                    && mods.contains(Mods::SHIFT)
+                    && matches!(code, KeyCode::Char('2')));
             if nul {
                 let keep = mods & Mods::ALT;
                 return Some(ClientMsg::Key(KeyEvent::new(
@@ -310,6 +314,15 @@ mod tests {
             convert(key(ct::KeyCode::Char('@'), KeyModifiers::NONE)),
             Some(ClientMsg::Key(KeyEvent::ch('@')))
         );
+        let ctrl_shift_2 = convert(key(
+            ct::KeyCode::Char('2'),
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+        ));
+        if cfg!(windows) {
+            assert_eq!(ctrl_shift_2, Some(ClientMsg::Key(KeyEvent::ctrl(' '))));
+        } else {
+            assert_ne!(ctrl_shift_2, Some(ClientMsg::Key(KeyEvent::ctrl(' '))));
+        }
         assert_eq!(
             convert(key(ct::KeyCode::Left, KeyModifiers::ALT)),
             Some(ClientMsg::Key(KeyEvent::new(KeyCode::Left, Mods::ALT)))
