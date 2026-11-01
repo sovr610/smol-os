@@ -239,7 +239,13 @@ pub(crate) async fn run(
         send(&end, msg)?;
     }
     let mut encoder = Encoder::new(&caps);
+    let mut images = crate::images::ImageStore::default();
     let mut events = EventStream::new();
+    // Kitty keeps images until told to drop them.
+    let leave = |images: &crate::images::ImageStore, out: &mut dyn Write| {
+        let _ = out.write_all(images.cleanup());
+        let _ = out.flush();
+    };
     loop {
         tokio::select! {
             ev = events.next() => match ev {
@@ -253,9 +259,19 @@ pub(crate) async fn run(
             },
             msg = end.rx.recv() => match msg {
                 Some(ServerMsg::Frame(f)) => {
-                    let bytes = encoder.frame(f.cols, &f.spans, f.cursor, f.clear);
+                    let pixels = images.frame(f.images.as_deref(), f.clear);
+                    let bytes =
+                        encoder.frame_with_images(f.cols, &f.spans, f.cursor, f.clear, &pixels);
                     out.write_all(bytes)?;
                     out.flush()?;
+                }
+                Some(ServerMsg::ImageData { id, chunk, last }) => images.data(id, chunk, last),
+                Some(ServerMsg::ImageFree { id }) => {
+                    let bytes = images.free(id);
+                    if !bytes.is_empty() {
+                        out.write_all(&bytes)?;
+                        out.flush()?;
+                    }
                 }
                 Some(ServerMsg::Clipboard(text)) => {
                     out.write_all(&osc52_copy(&text))?;
@@ -269,9 +285,18 @@ pub(crate) async fn run(
                     out.write_all(&set_title(&t))?;
                     out.flush()?;
                 }
-                Some(ServerMsg::Exit { reason }) => return Ok(Ended::Exited(reason)),
-                Some(ServerMsg::Detached { session }) => return Ok(Ended::Detached(session)),
-                None => return Ok(Ended::Exited("the server closed the connection".into())),
+                Some(ServerMsg::Exit { reason }) => {
+                    leave(&images, out);
+                    return Ok(Ended::Exited(reason));
+                }
+                Some(ServerMsg::Detached { session }) => {
+                    leave(&images, out);
+                    return Ok(Ended::Detached(session));
+                }
+                None => {
+                    leave(&images, out);
+                    return Ok(Ended::Exited("the server closed the connection".into()));
+                }
             },
         }
     }

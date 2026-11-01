@@ -24,6 +24,9 @@ pub enum PtyEvent {
     Output(PaneId, Vec<u8>),
     /// The child exited (exit code if known) and the PTY closed.
     Exited(PaneId, Option<u32>),
+    /// An app pane's background work finished: draw it again. (App panes
+    /// have no PTY; their wakeups travel the same way to the desktop.)
+    Wake(PaneId),
 }
 
 /// How to start a pane's program.
@@ -337,6 +340,7 @@ mod tests {
                     out.extend(bytes);
                 }
                 Ok(Some(PtyEvent::Exited(_, code))) => return (out, code),
+                Ok(Some(PtyEvent::Wake(_))) => {}
                 Ok(None) | Err(_) => {
                     panic!("pty did not exit; got {:?}", String::from_utf8_lossy(&out))
                 }

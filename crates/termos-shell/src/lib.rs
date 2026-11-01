@@ -23,6 +23,7 @@ pub mod apps;
 pub mod commands;
 pub mod copymode;
 pub mod desktop;
+pub mod images;
 pub mod keys;
 pub mod notify;
 pub mod palette;

@@ -150,15 +150,25 @@ impl Palette {
 
     /// Draws the palette centred near the top of `area`; returns the cursor
     /// position (end of the query).
-    pub fn render(&self, grid: &mut Grid, area: Rect, theme: &Theme) -> (u16, u16) {
+    /// Where the palette box goes within `area`.
+    pub fn rect(&self, area: Rect) -> Rect {
+        let h = self.list_rows(area) + 4;
         let w = area.w.saturating_sub(8).clamp(20, 76);
-        let list_rows = u16::try_from(self.items.len())
-            .unwrap_or(u16::MAX)
-            .min(area.h.saturating_sub(6).max(3))
-            .min(14);
-        let h = list_rows + 4;
         let mut rect = centered(area, w, h);
         rect.y = area.y + area.h.saturating_sub(h) / 4;
+        rect
+    }
+
+    fn list_rows(&self, area: Rect) -> u16 {
+        u16::try_from(self.items.len())
+            .unwrap_or(u16::MAX)
+            .min(area.h.saturating_sub(6).max(3))
+            .min(14)
+    }
+
+    pub fn render(&self, grid: &mut Grid, area: Rect, theme: &Theme) -> (u16, u16) {
+        let list_rows = self.list_rows(area);
+        let rect = self.rect(area);
         let inner = panel(grid, rect, theme, "Command palette");
         // Query line.
         let prompt_end = grid.put_str(inner.x + 1, inner.y, "> ", theme.overlay_key, inner.right());

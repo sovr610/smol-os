@@ -10,6 +10,7 @@
 //! the pane belongs to (`$TERMOS`).
 
 mod client;
+mod images;
 mod probe;
 
 use std::io::{IsTerminal, Write};

@@ -14,7 +14,7 @@ use termos_core::config::Config;
 use termos_core::input::{KeyCode, KeyEvent};
 use termos_core::local::PeerId;
 use termos_core::paths::Paths;
-use termos_core::proto::{ClientMsg, PROTOCOL_VERSION, ServerMsg};
+use termos_core::proto::{ClientMsg, ImagePlacement, PROTOCOL_VERSION, ServerMsg};
 use termos_core::transport::{ClientEnd, ConnectError, connect_frontend, control_call};
 use termos_core::wire::{ConnKind, Hello, codes};
 use termos_render::caps::Caps;
@@ -93,12 +93,16 @@ struct Screen {
 
 impl Screen {
     async fn attach(socket: &Path, hello: Hello, cols: u16, rows: u16) -> Self {
+        Self::attach_with(socket, hello, cols, rows, Caps::default()).await
+    }
+
+    async fn attach_with(socket: &Path, hello: Hello, cols: u16, rows: u16, caps: Caps) -> Self {
         let (reply, client) = connect_frontend(socket, &hello).await.expect("attach");
         client
             .tx
             .send(ClientMsg::Hello {
                 version: PROTOCOL_VERSION,
-                caps: Caps::default(),
+                caps,
                 cols,
                 rows,
             })
@@ -655,6 +659,99 @@ async fn sessions_survive_a_server_restart() {
         .map(|e| e.file_name())
         .collect();
     assert!(left.is_empty(), "snapshots left behind: {left:?}");
+}
+
+/// Reads messages until a frame changes the image placements; returns
+/// them and how many images were uploaded meanwhile.
+async fn next_placements(s: &mut Screen, what: &str) -> (Vec<ImagePlacement>, usize) {
+    let mut uploads = 0;
+    loop {
+        let msg = tokio::time::timeout(Duration::from_secs(15), s.client.rx.recv())
+            .await
+            .unwrap_or_else(|_| panic!("timed out waiting for {what}:\n{}", s.text()));
+        match msg {
+            Some(ServerMsg::ImageData { last: true, .. }) => uploads += 1,
+            Some(ServerMsg::Frame(f)) => {
+                if f.clear {
+                    s.grid.resize(f.cols, f.rows);
+                }
+                apply(&mut s.grid, &f.spans);
+                if let Some(p) = f.images
+                    && !p.is_empty()
+                {
+                    return (p, uploads);
+                }
+            }
+            Some(_) => {}
+            None => panic!("server went away waiting for {what}"),
+        }
+    }
+}
+
+#[tokio::test]
+async fn images_reach_kitty_clients_once_and_follow_occlusion() {
+    use termos_render::caps::{Graphics, PxSize};
+    use termos_render::graphics::Picture;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let png = dir.path().join("picture.png");
+    let pic = Picture::from_rgba(64, 32, vec![180; 64 * 32 * 4]).expect("valid");
+    std::fs::write(&png, pic.to_png()).expect("write");
+    let srv = start_in(dir.path(), "", |_| {});
+    let caps = Caps {
+        graphics: Graphics {
+            kitty: true,
+            ..Graphics::default()
+        },
+        cell_px: Some(PxSize {
+            width: 10,
+            height: 20,
+        }),
+        ..Caps::default()
+    };
+    let mut s = Screen::attach_with(&srv.socket, frontend(None, true), 100, 30, caps).await;
+    s.ready().await;
+    call(
+        &srv.socket,
+        "image.open",
+        json!({"arg": png.display().to_string()}),
+    )
+    .await;
+    let (shown, uploads) = next_placements(&mut s, "the image").await;
+    assert_eq!(uploads, 1, "uploaded once");
+    assert_eq!(shown.len(), 1, "wholly visible: {shown:?}");
+    let whole = shown[0];
+    assert_eq!(whole.protocol, termos_render::caps::ImageProtocol::Kitty);
+    assert_eq!(
+        whole.src,
+        [0, 0, u32::from(whole.cols) * 10, u32::from(whole.rows) * 20]
+    );
+
+    // The palette covers part of it: what stays visible is shown as crops
+    // of the same uploaded image.
+    s.key(KeyEvent::ctrl(' '));
+    let (pieces, uploads) = next_placements(&mut s, "pieces around the palette").await;
+    assert_ne!(pieces, vec![whole], "{pieces:?}");
+    assert_eq!(uploads, 0, "pieces reuse the uploaded image");
+    let area: u32 = pieces
+        .iter()
+        .map(|p| u32::from(p.cols) * u32::from(p.rows))
+        .sum();
+    assert!(area < u32::from(whole.cols) * u32::from(whole.rows));
+    for p in &pieces {
+        assert_eq!(p.image, whole.image);
+        // The crop matches the piece's offset within the image.
+        assert_eq!(p.src[0], u32::from(p.x - whole.x) * 10);
+        assert_eq!(p.src[1], u32::from(p.y - whole.y) * 20);
+        assert!(p.src[0] + p.src[2] <= whole.src[2] && p.src[1] + p.src[3] <= whole.src[3]);
+    }
+    s.key(KeyEvent::plain(KeyCode::Esc));
+    let (back, uploads) = next_placements(&mut s, "the whole image again").await;
+    assert_eq!((back, uploads), (vec![whole], 0));
+
+    // Idle: nothing more is sent.
+    let quiet = tokio::time::timeout(Duration::from_millis(300), s.client.rx.recv()).await;
+    assert!(quiet.is_err(), "idle server sent {quiet:?}");
 }
 
 fn write_plugin(dir: &Path, name: &str, exec: &[&str], permissions: &str) {

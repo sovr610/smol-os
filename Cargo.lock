@@ -2076,6 +2076,12 @@ version = "0.0.0"
 [[package]]
 name = "termos-apps"
 version = "0.0.0"
+dependencies = [
+ "ratatui-core",
+ "tempfile",
+ "termos-core",
+ "termos-render",
+]
 
 [[package]]
 name = "termos-cli"
@@ -2176,6 +2182,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "termos-apps",
  "termos-core",
  "termos-plugin",
  "termos-render",

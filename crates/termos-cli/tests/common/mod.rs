@@ -190,7 +190,15 @@ impl Termos {
                 // attributes (crossterm's keyboard-protocol probe), and the
                 // cursor position (ConPTY asks when it starts and holds
                 // back all output until it gets the answer).
+                // Like kitty: graphics and a 10×20 cell, in the order the
+                // capability probe asks, DA1 last.
                 let mut answer = Vec::new();
+                if chunk.windows(7).any(|w| w == b"\x1b_Gi=31") {
+                    answer.extend_from_slice(b"\x1b_Gi=31;OK\x1b\\");
+                }
+                if chunk.windows(5).any(|w| w == b"\x1b[16t") {
+                    answer.extend_from_slice(b"\x1b[6;20;10t");
+                }
                 if chunk.windows(3).any(|w| w == b"\x1b[c") {
                     answer.extend_from_slice(b"\x1b[?62;22c");
                 }

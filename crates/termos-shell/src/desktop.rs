@@ -10,17 +10,18 @@ use std::io;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use termos_core::app::{App, AppEffect, render_app};
+use termos_core::app::{App, AppEffect, AppWaker, render_app};
 use termos_core::config::{Config, StatusPosition, WindowSize};
 use termos_core::ids::{ClientId, PaneId, PaneIds};
 use termos_core::input::{KeyEvent, Mods, MouseButton, MouseEvent, MouseKind};
 use termos_core::paths::Paths;
 use termos_core::proto::{ClientMsg, ServerMsg};
-use termos_render::caps::Caps;
+use termos_render::caps::{Caps, ImageProtocol};
 use termos_render::cell::Style;
 use termos_render::color::Rgb;
 
 use crate::anim::{self, Animations};
+use crate::images::{self, BlockCache, Candidate, ShownImage};
 use termos_render::encode::CursorState;
 use termos_render::grid::{Grid, Rect};
 use termos_render::theme::{Theme, ThemeBase, is_light};
@@ -167,6 +168,9 @@ struct ClientUi {
     /// the one it picked with `theme.select`.
     theme: Theme,
     theme_pick: Option<ThemeBase>,
+    /// Pixel images this client shows after its last render (the server
+    /// sends them to it).
+    pixel_images: Vec<ShownImage>,
     cols: u16,
     rows: u16,
     key_state: KeyState,
@@ -187,6 +191,7 @@ impl Default for ClientUi {
             caps: Caps::default(),
             theme: Theme::default(),
             theme_pick: None,
+            pixel_images: Vec::new(),
             cols: 80,
             rows: 24,
             key_state: KeyState::Normal,
@@ -250,6 +255,8 @@ pub struct Desktop {
     clock_deadline: Option<Instant>,
     /// Float and toast animations (drawn only for clients that animate).
     anim: Animations,
+    /// App images rendered as blocks.
+    block_cache: BlockCache,
     /// Messages for one client (`Some`) or all of them (`None`).
     outbox: Vec<(Option<ClientId>, ServerMsg)>,
     requests: Vec<SessionRequest>,
@@ -326,6 +333,7 @@ impl Desktop {
             paste_buffer: None,
             clock_deadline: None,
             anim: Animations::default(),
+            block_cache: BlockCache::default(),
             outbox: Vec::new(),
             requests: Vec::new(),
             known_sessions: Vec::new(),
@@ -517,6 +525,69 @@ impl Desktop {
 
     pub fn focused(&self) -> Option<PaneId> {
         self.session.active().focus()
+    }
+
+    /// Decides how each image that may use pixels is shown to the current
+    /// client: in pixels (returned) or, for Sixel and iTerm2 when it is not
+    /// wholly visible or something moves, as blocks in its visible pieces.
+    #[allow(clippy::too_many_arguments)]
+    fn place_pixel_images(
+        &mut self,
+        grid: &mut Grid,
+        placement: &Placement,
+        overlays: &[Rect],
+        candidates: Vec<Candidate>,
+        protocol: ImageProtocol,
+        bg: Rgb,
+        animates: bool,
+    ) -> Vec<ShownImage> {
+        let moving = self.ui.drag.is_some() || animates;
+        let mut shown = Vec::new();
+        for c in candidates {
+            // Everything drawn above the image's pane: floats higher in
+            // the stack (all of them, for a tiled pane), then overlays.
+            let above_from = placement
+                .floats
+                .iter()
+                .position(|f| f.pane == c.pane)
+                .map_or(0, |i| i + 1);
+            let mut above: Vec<Rect> = placement.floats[above_from..]
+                .iter()
+                .map(|f| f.outer)
+                .collect();
+            above.extend_from_slice(overlays);
+            let pieces = images::visible_pieces(c.rect, c.clip, &above);
+            if pieces.is_empty() {
+                continue;
+            }
+            let pixels = match protocol {
+                ImageProtocol::Kitty => true,
+                ImageProtocol::Sixel | ImageProtocol::Iterm2 => {
+                    images::whole_image_allowed(c.rect, &pieces, grid.rows(), moving)
+                }
+                ImageProtocol::Blocks => false,
+            };
+            if pixels {
+                shown.push(ShownImage {
+                    key: c.key,
+                    picture: c.picture,
+                    protocol,
+                    rect: c.rect,
+                    pieces,
+                });
+            } else {
+                let cells = self.block_cache.get(c.key, &c.picture, c.rect, bg);
+                images::draw_blocks(grid, &cells, c.rect, &pieces);
+            }
+        }
+        shown
+    }
+
+    /// The pixel images `client` shows after its last render.
+    pub fn pixel_images(&self, client: ClientId) -> Vec<ShownImage> {
+        self.ui_of(client)
+            .map(|u| u.pixel_images.clone())
+            .unwrap_or_default()
     }
 
     /// The animations in progress (for tests and diagnostics).
@@ -728,7 +799,12 @@ impl Desktop {
         id
     }
 
-    fn insert_app(&mut self, id: PaneId, app: Box<dyn App>) {
+    fn insert_app(&mut self, id: PaneId, mut app: Box<dyn App>) {
+        let tx = self.pty_tx.clone();
+        app.set_waker(AppWaker::new(move || {
+            // A full queue already has a wakeup in it.
+            let _ = tx.try_send(PtyEvent::Wake(id));
+        }));
         self.panes.insert(
             id,
             Pane {
@@ -1549,6 +1625,18 @@ impl Desktop {
                 self.open_app(Box::new(app));
             }
             Command::ReloadConfig => self.reload_config(),
+            Command::ImageOpen(path) => {
+                // Relative to the focused pane's directory, like a shell.
+                let path = PathBuf::from(path);
+                let path = if path.is_absolute() {
+                    path
+                } else {
+                    self.focused_cwd()
+                        .or_else(|| std::env::current_dir().ok())
+                        .map_or(path.clone(), |dir| dir.join(&path))
+                };
+                self.open_app(Box::new(termos_apps::ImageViewer::open(path)));
+            }
             Command::ThemeSelect(base) => {
                 // The client that asked (the control API acts as the
                 // session's newest client); without one, every client.
@@ -1657,7 +1745,8 @@ impl Desktop {
                 Command::LayoutSelect(_)
                 | Command::WorkspaceSelect(_)
                 | Command::SessionSwitch(_)
-                | Command::ThemeSelect(_) => continue,
+                | Command::ThemeSelect(_)
+                | Command::ImageOpen(_) => continue,
                 _ => {}
             }
             items.push(PaletteItem {
@@ -2156,6 +2245,11 @@ impl Desktop {
                     self.dirty = true;
                 }
             }
+            PtyEvent::Wake(id) => {
+                if self.panes.contains_key(&id) {
+                    self.dirty = true;
+                }
+            }
             PtyEvent::Exited(id, code) => {
                 if self.panes.contains_key(&id) {
                     self.close_pane(id);
@@ -2420,10 +2514,26 @@ impl Desktop {
             float_border: self.config.floats.border.into(),
             shadow: self.config.floats.shadow,
         };
+        // How this client shows images (ARCHITECTURE.md §5.8).
+        let protocol = self
+            .config
+            .graphics
+            .protocol
+            .forced()
+            .unwrap_or_else(|| self.ui.caps.image_protocol());
+        let cell = self
+            .ui
+            .caps
+            .cell_px
+            .unwrap_or(termos_render::graphics::DEFAULT_CELL);
+        let image_bg = self.ui.theme.palette.bg;
+        let mut candidates: Vec<Candidate> = Vec::new();
         {
             let panes = &mut self.panes;
             let theme = &self.ui.theme;
             let copy = &self.copy;
+            let block_cache = &mut self.block_cache;
+            let candidates = &mut candidates;
             compose(
                 grid,
                 &placement,
@@ -2442,7 +2552,35 @@ impl Desktop {
                                 cm.decorate(g, rect, vt.as_ref(), theme);
                             }
                         }
-                        PaneKind::App(app) => render_app(app.as_mut(), theme, g, rect),
+                        PaneKind::App(app) => {
+                            render_app(app.as_mut(), theme, g, rect);
+                            for img in app.images() {
+                                let area = Rect::new(
+                                    rect.x.saturating_add(img.rect.x),
+                                    rect.y.saturating_add(img.rect.y),
+                                    img.rect.w,
+                                    img.rect.h,
+                                )
+                                .intersect(&rect);
+                                if area.is_empty() {
+                                    continue;
+                                }
+                                let target = images::fit(area, &img.picture, cell, img.upscale);
+                                if protocol == ImageProtocol::Blocks {
+                                    let cells =
+                                        block_cache.get(img.key, &img.picture, target, image_bg);
+                                    images::draw_blocks(g, &cells, target, &[rect]);
+                                } else {
+                                    candidates.push(Candidate {
+                                        pane: id,
+                                        key: img.key,
+                                        picture: img.picture,
+                                        rect: target,
+                                        clip: rect,
+                                    });
+                                }
+                            }
+                        }
                     }
                 },
             );
@@ -2468,20 +2606,27 @@ impl Desktop {
         let (regions, prompt_cursor) = status::draw(grid, status_y, &self.ui.theme, &info);
         self.ui.status_regions = regions;
 
+        let mut overlays: Vec<Rect> = Vec::new();
         if self.ui.whichkey_visible || self.ui.whichkey_full {
-            whichkey::draw(
+            overlays.extend(whichkey::draw(
                 grid,
                 area,
                 &self.ui.theme,
                 &self.keys,
                 self.ui.whichkey_full,
-            );
+            ));
+        }
+        if let Some(p) = &self.ui.palette {
+            overlays.push(p.rect(area));
         }
         let palette_cursor = self
             .ui
             .palette
             .as_ref()
             .map(|p| p.render(grid, area, &self.ui.theme));
+        self.ui.pixel_images = self.place_pixel_images(
+            grid, &placement, &overlays, candidates, protocol, image_bg, animates,
+        );
 
         let title = format!("TermOS · {}", self.session.active().name);
         if title != self.ui.title_sent {

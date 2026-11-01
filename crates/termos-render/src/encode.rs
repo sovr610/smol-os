@@ -78,6 +78,19 @@ impl Encoder {
         cursor: Option<CursorState>,
         clear: bool,
     ) -> &[u8] {
+        self.frame_with_images(cols, spans, cursor, clear, &[])
+    }
+
+    /// [`Encoder::frame`] plus pixel-image output (`images`), written after
+    /// the cells so images lie on top, and before the cursor is placed.
+    pub fn frame_with_images(
+        &mut self,
+        cols: u16,
+        spans: &[Span],
+        cursor: Option<CursorState>,
+        clear: bool,
+        images: &[u8],
+    ) -> &[u8] {
         self.cols = cols;
         self.buf.clear();
         if self.sync {
@@ -92,6 +105,13 @@ impl Encoder {
         }
         for span in spans {
             self.span(span);
+        }
+        if !images.is_empty() {
+            self.buf.extend_from_slice(images);
+            // Image output moves the cursor (and iTerm2's saves and restores
+            // the pen): forget both.
+            self.pos = None;
+            self.style = None;
         }
         if let Some(c) = cursor {
             self.move_to(c.x, c.y);

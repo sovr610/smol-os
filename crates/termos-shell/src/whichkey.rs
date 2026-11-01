@@ -40,7 +40,14 @@ pub fn entries(keys: &KeyTables) -> Vec<(String, String)> {
 
 /// Draws the overlay at the bottom of `area`. `full` adds the root
 /// bindings and mouse help (prefix `?`).
-pub fn draw(grid: &mut Grid, area: Rect, theme: &Theme, keys: &KeyTables, full: bool) {
+/// Draws the key hints; returns where, if anything was drawn.
+pub fn draw(
+    grid: &mut Grid,
+    area: Rect,
+    theme: &Theme,
+    keys: &KeyTables,
+    full: bool,
+) -> Option<Rect> {
     let mut items = entries(keys);
     if full {
         for b in &keys.root {
@@ -50,7 +57,7 @@ pub fn draw(grid: &mut Grid, area: Rect, theme: &Theme, keys: &KeyTables, full: 
         items.push(("mouse".into(), "drag title move · wheel scroll".into()));
     }
     if items.is_empty() || area.w < 20 || area.h < 4 {
-        return;
+        return None;
     }
     let key_w = items
         .iter()
@@ -94,6 +101,7 @@ pub fn draw(grid: &mut Grid, area: Rect, theme: &Theme, keys: &KeyTables, full: 
             end,
         );
     }
+    Some(rect)
 }
 
 #[cfg(test)]

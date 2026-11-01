@@ -5,7 +5,7 @@
 //! them with postcard unchanged (DECISIONS.md D-010, D-026).
 
 use serde::{Deserialize, Serialize};
-use termos_render::caps::Caps;
+use termos_render::caps::{Caps, ImageProtocol};
 use termos_render::diff::Span;
 use termos_render::encode::CursorState;
 
@@ -17,7 +17,8 @@ use crate::input::{KeyEvent, MouseEvent};
 ///
 /// - 2: capabilities v2 (graphics, pixel sizes, background colour,
 ///   remote/tmux/reduced-motion flags).
-pub const PROTOCOL_VERSION: u32 = 2;
+/// - 3: images (`FrameUpdate::images`, `ImageData`, `ImageFree`).
+pub const PROTOCOL_VERSION: u32 = 3;
 
 /// A frame for one client: the cells that changed since the last frame this
 /// client received, plus where the cursor goes.
@@ -30,6 +31,24 @@ pub struct FrameUpdate {
     pub spans: Vec<Span>,
     /// `None` hides the cursor.
     pub cursor: Option<CursorState>,
+    /// Every pixel image the client shows after this frame, when that
+    /// changed (`None`: same as before). Drawn after the cells.
+    pub images: Option<Vec<ImagePlacement>>,
+}
+
+/// One image (or one visible piece of it) on a client's screen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct ImagePlacement {
+    /// The image data (see [`ServerMsg::ImageData`]).
+    pub image: u32,
+    pub protocol: ImageProtocol,
+    /// Top-left cell and size in cells.
+    pub x: u16,
+    pub y: u16,
+    pub cols: u16,
+    pub rows: u16,
+    /// The part of the image shown, in its pixels: x, y, width, height.
+    pub src: [u32; 4],
 }
 
 /// Frontend → server.
@@ -71,5 +90,15 @@ pub enum ServerMsg {
     /// running in the server.
     Detached {
         session: String,
+    },
+    /// Part of image `id` (PNG), at most 1 MiB; `last` completes it.
+    ImageData {
+        id: u32,
+        chunk: Vec<u8>,
+        last: bool,
+    },
+    /// Image `id` is no longer needed.
+    ImageFree {
+        id: u32,
     },
 }

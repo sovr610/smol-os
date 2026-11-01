@@ -9,7 +9,7 @@
 //! cells that changed since its last frame, and only once its previous
 //! frame has been written (backpressure for slow links such as SSH).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::io;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, PoisonError};
@@ -22,23 +22,25 @@ use termos_core::ids::{ClientId, PaneId, PaneIds};
 use termos_core::input::KeyEvent;
 use termos_core::local::{self, LocalListener, LocalRead, LocalStream, LocalWrite, PeerId};
 use termos_core::paths::Paths;
-use termos_core::proto::{ClientMsg, FrameUpdate, PROTOCOL_VERSION, ServerMsg};
+use termos_core::proto::{ClientMsg, FrameUpdate, ImagePlacement, PROTOCOL_VERSION, ServerMsg};
 use termos_core::transport::{ClientEnd, read_line};
 use termos_core::wire::{
     self, ConnKind, FrameDecoder, Hello, HelloReply, Message, Request, Response, RpcError, codes,
 };
 use termos_plugin::proto::{self, methods};
-use termos_render::caps::Caps;
+use termos_render::caps::{Caps, ImageProtocol};
 use termos_render::cell::Cell;
 use termos_render::diff::{Span, diff, full};
 use termos_render::encode::CursorState;
-use termos_render::grid::Grid;
+use termos_render::graphics::{DEFAULT_CELL, Picture};
+use termos_render::grid::{Grid, Rect};
 use termos_term::pty::PtyEvent;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::{mpsc, oneshot};
 
 use crate::commands::{Command, CommandError};
 use crate::desktop::{Desktop, DesktopOptions, SessionRequest};
+use crate::images::ShownImage;
 use crate::notify::Level;
 use crate::plugins::{
     Cells, HostEvent, PluginHost, PluginView, PluginWindow, SharedView, to_cells, truncate_cells,
@@ -161,6 +163,154 @@ struct Conn {
     prev: Option<Grid>,
     sent_size: (u16, u16),
     last_cursor: Option<CursorState>,
+    images: ClientImages,
+}
+
+/// The pixel images a client has and shows.
+#[derive(Debug, Default)]
+struct ClientImages {
+    /// Images uploaded to the client: (image key, width, height in pixels)
+    /// → the id it knows them by.
+    sent: HashMap<(u64, u32, u32), u32>,
+    next_id: u32,
+    /// What the client shows after its last frame.
+    placed: Vec<ImagePlacement>,
+}
+
+/// Images uploaded but not shown that a client may keep (so switching
+/// back to them costs nothing); beyond this they are freed.
+const SPARE_IMAGES: usize = 8;
+
+/// Largest piece of image data in one message.
+const IMAGE_CHUNK: usize = 1024 * 1024;
+
+/// Encoded image variants (PNG at one size), shared by all clients.
+#[derive(Debug, Default)]
+struct VariantCache {
+    map: HashMap<(u64, u32, u32), Arc<Vec<u8>>>,
+    order: VecDeque<(u64, u32, u32)>,
+}
+
+const VARIANT_CACHE: usize = 32;
+
+impl VariantCache {
+    fn png(&mut self, key: u64, picture: &Picture, w: u32, h: u32) -> Arc<Vec<u8>> {
+        let k = (key, w, h);
+        if let Some(png) = self.map.get(&k) {
+            return Arc::clone(png);
+        }
+        let png = Arc::new(picture.resize(w, h).to_png());
+        self.map.insert(k, Arc::clone(&png));
+        self.order.push_back(k);
+        while self.order.len() > VARIANT_CACHE {
+            if let Some(old) = self.order.pop_front() {
+                self.map.remove(&old);
+            }
+        }
+        png
+    }
+}
+
+/// Works out the image part of `conn`'s next frame: uploads what it does
+/// not have yet, frees what it no longer needs, and returns the new
+/// placement list when it changed (or `force`). Sixel and iTerm2 images
+/// that moved or went away left pixels behind: their cells are poisoned
+/// in `conn.prev`, so the next diff paints over them.
+fn update_images(
+    conn: &mut Conn,
+    shown: Vec<ShownImage>,
+    cache: &mut VariantCache,
+    visible: (u16, u16),
+    force: bool,
+) -> Option<Vec<ImagePlacement>> {
+    let cell = conn.caps.cell_px.unwrap_or(DEFAULT_CELL);
+    let screen = Rect::new(0, 0, visible.0, visible.1);
+    let mut placements = Vec::new();
+    let mut live = HashSet::new();
+    for img in shown {
+        let (w, h) = (
+            u32::from(img.rect.w) * cell.width,
+            u32::from(img.rect.h) * cell.height,
+        );
+        let id = match conn.images.sent.get(&(img.key, w, h)) {
+            Some(id) => *id,
+            None => {
+                let png = cache.png(img.key, &img.picture, w, h);
+                conn.images.next_id = conn.images.next_id.wrapping_add(1).max(1);
+                let id = conn.images.next_id;
+                let chunks: Vec<&[u8]> = png.chunks(IMAGE_CHUNK).collect();
+                let n = chunks.len();
+                for (i, chunk) in chunks.into_iter().enumerate() {
+                    let _ = conn.tx.send(ServerMsg::ImageData {
+                        id,
+                        chunk: chunk.to_vec(),
+                        last: i + 1 == n,
+                    });
+                }
+                conn.images.sent.insert((img.key, w, h), id);
+                id
+            }
+        };
+        live.insert(id);
+        match img.protocol {
+            ImageProtocol::Kitty => {
+                for piece in &img.pieces {
+                    let p = piece.intersect(&screen);
+                    if p.is_empty() {
+                        continue;
+                    }
+                    placements.push(ImagePlacement {
+                        image: id,
+                        protocol: img.protocol,
+                        x: p.x,
+                        y: p.y,
+                        cols: p.w,
+                        rows: p.h,
+                        src: [
+                            u32::from(p.x - img.rect.x) * cell.width,
+                            u32::from(p.y - img.rect.y) * cell.height,
+                            u32::from(p.w) * cell.width,
+                            u32::from(p.h) * cell.height,
+                        ],
+                    });
+                }
+            }
+            // Whole images only; one cut off by a smaller terminal is left
+            // out.
+            _ if img.rect.intersect(&screen) == img.rect => placements.push(ImagePlacement {
+                image: id,
+                protocol: img.protocol,
+                x: img.rect.x,
+                y: img.rect.y,
+                cols: img.rect.w,
+                rows: img.rect.h,
+                src: [0, 0, w, h],
+            }),
+            _ => {}
+        }
+    }
+    if conn.images.sent.len() > live.len() + SPARE_IMAGES {
+        let tx = &conn.tx;
+        conn.images.sent.retain(|_, id| {
+            let keep = live.contains(id);
+            if !keep {
+                let _ = tx.send(ServerMsg::ImageFree { id: *id });
+            }
+            keep
+        });
+    }
+    if placements == conn.images.placed && !force {
+        return None;
+    }
+    if let Some(prev) = conn.prev.as_mut() {
+        for old in &conn.images.placed {
+            if old.protocol != ImageProtocol::Kitty && !placements.contains(old) {
+                prev.poison(Rect::new(old.x, old.y, old.cols, old.rows));
+            }
+        }
+    }
+    conn.images.placed.clone_from(&placements);
+    Some(placements)
 }
 
 impl Conn {
@@ -329,6 +479,7 @@ pub struct Server {
     shutdown: Option<String>,
     started: SystemTime,
     known_names: Vec<String>,
+    variants: VariantCache,
 }
 
 impl std::fmt::Debug for Server {
@@ -417,6 +568,7 @@ impl Server {
             shutdown: None,
             started: SystemTime::now(),
             known_names: Vec::new(),
+            variants: VariantCache::default(),
         }
     }
 
@@ -1286,7 +1438,7 @@ impl Server {
 
     fn on_pty(&mut self, ev: PtyEvent) {
         let id = match &ev {
-            PtyEvent::Output(id, _) | PtyEvent::Exited(id, _) => *id,
+            PtyEvent::Output(id, _) | PtyEvent::Exited(id, _) | PtyEvent::Wake(id) => *id,
         };
         if let Some(e) = self.sessions.values_mut().find(|e| e.desktop.has_pane(id)) {
             e.desktop.on_pty(ev);
@@ -1400,6 +1552,7 @@ impl Server {
                 prev: None,
                 sent_size: (0, 0),
                 last_cursor: None,
+                images: ClientImages::default(),
             },
         );
         let session = match self.sessions.get_mut(&key) {
@@ -1664,19 +1817,24 @@ impl Server {
                 .prev
                 .as_ref()
                 .is_some_and(|p| p.cols() == grid_cols && p.rows() == grid_rows);
+        // Images first: moving a Sixel image changes which cells the diff
+        // must repaint. A full redraw erases the screen, images included.
+        let shown = entry.desktop.pixel_images(client);
+        let images = update_images(conn, shown, &mut self.variants, visible, !incremental);
         let (spans, clear) = match &conn.prev {
             Some(prev) if incremental => (diff(prev, &conn.cur), false),
             _ => (full(&conn.cur), true),
         };
         let spans = crop(spans, visible.0, visible.1);
         let cursor = cursor.filter(|c| c.x < visible.0 && c.y < visible.1);
-        if clear || !spans.is_empty() || cursor != conn.last_cursor {
+        if clear || !spans.is_empty() || cursor != conn.last_cursor || images.is_some() {
             let frame = FrameUpdate {
                 cols: visible.0,
                 rows: visible.1,
                 clear,
                 spans,
                 cursor,
+                images,
             };
             if conn.tx.send(ServerMsg::Frame(frame)).is_ok() {
                 conn.busy = true;

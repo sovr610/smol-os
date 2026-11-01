@@ -61,6 +61,8 @@ pub enum Command {
     SessionRestore,
     /// Switch this client's theme (all clients' from the control API).
     ThemeSelect(ThemeBase),
+    /// Open an image in the viewer (a path, which may contain spaces).
+    ImageOpen(String),
 }
 
 /// Static description of a command name.
@@ -178,6 +180,11 @@ pub const COMMANDS: &[CommandInfo] = &[
         description: "Theme",
         arg: Some("auto"),
     },
+    CommandInfo {
+        name: "image.open",
+        description: "Open an image",
+        arg: Some("photo.png"),
+    },
 ];
 
 /// Error for an unknown or malformed command.
@@ -216,6 +223,16 @@ impl FromStr for Command {
     type Err = CommandError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
+        // A path is the rest of the line, spaces and all.
+        if let Some(rest) = s.trim_start().strip_prefix("image.open")
+            && (rest.is_empty() || rest.starts_with(char::is_whitespace))
+        {
+            let path = rest.trim();
+            if path.is_empty() {
+                return Err(CommandError("`image.open` needs a file".into()));
+            }
+            return Ok(Command::ImageOpen(path.to_owned()));
+        }
         let mut parts = s.split_whitespace();
         let name = parts.next().unwrap_or("");
         let arg = parts.next();
@@ -384,6 +401,7 @@ impl fmt::Display for Command {
             Command::SessionRename => f.write_str("session.rename"),
             Command::SessionRestore => f.write_str("session.restore"),
             Command::ThemeSelect(b) => write!(f, "theme.select {b}"),
+            Command::ImageOpen(p) => write!(f, "image.open {p}"),
         }
     }
 }
@@ -444,6 +462,12 @@ mod tests {
             "workspace.select 3".parse(),
             Ok(Command::WorkspaceSelect(3))
         );
+        assert_eq!(
+            "image.open /tmp/my photos/a.png".parse(),
+            Ok(Command::ImageOpen("/tmp/my photos/a.png".into()))
+        );
+        assert!("image.open".parse::<Command>().is_err());
+        assert!("image.opener x".parse::<Command>().is_err());
         for bad in [
             "",
             "nope",

@@ -6,11 +6,15 @@
 //! notification center, later the file manager etc.), agent windows and
 //! devkit panels all implement [`App`] (ARCHITECTURE.md §9).
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use ratatui_core::buffer::{Buffer, CellDiffOption};
 use ratatui_core::layout::Rect as TuiRect;
 use ratatui_core::style::{Color as TuiColor, Modifier};
 use termos_render::cell::{Attrs, Style};
 use termos_render::color::Color;
+use termos_render::graphics::Picture;
 use termos_render::grid::{Grid, Rect};
 use termos_render::theme::Theme;
 use unicode_width::UnicodeWidthStr;
@@ -32,6 +36,50 @@ pub enum AppEffect {
     Command(String),
 }
 
+/// An image an app shows. The desktop draws it for each client the best
+/// way that client's terminal allows (ARCHITECTURE.md §5.8): pixels, or
+/// block characters where it cannot.
+#[derive(Debug, Clone)]
+pub struct AppImage {
+    /// Identifies the picture; the same key means the same pixels (so
+    /// terminals receive it once). Get one from [`new_image_key`].
+    pub key: u64,
+    pub picture: Arc<Picture>,
+    /// Where it goes, in cells relative to the app's area. The picture is
+    /// fitted inside, keeping its aspect ratio, and centred.
+    pub rect: Rect,
+    /// Fit larger than the picture's own pixel size.
+    pub upscale: bool,
+}
+
+/// A fresh key for an [`AppImage`].
+pub fn new_image_key() -> u64 {
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    NEXT.fetch_add(1, Ordering::Relaxed)
+}
+
+/// Lets an app ask for a redraw from another thread or task, when work it
+/// started (decoding an image, say) has finished.
+#[derive(Clone)]
+pub struct AppWaker(Arc<dyn Fn() + Send + Sync>);
+
+impl AppWaker {
+    pub fn new(f: impl Fn() + Send + Sync + 'static) -> Self {
+        Self(Arc::new(f))
+    }
+
+    /// Asks the desktop to draw the app again.
+    pub fn wake(&self) {
+        (self.0)();
+    }
+}
+
+impl std::fmt::Debug for AppWaker {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("AppWaker")
+    }
+}
+
 /// An in-process window.
 pub trait App: Send {
     /// Window title.
@@ -45,6 +93,16 @@ pub trait App: Send {
     }
     /// Draws the app into `buf`, which covers `area` (origin 0,0).
     fn render(&mut self, area: TuiRect, buf: &mut Buffer, theme: &Theme);
+    /// Images to show over the app's cells (called after `render`, for
+    /// the same area). The cells under an image should be left blank.
+    fn images(&self) -> Vec<AppImage> {
+        Vec::new()
+    }
+    /// Gives the app a way to ask for a redraw later (called once, when
+    /// the window opens).
+    fn set_waker(&mut self, waker: AppWaker) {
+        let _ = waker;
+    }
 }
 
 /// Renders `app` into `grid` at `at`.

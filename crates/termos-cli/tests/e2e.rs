@@ -166,3 +166,37 @@ fn detach_ls_attach_msg_and_kill_server() {
     assert_eq!(stdout(&restored).trim(), "restored: work");
     assert!(stdout(&t.run(&["ls"])).starts_with("work: 1 workspaces, 2 panes"));
 }
+
+/// The terminal says it speaks Kitty graphics (the harness answers the
+/// probe like kitty): an image opened in the viewer is uploaded and
+/// placed; the palette over it changes the placements; detaching frees
+/// the terminal's images.
+#[cfg(unix)]
+#[test]
+fn kitty_images_reach_the_terminal() {
+    let mut t = Termos::start("");
+    t.wait_ready();
+    let path = t.env.path().join("dots.png");
+    let pic =
+        termos_render::graphics::Picture::from_rgba(40, 20, vec![90; 40 * 20 * 4]).expect("valid");
+    std::fs::write(&path, pic.to_png()).expect("write");
+    let arg = serde_json::json!({ "arg": path.display().to_string() }).to_string();
+    let opened = t.run(&["msg", "image.open", &arg]);
+    assert!(opened.status.success(), "{opened:?}");
+    let out = t.wait_output(T, "\x1b_Ga=p,i=1,");
+    assert!(out.contains("\x1b_Ga=t,f=100,i=1,q=2"), "uploaded as PNG");
+    assert_eq!(out.matches("a=t,").count(), 1, "uploaded once");
+
+    t.send(b"\x00");
+    t.wait_for("the palette", T, |s| s.contains("Command palette"));
+    t.wait_output(T, "\x1b_Ga=d,d=i,i=1,");
+    t.send(b"\x1b");
+    t.wait_for("the palette to close", T, |s| {
+        !s.contains("Command palette")
+    });
+
+    t.send(b"\x02d");
+    t.wait_exit(T);
+    let out = t.wait_output(T, "\x1b_Ga=d,d=A,q=2");
+    assert_eq!(out.matches("a=t,").count(), 1, "never uploaded again");
+}

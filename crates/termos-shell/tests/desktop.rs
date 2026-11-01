@@ -157,6 +157,24 @@ impl Harness {
         }
     }
 
+    /// Like [`Harness::wait_for`], looking at the rendered grid.
+    async fn wait_grid(&mut self, what: &str, pred: impl Fn(&Grid) -> bool) {
+        let deadline = Instant::now() + Duration::from_secs(15);
+        loop {
+            self.screen();
+            if pred(&self.grid) {
+                return;
+            }
+            let left = deadline.saturating_duration_since(Instant::now());
+            assert!(!left.is_zero(), "timed out waiting for {what}");
+            if let Ok(Some(ev)) =
+                tokio::time::timeout(left.min(Duration::from_millis(200)), self.pty_rx.recv()).await
+            {
+                self.desktop.on_pty(ev);
+            }
+        }
+    }
+
     async fn wait_text(&mut self, needle: &str) -> String {
         let n = needle.to_owned();
         self.wait_for(needle, move |s, _| s.contains(&n)).await
@@ -320,6 +338,62 @@ async fn floats_animate_only_where_they_should() {
     );
     assert_eq!(local.to_text(), remote.to_text(), "both end the same");
     assert_eq!(h.desktop.next_deadline(), None, "no timer once it ends");
+}
+
+/// Without pixel graphics an image is drawn in block characters, and a
+/// float opened over it covers it like any other cells.
+#[tokio::test]
+async fn images_fall_back_to_blocks_that_floats_cover() {
+    use termos_render::color::{Color, Rgb};
+    use termos_render::graphics::Picture;
+    use termos_shell::commands::Command;
+
+    let mut h = Harness::new("");
+    let path = h.dir.path().join("halves.png");
+    let pic = Picture::from_rgba(32, 16, {
+        let mut px = Vec::new();
+        for _y in 0..16 {
+            for x in 0..32 {
+                px.extend_from_slice(if x < 16 {
+                    &[255, 0, 0, 255]
+                } else {
+                    &[0, 0, 255, 255]
+                });
+            }
+        }
+        px
+    })
+    .expect("valid");
+    std::fs::write(&path, pic.to_png()).expect("write");
+    h.desktop
+        .run(Command::ImageOpen(path.display().to_string()));
+    let image_cells = |g: &Grid| {
+        let mut n = 0;
+        for y in 0..g.rows() {
+            for x in 0..g.cols() {
+                let bg = g.get(x, y).map(|c| c.style.bg);
+                if bg == Some(Color::Rgb(Rgb::new(255, 0, 0)))
+                    || bg == Some(Color::Rgb(Rgb::new(0, 0, 255)))
+                {
+                    n += 1;
+                }
+            }
+        }
+        n
+    };
+    // Decoding finishes on another thread and wakes the desktop.
+    h.wait_grid("the image in blocks", |g| image_cells(g) > 100)
+        .await;
+    let before = image_cells(&h.grid);
+    assert!(
+        h.desktop.pixel_images(C).is_empty(),
+        "this client has no pixel graphics"
+    );
+
+    h.desktop.run(Command::Tutorial);
+    h.screen();
+    let after = image_cells(&h.grid);
+    assert!(after < before && after > 0, "{before} → {after}");
 }
 
 #[tokio::test]

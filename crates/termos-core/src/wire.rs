@@ -374,7 +374,22 @@ mod tests {
                 clear: true,
                 spans: full(&g),
                 cursor: None,
+                images: Some(vec![crate::proto::ImagePlacement {
+                    image: 3,
+                    protocol: termos_render::caps::ImageProtocol::Kitty,
+                    x: 1,
+                    y: 0,
+                    cols: 4,
+                    rows: 2,
+                    src: [10, 0, 40, 40],
+                }]),
             }),
+            ServerMsg::ImageData {
+                id: 3,
+                chunk: vec![0x89, b'P', b'N', b'G'],
+                last: true,
+            },
+            ServerMsg::ImageFree { id: 3 },
             ServerMsg::Bell,
             ServerMsg::Detached {
                 session: "main".into(),
