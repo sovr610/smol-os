@@ -3,6 +3,7 @@
 //!
 //! Shared foundations for the TermOS server and its frontends:
 //!
+//! - [`ids`]: identifiers such as [`ids::PaneId`].
 //! - [`input`]: transport-neutral key/mouse events and tmux key notation.
 //! - [`proto`]: the messages between server and frontends.
 //! - [`transport`]: the channel pair a frontend and the server talk over
@@ -18,6 +19,7 @@
 
 pub mod app;
 pub mod config;
+pub mod ids;
 pub mod input;
 pub mod log;
 pub mod paths;

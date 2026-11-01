@@ -1,0 +1,41 @@
+[package]
+name = "termos-fuzz"
+version = "0.0.0"
+edition = "2024"
+license = "GPL-3.0-or-later"
+publish = false
+description = "cargo-fuzz targets for TermOS parsers (run with a nightly toolchain)"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4.13"
+termos-core = { path = "../crates/termos-core" }
+termos-render = { path = "../crates/termos-render" }
+termos-term = { path = "../crates/termos-term" }
+
+# Not part of the main workspace: fuzzing needs nightly.
+[workspace]
+members = ["."]
+
+[[bin]]
+name = "vt_advance"
+path = "fuzz_targets/vt_advance.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "config_parse"
+path = "fuzz_targets/config_parse.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "keyspec_parse"
+path = "fuzz_targets/keyspec_parse.rs"
+test = false
+doc = false
+bench = false

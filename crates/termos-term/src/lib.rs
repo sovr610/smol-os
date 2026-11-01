@@ -1,19 +1,22 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! # termos-term
 //!
-//! Terminal windows: spawning programs on a PTY and emulating a VT so their
-//! output can be composited into a TermOS window.
+//! Terminal panes: programs on pseudo-terminals, emulated so their output
+//! can be composited into the desktop.
 //!
-//! **Status:** not started. Scheduled for M1 (see `ROADMAP.md`).
+//! - [`pty`]: spawning, resizing and talking to a child on a PTY
+//!   (DECISIONS.md D-025).
+//! - [`vt`]: the [`vt::VtBackend`] trait and its `alacritty_terminal`
+//!   implementation (D-008).
+//! - [`input`]: encoding keys, mouse, paste and focus for the child.
 //!
-//! Planned modules (see `ARCHITECTURE.md`, "Terminal windows", and
-//! `DECISIONS.md` D-008):
-//! - `pty` — PTY creation, child spawning, resize (TIOCSWINSZ), async I/O.
-//! - `vt` — the `VtBackend` trait and its `alacritty_terminal` implementation:
-//!   VT state, scrollback, damage, title/cwd/bell events.
-//! - `blit` — copying VT cells into the render grid.
-//!
-//! The VT input path will be fuzzed with cargo-fuzz from M1 onward.
+//! The VT input path is fuzzed by `fuzz/fuzz_targets/vt_advance.rs`.
 
-// TODO(M1): PTY spawning, VtBackend over alacritty_terminal, blitting into the grid, VT fuzz target.
+pub mod input;
+pub mod pty;
+pub mod vt;
+
+pub use pty::{PtyEvent, PtyPane, SpawnSpec};
+pub use vt::{AlacrittyVt, VtBackend, VtEvent, VtModes};
+
 // TODO(M4): intercept Kitty graphics / Sixel sequences so images work inside PTY windows.

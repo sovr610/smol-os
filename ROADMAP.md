@@ -297,7 +297,6 @@ Generated from the `TODO(M<n>)` markers in the code. Don't edit by hand; run `ca
 | Milestone | Where | What |
 | --- | --- | --- |
 | M1 | `crates/termos-cli/src/main.rs` | run the hosted desktop (server + terminal client) when invoked without a subcommand. |
-| M1 | `crates/termos-term/src/lib.rs` | PTY spawning, VtBackend over alacritty_terminal, blitting into the grid, VT fuzz target. |
 | M2 | `crates/termos-shell/src/lib.rs` | Desktop state, command palette, which-key, status bar, notifications, first-run tutorial. |
 | M2 | `crates/termos-wm/src/lib.rs` | window tree, floating + tiled layouts, workspaces, mouse move/resize, compositor. |
 | M3 | `crates/termos-core/src/paths.rs` | runtime directory for server sockets ($XDG_RUNTIME_DIR/termos, 0700, with a per-uid fallback). |
@@ -307,6 +306,7 @@ Generated from the `TODO(M<n>)` markers in the code. Don't edit by hand; run `ca
 | M4 | `crates/termos-render/src/caps.rs` | active capability queries (DA1, XTVERSION, Kitty graphics, DECRQM 2026, OSC 11, cell size). |
 | M4 | `crates/termos-render/src/lib.rs` | image protocols (Kitty, Sixel, iTerm2, block/braille fallback) with occlusion handling. |
 | M4 | `crates/termos-shell/src/lib.rs` | optional WASM runtime for status-bar widgets (behind a cargo feature). |
+| M4 | `crates/termos-term/src/input.rs` | Kitty keyboard protocol encoding for child programs that enable it (CSI > u). |
 | M4 | `crates/termos-term/src/lib.rs` | intercept Kitty graphics / Sixel sequences so images work inside PTY windows. |
 | M5 | `crates/termos-apps/src/lib.rs` | package manager UI over mise, the dev rootfs and the host package manager. |
 | M5 | `crates/termos-devkit/src/lib.rs` | mise-backed toolchain manager, Neovim + LSP/DAP setup, dev rootfs, Git/build panels. |

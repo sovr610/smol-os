@@ -14,3 +14,5 @@
 *.swp
 .idea/
 .vscode/
+/fuzz/Cargo.lock
+/fuzz/coverage/
