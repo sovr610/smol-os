@@ -17,6 +17,7 @@ questions (DECISIONS.md, "Open questions").
 | M1 | tmux-style hosted desktop: renderer, PTY panes, window manager, palette, config (M1+M2 combined, D-022) | 🔍 |
 | M2 | Merged into M1 | 🔍 |
 | M3 | Session server, detach/attach, persistence, plugin API | 🔍 |
+| M3.5 | Native Windows and CI test builds (D-035 to D-041) | 🔍 |
 | M4 | Graphics, themes, first built-in apps, WASM widgets | ⏳ |
 | M5 | Developer environment | ⏳ |
 | M6 | AI agents | ⏳ |
@@ -225,6 +226,65 @@ ssh -t host termos
 
 ---
 
+## M3.5 — Native Windows and CI test builds
+**Status:** 🔍 done, awaiting review · Owner answers: native Windows (Windows Terminal or PowerShell, panes through ConPTY), as its own reviewed step before M4a; ready-to-run test builds for every push on all four platforms (D-035, D-041). Leftover Windows work is tracked as `TODO(M9)`.
+
+**Deliverables**
+- **Platform seams:**
+  - [x] `termos_core::local`: one local-IPC API (listener, stream, peer identity, probe) over Unix sockets and Windows named pipes; transport, server and CLI use only it (D-036)
+  - [x] Paths per platform (`%APPDATA%`, `%LOCALAPPDATA%`), with `XDG_*` overrides everywhere (D-038)
+  - [x] Default shell: `pwsh` → `powershell` → `%COMSPEC%` → `cmd.exe`; `$SHELL` ignored on Windows
+  - [x] Snapshots: Unix modes only on Unix, retried renames, Windows device names encoded
+  - [x] Plugin tokens from `getrandom` (D-040)
+  - [x] `.gitattributes` (LF everywhere, binary images); the Windows C runtime linked statically
+- **Windows:**
+  - [x] Named pipes with an owner-only DACL, remote clients rejected, first instance reserved, SID checks both ways, anonymous impersonation (D-036)
+  - [x] The daemon: no console window, own process group, outside the starting job; console close, logoff and shutdown save like SIGTERM (D-037)
+  - [x] ConPTY panes with a waiter thread for end of output (D-039)
+  - [x] Client: VT support required, AltGr typing, truecolor by default
+  - [x] Plugin SDK over the pipe with overlapped I/O (D-040)
+- **Tests:**
+  - [x] Shell-agnostic helpers (`cmd.exe` on Windows, `/bin/sh` elsewhere), so the desktop, server and CLI suites run on Windows; only POSIX-specific tests are gated
+  - [x] Pipe names, Windows paths and shell order are unit-tested on every platform
+- **CI** (D-041):
+  - [x] Windows x86_64 test job; Windows-target clippy in the lint job and in `cargo xtask ci`
+  - [x] Daemon smoke test on every OS (`.github/scripts/daemon-smoke.sh`)
+  - [x] Test builds for every push: Linux x86_64/aarch64 and macOS arm64 `.tar.gz`, Windows x86_64 `.zip`, with `BUILDINFO.txt`, kept 14 days; the Linux builds are smoke-run on matching runners
+- **Docs:**
+  - [x] [getting-started.md](docs/getting-started.md): test builds, macOS quarantine and SmartScreen, Windows notes
+  - [x] Windows in [sessions.md](docs/sessions.md) and [plugins.md](docs/plugins.md); ARCHITECTURE.md §1–3, §7, §8, §14, §17, §18
+
+**Acceptance**
+- `cargo xtask ci` green on Linux, including clippy for the Windows target.
+- All CI jobs green, including the Windows tests, the daemon smoke on all four platforms and the downloaded Linux builds.
+- The owner tries the Windows zip in Windows Terminal: attach, split, detach, `termos ls`, attach again.
+
+**What runs on Windows in CI**
+- Unit tests of every crate, including the secured pipes (connect, peer SID, second server refused), pipe names, Windows paths and shell order, and ConPTY panes (`cmd.exe`, exit codes, input).
+- `termos-shell/tests/desktop.rs` and `tests/server.rs` with real `cmd.exe` panes: detach and reattach, two clients, the control API, sessions, the server lifecycle, and plugins (the Python plugin over the pipe, the Rust SDK). The POSIX-only cases (`stty`, `tail -f` restore, Unix modes, `/proc`) stay `cfg(unix)`.
+- `termos-cli/tests/e2e.rs`: the real binary and daemon on ConPTY terminals, read through `vt100`.
+- The daemon smoke script against the debug build and against the packaged release build.
+
+**Demo** (live, Linux, in an isolated `tmux -L termos-demo` with its own TermOS home, as a regression check of M3 after the refactor):
+1. `termos`, `C-b %`, `echo right-pane-alive`, `C-b d`.
+2. `termos ls` shows `main: 1 workspaces, 2 panes`; `termos msg notify.send` and `termos msg pane.list` answer.
+3. `termos attach` brings back both panes with their output.
+4. `kill -9` the server; `termos ls` says no server is running; `termos` asks "Restore session main saved at 20:17? (y/n)", and `y` restores the split.
+
+**CI found** (each fixed, with the platform's tests now covering it):
+- ConPTY asks for the cursor position when it starts and sends nothing until answered: panes were fine because the emulator answers, but the raw PTY tests and the e2e harness needed to answer too.
+- With one waiting pipe instance, plugins starting together could find the pipe busy; Python's `open()` doesn't retry. The server now keeps four instances waiting.
+- Git Bash has no `/dev/stderr`; macOS can't name the peer of a socket that already hung up; a CLI test hard-coded a Unix socket path.
+
+**Not in this milestone:**
+- bracketed paste and Kitty keyboard input from the outer terminal on Windows (`TODO(M9)`);
+- a hidden window for `WM_ENDSESSION`, so logoff and shutdown always save (`TODO(M9)`);
+- foreground program names, directories and command lines on macOS and Windows, so snapshots there restore programs (`TODO(M9)`; Linux reads `/proc`);
+- shipping Windows Terminal's `conpty.dll` (only if the system ConPTY gives trouble);
+- signed builds (M9 releases).
+
+---
+
 ## M4 — Graphics, themes, first apps, WASM widgets
 **Status:** ⏳ · **Ask first:** O-8 (WASM engine). M4 may be split into M4a (graphics and themes) and M4b (apps and widgets) if it grows too large; the owner decides.
 
@@ -387,4 +447,5 @@ Generated from the `TODO(M<n>)` markers in the code. Don't edit by hand; run `ca
 | M9 | `crates/termos-cli/src/client.rs` | VT input mode on Windows, for bracketed paste and the Kitty keyboard protocol. |
 | M9 | `crates/termos-image/src/lib.rs` | installer and atomic A/B updates. |
 | M9 | `crates/termos-shell/src/server.rs` | a hidden window for WM_ENDSESSION, so logoff and shutdown always save. |
+| M9 | `crates/termos-term/src/pty.rs` | foreground program name, directory and command line on macOS (libproc) and Windows (process snapshot APIs), so snapshots there name and restore programs too. |
 <!-- open-work:end -->

@@ -1,8 +1,8 @@
 # CLAUDE.md: TermOS project conventions
 
-TermOS is a terminal-first desktop OS. It runs hosted inside any terminal, or
-on bare metal as Linux + Buildroot rendering through DRM/KMS. It's written in
-Rust as a Cargo workspace.
+TermOS is a terminal-first desktop OS. It runs hosted inside any terminal
+(Linux, macOS, Windows), or on bare metal as Linux + Buildroot rendering
+through DRM/KMS. It's written in Rust as a Cargo workspace.
 
 **Before starting any milestone, read [ARCHITECTURE.md](ARCHITECTURE.md),
 [ROADMAP.md](ROADMAP.md) and [DECISIONS.md](DECISIONS.md).**
@@ -25,7 +25,7 @@ xtask/                 repo automation (std-only)
 Dependency direction is fixed in ARCHITECTURE.md §4. Never add an edge that points upward.
 
 ## Commands
-- `cargo xtask ci`: fmt check, clippy `-D warnings`, tests, repo checks and cargo-deny. **Must pass before every commit.**
+- `cargo xtask ci`: fmt check, clippy `-D warnings`, tests, clippy for the Windows target, repo checks and cargo-deny. **Must pass before every commit.** Install the Windows target once with `rustup target add x86_64-pc-windows-msvc`; without it that check is skipped (CI still runs it).
 - `cargo xtask todos --write`: regenerate the ROADMAP open-work table after adding or removing work markers.
 - `cargo xtask check-todos`: work-marker format, ROADMAP sync and SPDX headers.
 - `cargo run -p termos-cli -- <args>`: run `termos`. With no arguments it starts the desktop, which needs a real terminal.
@@ -57,7 +57,11 @@ Dependency direction is fixed in ARCHITECTURE.md §4. Never add an edge that poi
   - Never put them in logs, Debug output, config files, snapshots or audit records.
   - Config refers to them as `keyring:<name>`.
 - **Model names:** never hardcode them. List them from the provider APIs; tests use obvious fixture names.
-- **Platforms:** hosted mode must build and pass tests on Linux (x86_64, aarch64) and macOS. Gate Linux-only code with `cfg(target_os = "linux")`, and give it a clear runtime error elsewhere.
+- **Platforms:** hosted mode must build and pass tests on Linux (x86_64, aarch64), macOS and Windows x86_64 (Tier 2, D-035).
+  - Gate Linux-only code with `cfg(target_os = "linux")` and Unix-only code with `cfg(unix)`, and give it a clear runtime error elsewhere.
+  - Local IPC goes through `termos_core::local` (D-036); the plugin SDK, a leaf crate, has its own `Conn` seam (D-040). Don't use Unix sockets or named pipes directly anywhere else.
+  - A Windows gap that isn't fixed yet is a `TODO(M9)` marker, not a silent no-op.
+  - Tests that drive a shell use the helpers in `tests/common/` (`cmd.exe` on Windows, `/bin/sh` elsewhere).
 - **Dependencies:** prefer mature crates. Add versions to `[workspace.dependencies]` and inherit them with `dep.workspace = true`. The license must pass `deny.toml`: no OpenSSL (use rustls), and no git dependencies.
 - **Idle cost:** no polling loops, and no timers while idle. Rendering is event-driven (ARCHITECTURE.md §5.5).
 - **Budgets:** stay within the performance budgets (ARCHITECTURE.md §15). Hot paths (compose, diff, encode, VT parse) get criterion benchmarks.

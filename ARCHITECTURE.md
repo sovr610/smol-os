@@ -26,7 +26,7 @@ M3.
 **Non-goals**
 - Writing a kernel, a display server, or GPU compositing (D-001).
 - Checkpointing and restoring processes across reboots (D-011).
-- Running natively on Windows. WSL2 is supported as hosted mode.
+- Bare metal on anything but Linux. (Hosted mode runs natively on Windows since M3.5, D-035; WSL2 counts as Linux.)
 - Being a general-purpose distro. The bare-metal base is an immutable appliance; general packages live in the dev rootfs (D-004).
 
 ---
@@ -35,7 +35,7 @@ M3.
 
 | | Hosted mode | Bare-metal mode |
 | --- | --- | --- |
-| Runs on | Any terminal on Linux, macOS, WSL2 | Linux + Buildroot image, booting straight into TermOS |
+| Runs on | Any terminal on Linux, macOS, WSL2; Windows Terminal on Windows 10 1809+ (D-035) | Linux + Buildroot image, booting straight into TermOS |
 | Frontend | Terminal client: escape sequences via crossterm | KMS client: pixels into a DRM framebuffer |
 | Input | The terminal's input stream (keys, SGR mouse, Kitty keyboard protocol) | libinput + xkbcommon through libseat |
 | Glyphs | Drawn by the host terminal | Our own font rasterizer (O-9), adjustable size |
@@ -56,7 +56,7 @@ agents and models. A frontend is only a *client* of the server (D-007).
  └──────────────────┘   Transport        │  shell/Desktop ─ wm ─ compositor ─ per-client │
  ┌──────────────────┐   M1: in-process   │        │          │                  diffs    │
  │ KMS client       │◀─ channel          │      apps       term: PTY + VT ──────────────┼──▶ child processes
- │ (bare metal)     │   or Unix socket   │   (in-process)                               │    (shells, nvim,
+ │ (bare metal)     │   or local socket  │   (in-process)                               │    (shells, nvim,
  └──────────────────┘                    │      ai: agent loops ─ permission engine ────┼──▶  CLI agents …)
  ┌──────────────────┐                    │                                               │
  │ headless client  │◀───────────────────│  JSON-RPC control API ◀── termos CLI, scripts │
@@ -75,8 +75,9 @@ agents and models. A frontend is only a *client* of the server (D-007).
 - **`termos`:** with no arguments it connects to the default server, spawning one if needed, and attaches a terminal client to the session `main` (D-029). Other subcommands (`new`, `attach`, `ls`, `msg`, …) are short-lived clients of the same server.
 - **`termos server`:** the daemon, one per user per socket name (like tmux `-L`). It owns all sessions, panes and their programs (D-030, D-032).
   - It is started on demand with null stdio, calls `setsid`, and stops when its last session ends or on `kill-server` / SIGTERM, saving snapshots first (D-033).
+  - On Windows it starts without a console window, in its own process group and outside the starting terminal's job, and treats console close, logoff and shutdown events like SIGTERM (D-037).
   - One server holds many sessions (one `Desktop` each). Each session can be shown by many clients; each client has its own overlays (palette, prompts, which-key).
-- **PTY children:** anything that runs in a terminal window.
+- **PTY children:** anything that runs in a terminal window. On Windows they run in a ConPTY pseudo-console (D-039).
 - **`termos models serve`:** a separate process (D-021) so inference can't crash or bloat the desktop. It manages backend worker processes.
 - **MCP servers and agent tool executions:** spawned inside the sandbox (§11).
 - **Out-of-process plugins:** launched by the server from their manifest, or connecting on their own (§9).
@@ -250,10 +251,11 @@ Window = { id, title, source: Pty | App | Plugin | Agent, state: normal | minimi
 
 ## 7. IPC and protocol (D-007, D-010, D-031)
 
-- **Transport:** frontends see a `ClientEnd` (two channels). It is backed either by the server directly, in-process (tests, embedding), or by a Unix socket at `$XDG_RUNTIME_DIR/termos/<server>.sock`.
-  - The socket lives in a 0700 directory that is owner-checked, falling back to `$TMPDIR/termos-<uid>/`, and is itself mode 0600.
-  - `-L NAME` picks the server by name and `-S PATH` by path.
-- **Authentication:** the server checks the peer's uid (`SO_PEERCRED` / `getpeereid` through `UnixStream::peer_cred`) and rejects anyone else with error `-32003`.
+- **Transport:** frontends see a `ClientEnd` (two channels). It is backed either by the server directly, in-process (tests, embedding), or by a local socket. Everything above `termos_core::local` (D-036) is the same on every platform:
+  - **Unix:** a Unix socket at `$XDG_RUNTIME_DIR/termos/<server>.sock`, in a 0700 directory that is owner-checked, falling back to `$TMPDIR/termos-<uid>/`; the socket itself is mode 0600.
+  - **Windows:** a named pipe `\\.\pipe\termos-<hash of the runtime directory>-<server>`, whose DACL admits only the current user and which rejects remote clients.
+  - `-L NAME` picks the server by name and `-S PATH` by path (a pipe path on Windows).
+- **Authentication:** the server checks the peer's identity and rejects anyone else with error `-32003`: the uid on Unix (`SO_PEERCRED` / `getpeereid` through `UnixStream::peer_cred`), the user SID of the client's process on Windows. On Windows the client also checks the server process's SID before sending anything, against pipe-name squatting (D-036).
 - **Handshake:** every connection's first line is a JSON-RPC request:
   - `hello {version, kind: frontend | control | plugin, client, session?, create?, token?, cwd?}`.
   - The reply is `{version, server, pid, session}`, or an error: `-32001` version mismatch, `-32004` no such session, `-32003` forbidden.
@@ -289,6 +291,7 @@ Window = { id, title, source: Pty | App | Plugin | Agent, state: normal | minimi
   - **When:** debounced after structural changes and at shutdown. They are deleted when a session ends on purpose.
   - **Restore:** a fresh server restores them by policy, `always | ask | never` (default ask). Shells restart in their directories and allowlisted programs (`restore-programs`) are re-run.
 - **Logs:** `$XDG_STATE_HOME/termos/log/` (D-017).
+- **On Windows** (D-038): config lives in `%APPDATA%\termos`, state (snapshots, logs) in `%LOCALAPPDATA%\termos`; the `XDG_*` variables still override both. The default shell is `pwsh`, then `powershell`, then `%COMSPEC%`. Snapshots name no foreground programs there yet.
 
 ---
 
@@ -427,8 +430,8 @@ Window = { id, title, source: Pty | App | Plugin | Agent, state: normal | minimi
 
 ## 14. Security model
 
-- **Socket:** one server per user, with an owner-checked 0700 socket directory, a 0600 socket and peer-uid checks.
-- **Plugins:** they run only when enabled in the config. Each identifies itself with a per-launch token and gets only the permissions its manifest asks for (D-034).
+- **Socket:** one server per user, with an owner-checked 0700 socket directory, a 0600 socket and peer-uid checks. On Windows: a named pipe with an owner-only protected DACL, remote clients rejected, the first instance reserved, SID checks in both directions, and anonymous impersonation level for clients (D-036).
+- **Plugins:** they run only when enabled in the config. Each identifies itself with a per-launch token (128 bits from the OS generator, D-040) and gets only the permissions its manifest asks for (D-034).
 - **No plaintext secrets** anywhere: config, logs, snapshots or audit records.
   - Scrollback persistence is opt-in.
   - Snapshots keep command lines only for allowlisted programs.
@@ -472,9 +475,12 @@ Window = { id, title, source: Pty | App | Plugin | Agent, state: normal | minimi
 ## 17. Build, CI and distribution
 
 - **Workspace and tooling:** a pinned toolchain (D-005); `cargo xtask ci` mirrors CI locally (D-020).
-- **CI** (D-016): lint (fmt, repo checks, cargo-deny), clippy and tests on x86_64 Linux, aarch64 Linux and macOS, and zigbuild cross-builds.
+- **CI** (D-016, D-041):
+  - lint: fmt, repo checks, cargo-deny, and clippy for the Windows target from Linux;
+  - clippy, tests and a daemon smoke test (`new -d`, `ls`, `msg`, `kill-server`) on x86_64 Linux, aarch64 Linux, macOS arm64 and Windows x86_64;
+  - zigbuild cross-builds; a fuzz smoke pass; the performance budgets.
+- **Test builds** on every push (D-041): Linux x86_64/aarch64 (glibc 2.31) and macOS arm64 `.tar.gz`, Windows x86_64 `.zip` (static C runtime), each with a `BUILDINFO.txt`, kept 14 days. The Linux builds are downloaded and smoke-run on matching runners.
 - **Later CI jobs:**
-  - fuzz smoke (M1);
   - QEMU boots (M8);
   - releases (M9): hosted binaries for x86_64/aarch64 Linux and macOS, an x86_64 ISO, an aarch64 UEFI image, Raspberry Pi `.img` files, checksums and signatures.
 
@@ -487,7 +493,7 @@ Window = { id, title, source: Pty | App | Plugin | Agent, state: normal | minimi
 | x86_64 Linux | Tier 1 | Tier 1 (UEFI + BIOS) | |
 | aarch64 Linux | Tier 1 | Tier 1 (generic UEFI) | |
 | macOS (arm64, x86_64) | Tier 1 | — | Agent sandbox is confirm-only (§11) |
+| Windows 10 1809+ / 11 (x86_64, native) | Tier 2 | — | Windows Terminal or another VT console; named pipes and ConPTY. Gaps tracked as `TODO(M9)` (D-035) |
 | WSL2 | Tier 2 | — | |
 | Raspberry Pi 5 / 4 | Tier 2 (on Pi OS) | Tier 1 images | Latency budget 33 ms on Pi 4 |
 | Raspberry Pi 3 / Zero 2 W | Best effort | Best effort | 512 MB–1 GB RAM limits dev tools and local models |
-| Windows (native) | — | — | Not supported; use WSL2 |

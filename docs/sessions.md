@@ -80,10 +80,16 @@ The socket is `$XDG_RUNTIME_DIR/termos/<name>.sock`, or
 is readable only by you, and the server refuses connections from other
 users. `-S PATH` uses a socket path of your choice.
 
+On Windows the server listens on a named pipe,
+`\\.\pipe\termos-<hash>-<name>`, that only your user can open; the client
+also checks that the server really runs as you before sending anything.
+`-S` takes a pipe path there.
+
 ## After a crash or a reboot
 
 TermOS saves each session's layout to
-`~/.local/state/termos/sessions/<server>/<session>.json`:
+`~/.local/state/termos/sessions/<server>/<session>.json` (Windows:
+`%LOCALAPPDATA%\termos\sessions\…`):
 
 - the workspaces, splits and floating windows;
 - each pane's directory and the program running in front.

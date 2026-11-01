@@ -5,13 +5,14 @@ you already know most of it: a prefix key, panes, windows in a status
 line, copy mode. On top of that it adds floating windows you can drag
 around, a command palette, key hints, and a mouse that works everywhere.
 
-> **Status:** milestone M3 (hosted mode, with sessions you can detach from
-> and restore). See [ROADMAP.md](../ROADMAP.md).
+> **Status:** milestone M3.5 (hosted mode on Linux, macOS and Windows, with
+> sessions you can detach from and restore). See [ROADMAP.md](../ROADMAP.md).
 
 ## Install and run
 
-You need Rust (the toolchain pinned in `rust-toolchain.toml` installs
-automatically through rustup) on Linux, macOS or WSL2.
+The quickest way to try it is a [test build](#test-builds) from CI. To build
+it yourself you need Rust (the toolchain pinned in `rust-toolchain.toml`
+installs automatically through rustup) on Linux, macOS, Windows or WSL2.
 
 ```bash
 cargo install --path crates/termos-cli
@@ -26,6 +27,11 @@ Or run it straight from the repository:
 ```bash
 cargo run --release -p termos-cli
 ```
+
+On Windows, run it in **Windows Terminal** (or another console with VT
+support, on Windows 10 1809 or newer). Panes start PowerShell 7 (`pwsh`)
+if it is installed, else Windows PowerShell; set `shell = "cmd.exe"` (or any
+program) in the config to change that. See [Windows notes](#windows-notes).
 
 The first time, a short tutorial opens. Press `→` to page through it and `q`
 to close it. Reopen it any time with `C-b F1`.
@@ -169,6 +175,77 @@ accent = "#ff8800"      # "#rrggbb", "colourN" (0-255), "brightblue", "default"
 Every command name, such as `pane.zoom`, `layout.select tiled` or
 `workspace.select 3`, is listed in the command palette.
 
+## Test builds
+
+Every push to GitHub builds TermOS for Linux (x86_64 and aarch64), macOS
+(Apple silicon) and Windows (x86_64). These are **test builds**, not
+releases: unsigned, and kept for 14 days.
+
+1. Open the repository's **Actions** tab, pick a **CI** run for the commit or
+   branch you want, and scroll to **Artifacts** (you need to be signed in to
+   GitHub).
+2. Download the one for your system:
+
+   | File | System |
+   | --- | --- |
+   | `termos-<commit>-linux-x86_64.tar.gz` | Linux on x86_64, glibc 2.31 or newer (Ubuntu 20.04+, Debian 11+, WSL2) |
+   | `termos-<commit>-linux-aarch64.tar.gz` | Linux on arm64, glibc 2.31 or newer (Raspberry Pi OS 64-bit, …) |
+   | `termos-<commit>-macos-arm64.tar.gz` | macOS 11 or newer on Apple silicon |
+   | `termos-<commit>-windows-x86_64.zip` | Windows 10 1809 or newer, Windows 11 |
+
+   GitHub wraps every artifact in a zip, so the Linux and macOS downloads
+   are a zip holding the `.tar.gz` (which keeps the executable bit).
+3. Unpack it and run `termos`. `BUILDINFO.txt` next to it says which commit
+   and CI run it came from; mention it when you report a problem.
+
+```bash
+unzip termos-*-linux-x86_64.zip && tar -xzf termos-*-linux-x86_64.tar.gz
+./termos-*-linux-x86_64/termos
+```
+
+The builds are not signed yet (signed releases come with M9), so:
+
+- **macOS** blocks a downloaded program the first time. Clear the quarantine
+  flag once:
+
+  ```bash
+  xattr -d com.apple.quarantine termos-*-macos-arm64/termos
+  ```
+
+- **Windows** SmartScreen may say "Windows protected your PC": choose
+  **More info → Run anyway**, or unblock the file first in PowerShell:
+
+  ```powershell
+  Unblock-File .\termos.exe
+  ```
+
+  The Windows build includes the C runtime, so nothing else needs
+  installing.
+
+## Windows notes
+
+TermOS runs natively on Windows (Tier 2: tested by CI on every push, with
+known gaps listed below).
+
+- **Terminal:** use Windows Terminal, or another console that understands VT
+  escape sequences. `termos` refuses to start in a console without them.
+- **Shell:** panes start `pwsh`, then `powershell`, then `%COMSPEC%`
+  (usually `cmd.exe`). `$SHELL` is ignored, because Git Bash sets it to a
+  path Windows programs can't run; set `shell` in the config instead.
+- **Files:** the config is `%APPDATA%\termos\config.toml`; logs and
+  snapshots are in `%LOCALAPPDATA%\termos`. The server listens on a named
+  pipe that only your user can open.
+- **Closing the terminal** leaves the server and its sessions running, as on
+  Linux: `termos` brings them back. The server runs without a window; stop
+  it with `termos kill-server`.
+- **Not there yet on Windows** (planned for M9):
+  - bracketed paste: a pasted block arrives as typed keys;
+  - the Kitty keyboard protocol from the outer terminal;
+  - saving at logoff or shutdown is best effort: `termos kill-server` first
+    if you want to be sure;
+  - snapshots don't record which program ran in a pane, so restore starts
+    plain shells.
+
 ## Differences from tmux
 
 - `termos` alone attaches to the session `main`, creating it if needed (like
@@ -187,8 +264,9 @@ Every command name, such as `pane.zoom`, `layout.select tiled` or
   `TERMOS_COLOR=16`.
 - **Ctrl+B is taken by tmux** when you run TermOS inside tmux: set another
   prefix, e.g. `prefix = "C-a"`.
-- **Logs** are in `~/.local/state/termos/log/`. Use `TERMOS_LOG=debug termos`
-  for more detail.
+- **Logs** are in `~/.local/state/termos/log/` (Windows:
+  `%LOCALAPPDATA%\termos\log`). Use `TERMOS_LOG=debug termos` for more
+  detail. When the server fails to start, `termos` names the log directory.
 - **"Already running inside TermOS":** you started `termos` in a TermOS pane.
   Use `termos --force` if you really want to nest. Commands that don't
   attach (`termos ls`, `termos msg …`, `termos detach`) work fine in a pane.

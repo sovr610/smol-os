@@ -121,7 +121,7 @@ rewrite history.
   - termion: Unix-only and less active.
 
 ## D-010: Wire protocol is postcard frames plus JSON-RPC control, on one Unix socket per server
-- **Status:** Accepted (lead), refined by D-031 · 2026-11-01
+- **Status:** Accepted (lead), refined by D-031 and D-036 · 2026-11-01
 - **Decision:**
   - **Socket:** `$XDG_RUNTIME_DIR/termos/<server>.sock`, in a 0700 directory.
   - **Peer check:** the server checks the connecting uid with `SO_PEERCRED` (Linux) or `getpeereid` (macOS) and rejects other users.
@@ -172,7 +172,7 @@ rewrite history.
 - **Alternatives:** `cross`: needs Docker and is slower in CI, but is useful for running tests under qemu-user if we ever need that.
 
 ## D-016: CI runs on GitHub Actions with native runners
-- **Status:** Accepted (lead) · 2026-11-01
+- **Status:** Accepted (lead), refined by D-041 · 2026-11-01
 - **Decision:**
   - **lint:** fmt, `xtask check-todos`, cargo-deny.
   - **test:** clippy `-D warnings` plus tests on `ubuntu-24.04` (x86_64), `ubuntu-24.04-arm` (aarch64) and `macos-latest`.
@@ -300,7 +300,7 @@ rewrite history.
 - **Alternatives:** keeping a single-process `termos` and adding the daemon behind a flag. Rejected: detach is the point of M3.
 
 ## D-030: The server daemon's lifecycle
-- **Status:** Accepted (lead) · 2026-11-01
+- **Status:** Accepted (lead), refined by D-037 for Windows · 2026-11-01
 - **Decision:**
   - **Startup:** a client that finds no server spawns `termos server -S <socket>` with null stdio and waits up to 10 s for the socket. If two clients race, the loser's server sees a live socket and exits; the client then uses the winner.
   - **Detaching from the terminal:** the server calls `rustix::process::setsid()` itself (safe Rust, no `pre_exec`), so it has no controlling terminal and survives the terminal that started it.
@@ -309,7 +309,7 @@ rewrite history.
   - **Plugins** start with the first session (D-034).
 
 ## D-031: Socket, handshake and framing (refines D-010)
-- **Status:** Accepted (lead) · 2026-11-01
+- **Status:** Accepted (lead), refined by D-036 for Windows · 2026-11-01
 - **Decision:**
   - **Socket:** `$XDG_RUNTIME_DIR/termos/<name>.sock`, falling back to `$TMPDIR/termos-<uid>/<name>.sock`.
     - The directory is created with mode 0700; one owned by another user is refused, and wider permissions are tightened.
@@ -364,7 +364,7 @@ rewrite history.
   - Periodic snapshots: they cost wakeups (D-028).
 
 ## D-034: Plugins v1 (refines the out-of-process part of D-013)
-- **Status:** Accepted (lead) · 2026-11-01
+- **Status:** Accepted (lead), refined by D-040 (token source, SDK transport) · 2026-11-01
 - **Decision:**
   - **Install and consent:** a plugin is a directory `~/.config/termos/plugins/<name>/` with a `plugin.toml`:
     - `name` (must equal the directory name: lowercase, digits, `-`, `_`), `version`, `description`;
@@ -390,6 +390,87 @@ rewrite history.
   - **Deferred:** running launched plugins under the agent sandbox comes with M6; the WASM widgets of D-013 are M4.
 - **Alternatives:** an async SDK (it would pull in tokio); auto-restart with backoff (to be revisited with real plugins).
 
+## D-035: Native Windows is a Tier 2 hosted platform
+- **Status:** Accepted (owner) · 2026-11-01
+- **Decision:**
+  - **Owner:** TermOS runs natively on Windows (Windows Terminal, or any console with VT support, on Windows 10 1809 or newer), so it can be tested on Linux and Windows alike. This replaces the "not supported, use WSL2" line in ARCHITECTURE.md §1 and §18. WSL2 stays supported as Linux.
+  - **Owner:** it ships as its own milestone, M3.5, before M4a, with CI test builds on every push (D-041).
+  - **Tier 2** means: built, linted and tested on every push; the daemon smoke-tested; known gaps tracked as `TODO(M9)` markers instead of blocking. Bare metal stays Linux-only.
+  - **Scope:** everything in the hosted desktop: the server daemon, sessions, detach and attach, the control API, snapshots and restore, plugins, PTY panes.
+  - **Known gaps** (Windows only, `TODO(M9)`):
+    - no bracketed paste and no Kitty keyboard input from the outer terminal (the client reads console input events, not VT input);
+    - logoff and shutdown save on a best-effort basis (`WM_ENDSESSION` needs a hidden window);
+    - the foreground program of a pane is not known, so snapshots name no programs and restore re-runs none;
+    - ConPTY consumes image escape sequences, so images inside panes (M4a) won't work there.
+- **Rationale:** the owner tests on both systems; the architecture was already split at the transport and the PTY layer, so the port is mostly behind two seams (D-036, D-039).
+- **Alternatives:** WSL2 only (no native experience); a Windows client attaching to a Linux server (keeps the server Unix-only, but needs a remote transport we don't have yet).
+
+## D-036: Local IPC is a `termos_core::local` seam; Windows uses secured named pipes (refines D-010, D-031)
+- **Status:** Accepted (lead) · 2026-11-01
+- **Decision:**
+  - **Seam:** `termos_core::local` holds `LocalListener::{bind, accept}`, `LocalStream::{connect, peer, into_split}`, `LocalRead`/`LocalWrite`, `PeerId` (a uid on Unix, a SID string on Windows), and `probe`/`exists`/`remove_endpoint`. The transport, the server and the CLI use only these. Unix behaviour is unchanged (D-031).
+  - **Windows endpoint:** `\\.\pipe\termos-<16 hex digits>-<server name>`. The hex digits are FNV-1a-64 of the lower-cased runtime directory (by default `%LOCALAPPDATA%\termos\run`). The hash is written out by hand so it never changes between Rust versions. Setting `XDG_RUNTIME_DIR` gives an isolated set of servers, as on Unix (tests rely on it). `-S` must name a pipe (`\\.\pipe\…`).
+  - **Security (each pipe instance):**
+    - a protected DACL, `D:P(A;;GA;;;<our SID>)`: only our user, nothing inherited;
+    - remote clients are rejected;
+    - the first instance is created with `first_pipe_instance`, so a second server on the same name gets "already running" instead of sharing it;
+    - the server checks the SID of each client's process and answers any other user with `-32003`, as on Unix;
+    - the client checks the SID of the server's process **before sending `hello`**, so a process that registered our pipe name first ("pipe squatting") never sees a token or a keystroke;
+    - clients connect with `SECURITY_ANONYMOUS`, so the server can never act as the client.
+  - **Accepting:** four instances wait for clients at once, each in its own task, and a new one replaces each instance that connects, so clients arriving together (plugins starting with a session) all find one. Our clients also retry `ERROR_PIPE_BUSY` for up to 2 seconds. A waiting instance is a pending overlapped connect, so nothing wakes while idle.
+  - **Unsafe code:** the Win32 calls (SDDL conversion, process and token SIDs, pipe creation with security attributes) sit in one `#[allow(unsafe_code)]` module with `// SAFETY:` comments, using `windows-sys` (already in `Cargo.lock`).
+- **Alternatives:**
+  - TCP on localhost with a token: reachable by every local user and by any program that finds the port; needs a token file on disk.
+  - AF_UNIX on Windows: supported by Windows since 2018, but not by tokio or the Rust standard library on Windows, and it has no peer credentials.
+  - The `interprocess` crate: another dependency for what tokio already provides, and it still leaves the security attributes to us.
+
+## D-037: The daemon on Windows (refines D-030)
+- **Status:** Accepted (lead) · 2026-11-01
+- **Decision:**
+  - **Starting:** the client spawns `termos server` with `CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP | CREATE_BREAKAWAY_FROM_JOB`, retrying without the last flag when the job forbids breaking away. So no console window pops up, Ctrl+C in the starting terminal never reaches the server, and closing that terminal (or an SSH session's job) doesn't take the server with it. The server's hidden console is inherited by its plugins.
+  - **Stopping:** `tokio::signal::windows` Ctrl+C, Ctrl+Break, close, logoff and shutdown events do what SIGTERM does on Unix: save every snapshot, tell clients, exit. Logoff and shutdown are best-effort until a hidden window handles `WM_ENDSESSION` (`TODO(M9)`).
+  - **Startup failures** (on every platform) are written to the server log, and the client names the log directory, since the daemon's stderr goes nowhere.
+- **Alternatives:** a Windows service (needs installation and admin rights, and runs in another session than the user's console).
+
+## D-038: Paths and the default shell on Windows
+- **Status:** Accepted (lead) · 2026-11-01
+- **Decision:**
+  - **Directories:** config `%APPDATA%\termos`, state (logs, snapshots) `%LOCALAPPDATA%\termos`, runtime `%LOCALAPPDATA%\termos\run` (only hashed into pipe names, D-036). `XDG_CONFIG_HOME`, `XDG_STATE_HOME` and `XDG_RUNTIME_DIR` override them on every platform. The directories rely on the profile's ACLs; Unix keeps its 0700/0600 modes.
+  - **Snapshots:** a rename over an existing snapshot is retried briefly (antivirus and indexers hold files open). File names that are reserved device names on Windows (`CON`, `NUL`, `COM1`…) are encoded like other unsafe characters. Program names drop `.exe` and accept `\`.
+  - **Default shell:** config `shell`, else `pwsh.exe` on `PATH`, else `powershell.exe`, else `%COMSPEC%`, else `cmd.exe`. `$SHELL` is ignored on Windows: Git Bash sets it to an MSYS path that a native program can't run.
+  - **Client:** refuses to start without VT processing (old consoles) with a clear error; assumes truecolor when `TERM` is unset; a key reported as Ctrl+Alt with a printable symbol (`@`, `{`, `€`) is AltGr typing, not a chord.
+- **Alternatives:** the `dirs` crate (one more dependency for three environment variables).
+
+## D-039: PTY panes on Windows use the system ConPTY
+- **Status:** Accepted (lead) · 2026-11-01
+- **Decision:**
+  - portable-pty's ConPTY backend (D-025) runs Windows panes. It needs Windows 10 1809 or newer.
+  - **End of output:** ConPTY keeps the output pipe open after the child exits. A waiter thread per pane waits for the child, sends its exit code, and closes the pseudo-console, which ends the reader thread's stream. Unix still learns the exit at EOF.
+  - **Foreground program:** not available (there's no process-group leader); `foreground_pid` falls back to the shell's pid, and the program name stays Linux-only (`TODO(M9)`).
+  - Windows Terminal's newer `conpty.dll` is not shipped. If ConPTY bugs on older builds turn up, shipping it is the fix to consider.
+- **Alternatives:** WinPTY (unmaintained); our own ConPTY wrapper (portable-pty already is one).
+
+## D-040: Plugin tokens from `getrandom`; the SDK speaks named pipes (refines D-034)
+- **Status:** Accepted (lead) · 2026-11-01
+- **Decision:**
+  - **Tokens:** 128 bits from the `getrandom` crate (the OS generator on every platform: `getrandom(2)`, `SecRandom`, `ProcessPrng`) instead of reading `/dev/urandom`. Comparison, single use and redaction are unchanged.
+  - **SDK on Windows:** the pipe is opened for overlapped I/O behind a private `Conn` trait, so a read can wait with a timeout and be cancelled. A synchronous pipe handle serializes its I/O, so a thread blocked in a read would block every write. The client side uses `SECURITY_ANONYMOUS` as in D-036. The SDK stays blocking and tokio-free; on Unix it is unchanged.
+  - **Other languages:** a plugin opens the path in `TERMOS_SOCKET` as a file when it starts with `\\.\pipe\` (Python: `open(path, "r+b", buffering=0)`), and as a Unix socket otherwise.
+- **Alternatives:** keeping `/dev/urandom` with a Windows branch (two code paths for what one crate does); a reader thread in the SDK (deadlocks on a synchronous pipe).
+
+## D-041: CI tests Windows and publishes test builds on every push (refines D-016)
+- **Status:** Accepted (owner: test builds on every push for all four platforms; lead: the layout) · 2026-11-01
+- **Decision:**
+  - **Test matrix:** Linux x86_64, Linux aarch64, macOS arm64 and **Windows x86_64** (`windows-latest`): clippy, the whole test suite, and a **daemon smoke test** (`.github/scripts/daemon-smoke.sh`: `new -d`, `ls`, `msg pane.list`, `msg notify.send`, `msg server.info`, `kill-server`) in an isolated home. The script runs in bash on every OS (Git Bash on Windows).
+  - **Lint job:** also runs clippy for `x86_64-pc-windows-msvc` from Linux. `cargo xtask ci` does the same when that target is installed and prints SKIPPED otherwise. Crates whose tests compile C code for the target (criterion) are checked without their tests there; the Windows runner covers them.
+  - **Test builds** (not releases), kept 14 days, each with a `BUILDINFO.txt` (target, commit, branch, date, run link):
+    - Linux x86_64 and aarch64: the zigbuild glibc 2.31 builds (D-015), as `termos-<sha7>-linux-<arch>.tar.gz`;
+    - macOS arm64: `termos-<sha7>-macos-arm64.tar.gz`;
+    - Windows x86_64: `termos-<sha7>-windows-x86_64.zip`, with the C runtime linked statically (no Visual C++ redistributable needed). CI sets `RUSTFLAGS` itself because the toolchain action's `RUSTFLAGS` overrides `.cargo/config.toml`.
+  - Test builds don't wait for the test jobs, so a build is available even when a test fails; the run still shows red. The Linux builds are downloaded and smoke-run on matching runners; the macOS and Windows builds are smoke-run where they are built.
+  - Builds are unsigned: macOS needs `xattr -d com.apple.quarantine`, and Windows SmartScreen needs "More info → Run anyway" or `Unblock-File` (docs/getting-started.md). Signing comes with releases (M9).
+- **Alternatives:** test builds only on `main` or on demand (the owner wanted every push); GitHub releases for test builds (they'd clutter the release list).
+
 ---
 
 ## Open questions (the owner will be asked before the milestone that needs each one)
@@ -403,7 +484,7 @@ rewrite history.
 | O-5 | Secret store on bare metal, where there's no Secret Service: an age-encrypted file unlocked by passphrase, a TPM-sealed key, or something else? | M6 | age file with a passphrase; TPM later. |
 | O-6 | llama.cpp integration: a managed `llama-server` subprocess or FFI (`llama-cpp-2`)? | M7 | Subprocess: crash isolation, a ready-made OpenAI API, easy CUDA/ROCm/Vulkan build swaps. |
 | O-7 | Rust-native inference: ONNX Runtime (`ort`), candle, or both? | M7 | candle first (pure Rust, no C++ runtime). |
-| O-8 | WASM engine for widgets: wasmtime (component model, JIT, larger) or wasmi (interpreter, small)? | M4 | wasmtime if component-model support decides it; measure RAM on a Pi 4. |
+| O-8 | WASM engine for widgets: wasmtime (component model, JIT, larger) or wasmi (interpreter, small)? | M4 | **Owner: wasmtime** (to be logged with M4b). |
 | O-9 | KMS font rasterizer: swash or fontdue? | M8 | swash (shaping and hinting quality). |
 | O-10 | Init system: BusyBox init, s6, or systemd? | M8 | BusyBox init or s6, for size. |
 | O-11 | Network management: connman, NetworkManager, or iwd + a small DHCP client? | M8 | iwd + dhcpcd, with a TermOS settings UI. |

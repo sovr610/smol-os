@@ -16,6 +16,9 @@ JSON-RPC 2.0. Rust plugins can use the `termos-plugin` crate.
 
 A plugin lives in its own directory:
 
+On Windows the plugins directory is `%APPDATA%\termos\plugins`, and `exec`
+names a program the same way (`["./clock.exe"]`, or `["python", "plugin.py"]`).
+
 ```text
 ~/.config/termos/plugins/clock/
 ├── clock           the program
@@ -48,7 +51,8 @@ enabled = ["clock"]
 - `termos msg plugin.list` shows which are running, with their windows,
   commands and widgets.
 - A plugin's stderr goes to the server log
-  (`~/.local/state/termos/log/server.log.*`).
+  (`~/.local/state/termos/log/server.log.*`; on Windows
+  `%LOCALAPPDATA%\termos\log`).
 
 If a plugin exits or crashes, its windows, widget and commands disappear and
 you get a notification. It is not restarted automatically; save the config
@@ -104,7 +108,11 @@ fn main() -> Result<(), termos_plugin::Error> {
 ## The protocol
 
 **Connecting:**
-1. Connect to the Unix socket in `TERMOS_SOCKET`.
+1. Connect to the endpoint in `TERMOS_SOCKET`: a Unix socket path on Linux
+   and macOS, a named pipe (`\\.\pipe\termos-…`) on Windows, which you open
+   like a file for reading and writing. (The server keeps several pipe
+   instances waiting; if opening still fails with "all pipe instances are
+   busy", wait a few milliseconds and try again.)
 2. Send one JSON object per line. The first must be:
 
 ```json
@@ -171,16 +179,21 @@ error.
 ```python
 import json, os, socket
 
-sock = socket.socket(socket.AF_UNIX)
-sock.connect(os.environ["TERMOS_SOCKET"])
-lines = sock.makefile("rb")
+endpoint = os.environ["TERMOS_SOCKET"]
+if endpoint.startswith("\\\\.\\pipe\\"):  # Windows: a named pipe
+    pipe = open(endpoint, "r+b", buffering=0)
+    send, lines = pipe.write, pipe
+else:                                    # Linux, macOS: a Unix socket
+    sock = socket.socket(socket.AF_UNIX)
+    sock.connect(endpoint)
+    send, lines = sock.sendall, sock.makefile("rb")
 next_id = 0
 
 def call(method, params):
     global next_id
     next_id += 1
-    sock.sendall((json.dumps({"jsonrpc": "2.0", "id": next_id,
-                              "method": method, "params": params}) + "\n").encode())
+    send((json.dumps({"jsonrpc": "2.0", "id": next_id,
+                      "method": method, "params": params}) + "\n").encode())
     while True:  # skip notifications that arrive before the answer
         msg = json.loads(lines.readline())
         if msg.get("id") == next_id:
