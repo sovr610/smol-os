@@ -67,8 +67,10 @@ jobs:
       # / Windows-only) code is linted where it compiles.
       - name: clippy
         run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+      # --no-fail-fast: one run shows every failing test binary, which
+      # matters most on the platform nobody tests locally.
       - name: test
-        run: cargo test --workspace --all-features --locked
+        run: cargo test --workspace --all-features --locked --no-fail-fast
       - name: smoke
         run: cargo run --locked -p termos-cli -- --version
       # The real daemon, started and driven by the CLI the way a user would.

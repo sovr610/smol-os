@@ -184,10 +184,13 @@ mod tests {
             io::ErrorKind::AddrInUse
         );
         let server = tokio::spawn(async move {
-            // The probes above connected and hung up; skip those.
+            // The probes above connected and hung up; skip those. (macOS
+            // cannot even name the peer of a socket that has hung up.)
             loop {
                 let stream = listener.accept().await.expect("accept");
-                let peer = stream.peer().expect("peer");
+                let Ok(peer) = stream.peer() else {
+                    continue;
+                };
                 let (mut r, mut w) = stream.into_split();
                 let mut buf = [0u8; 4];
                 if r.read_exact(&mut buf).await.is_err() {

@@ -638,17 +638,23 @@ mod tests {
         };
         let t =
             resolve_target(&Cli::parse_from(["termos", "-L", "x", "ls"]), &paths).expect("target");
-        assert_eq!(t.socket, PathBuf::from("/r/x.sock"));
+        assert_eq!(t.socket, paths.socket_path("x"));
         assert_eq!(t.name, "x");
-        let t = resolve_target(
-            &Cli::parse_from(["termos", "-S", "/tmp/a.sock", "ls"]),
-            &paths,
-        )
-        .expect("target");
-        assert_eq!(
-            (t.socket.to_str(), t.name.as_str()),
-            (Some("/tmp/a.sock"), "a")
-        );
-        assert!(resolve_target(&Cli::parse_from(["termos", "-L", "a/b", "ls"]), &paths).is_err());
+        let explicit = if cfg!(windows) {
+            r"\\.\pipe\termos-0123456789abcdef-a"
+        } else {
+            "/tmp/a.sock"
+        };
+        let t = resolve_target(&Cli::parse_from(["termos", "-S", explicit, "ls"]), &paths)
+            .expect("target");
+        assert_eq!((t.socket.to_str(), t.name.as_str()), (Some(explicit), "a"));
+        for bad in ["a/b", r"a\b"] {
+            assert!(resolve_target(&Cli::parse_from(["termos", "-L", bad, "ls"]), &paths).is_err());
+        }
+        if cfg!(windows) {
+            // -S must name a pipe there.
+            let cli = Cli::parse_from(["termos", "-S", "/tmp/a.sock", "ls"]);
+            assert!(resolve_target(&cli, &paths).is_err());
+        }
     }
 }
