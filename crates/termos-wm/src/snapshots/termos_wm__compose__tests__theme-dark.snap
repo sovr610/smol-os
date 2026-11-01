@@ -1,0 +1,36 @@
+---
+source: crates/termos-wm/src/compose.rs
+expression: g.to_styled_text()
+---
+aaaaaaaaaaaaaaaaaaaa│bbbbbbbbbbbbbbbbbbb
+aaaaaaaaaaaaaaaaaaaa│bbbbbbbbbbbbbbbbbbb
+aaaaaa╭─ pane 7 ─────────–─×─╮bbbbbbbbbb
+aaaaaa│hhhhhhhhhhhhhhhhhhhhhh│bbbbbbbbbb
+aaaaaa│hhhhhhhhhhhhhhhhhhhhhh│bbbbbbbbbb
+aaaaaa│hhhhhhhhhhhhhhhhhhhhhh│bbbbbbbbbb
+aaaaaa│hhhhhhhhhhhhhhhhhhhhhh│──────────
+aaaaaa│hhhhhhhhhhhhhhhhhhhhhh│cccccccccc
+aaaaaa╰──────────────────────╯cccccccccc
+aaaaaaaaaaaaaaaaaaaa│ccccccccccccccccccc
+aaaaaaaaaaaaaaaaaaaa│ccccccccccccccccccc
+aaaaaaaaaaaaaaaaaaaa│ccccccccccccccccccc
+--- styles
+....................a
+....................a
+......bbbccccccbbbbbbbbbbbbbbb
+......b......................bdd
+......b......................bdd
+......b......................bdd
+......b......................beeaaaaaaaa
+......b......................bdd
+......bbbbbbbbbbbbbbbbbbbbbbbbdd
+........ddddddddddddedddddddddff
+....................a
+....................a
+--- legend
+a: fg=#444c56 bg=default
+b: fg=#6cb6ff bg=default
+c: fg=#6cb6ff bg=default Attrs(BOLD)
+d: fg=#53565a bg=#06080a
+e: fg=#1b1e22 bg=#06080a
+f: fg=#212224 bg=#020304

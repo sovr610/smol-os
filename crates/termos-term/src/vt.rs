@@ -79,6 +79,10 @@ pub trait VtBackend: Send {
     /// flushed even if it never ends it.
     fn sync_deadline(&self) -> Option<Instant>;
     fn flush_sync(&mut self);
+    /// The colours the pane's "default" foreground and background show as
+    /// (the outer terminal's), for answering OSC 10/11 queries the program
+    /// did not override.
+    fn set_default_colors(&mut self, fg: termos_render::color::Rgb, bg: termos_render::color::Rgb);
 }
 
 #[derive(Clone, Default)]
@@ -108,6 +112,9 @@ pub struct AlacrittyVt {
     pending: Vec<VtEvent>,
     cols: u16,
     rows: u16,
+    /// Default foreground and background (see
+    /// [`VtBackend::set_default_colors`]).
+    defaults: (VtRgb, VtRgb),
 }
 
 impl std::fmt::Debug for AlacrittyVt {
@@ -155,6 +162,7 @@ impl AlacrittyVt {
             pending: Vec::new(),
             cols,
             rows,
+            defaults: (default_rgb(256), default_rgb(257)),
         }
     }
 
@@ -171,7 +179,12 @@ impl AlacrittyVt {
                 Event::PtyWrite(s) => Some(VtEvent::Reply(s.into_bytes())),
                 Event::ClipboardStore(_, text) => Some(VtEvent::Clipboard(text)),
                 Event::ColorRequest(index, format) => {
-                    let rgb = self.term.colors()[index].unwrap_or_else(|| default_rgb(index));
+                    let rgb = self.term.colors()[index].unwrap_or(match index {
+                        // Foreground and cursor, background.
+                        256 | 258 => self.defaults.0,
+                        257 => self.defaults.1,
+                        _ => default_rgb(index),
+                    });
                     Some(VtEvent::Reply(format(rgb).into_bytes()))
                 }
                 Event::TextAreaSizeRequest(format) => {
@@ -473,6 +486,15 @@ impl VtBackend for AlacrittyVt {
         self.parser.stop_sync(&mut self.term);
         self.drain_listener();
     }
+
+    fn set_default_colors(&mut self, fg: termos_render::color::Rgb, bg: termos_render::color::Rgb) {
+        let vt = |c: termos_render::color::Rgb| VtRgb {
+            r: c.r,
+            g: c.g,
+            b: c.b,
+        };
+        self.defaults = (vt(fg), vt(bg));
+    }
 }
 
 #[cfg(test)]
@@ -494,6 +516,33 @@ mod tests {
         assert_eq!(screen(&vt), "hello  x\nworld\n\n");
         let cur = vt.cursor().expect("visible");
         assert_eq!((cur.x, cur.y), (8, 0));
+    }
+
+    #[test]
+    fn colour_queries_answer_the_outer_terminal_colours() {
+        let mut vt = AlacrittyVt::new(10, 1, 0);
+        use termos_render::color::Rgb;
+        vt.set_default_colors(Rgb::new(0x11, 0x22, 0x33), Rgb::new(0xfa, 0xfa, 0xfa));
+        vt.advance(b"\x1b]11;?\x1b\\\x1b]10;?\x07");
+        let replies: Vec<String> = vt
+            .take_events()
+            .into_iter()
+            .filter_map(|e| match e {
+                VtEvent::Reply(r) => Some(String::from_utf8_lossy(&r).into_owned()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            replies,
+            [
+                "\x1b]11;rgb:fafa/fafa/fafa\x1b\\",
+                "\x1b]10;rgb:1111/2222/3333\x07"
+            ]
+        );
+        // A colour the program set itself wins.
+        vt.advance(b"\x1b]11;#000000\x07\x1b]11;?\x07");
+        let ev = vt.take_events();
+        assert!(ev.contains(&VtEvent::Reply(b"\x1b]11;rgb:0000/0000/0000\x07".to_vec())));
     }
 
     #[test]

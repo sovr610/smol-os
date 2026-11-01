@@ -18,9 +18,10 @@ use termos_core::paths::Paths;
 use termos_core::proto::{ClientMsg, ServerMsg};
 use termos_render::caps::Caps;
 use termos_render::cell::Style;
+use termos_render::color::Rgb;
 use termos_render::encode::CursorState;
 use termos_render::grid::{Grid, Rect};
-use termos_render::theme::Theme;
+use termos_render::theme::{Theme, ThemeBase, is_light};
 use termos_term::input::{encode_focus, encode_key, encode_mouse, encode_paste};
 use termos_term::pty::{PtyEvent, PtyPane, SpawnSpec};
 use termos_term::vt::{AlacrittyVt, VtBackend, VtEvent};
@@ -160,6 +161,10 @@ enum Drag {
 #[derive(Debug)]
 struct ClientUi {
     caps: Caps,
+    /// This client's theme: `[theme]` for its terminal's background, or
+    /// the one it picked with `theme.select`.
+    theme: Theme,
+    theme_pick: Option<ThemeBase>,
     cols: u16,
     rows: u16,
     key_state: KeyState,
@@ -178,6 +183,8 @@ impl Default for ClientUi {
     fn default() -> Self {
         Self {
             caps: Caps::default(),
+            theme: Theme::default(),
+            theme_pick: None,
             cols: 80,
             rows: 24,
             key_state: KeyState::Normal,
@@ -219,8 +226,10 @@ pub enum SessionRequest {
 pub struct Desktop {
     opts: DesktopOptions,
     config: Config,
-    theme: Theme,
     keys: KeyTables,
+    /// Default foreground and background of the panes: the colours of the
+    /// most recently active client's terminal (OSC 10/11 answers).
+    term_colors: (Rgb, Rgb),
     session: Session,
     panes: BTreeMap<PaneId, Pane>,
     pty_tx: mpsc::Sender<PtyEvent>,
@@ -262,6 +271,16 @@ impl std::fmt::Debug for Desktop {
     }
 }
 
+/// A terminal's default foreground and background: its real background
+/// when known, with a foreground that reads on it; xterm's otherwise.
+fn default_term_colors(bg: Option<Rgb>) -> (Rgb, Rgb) {
+    match bg {
+        Some(bg) if is_light(bg) => (Rgb::BLACK, bg),
+        Some(bg) => (Rgb::new(229, 229, 229), bg),
+        None => (Rgb::new(229, 229, 229), Rgb::BLACK),
+    }
+}
+
 /// Time until the next wall-clock minute.
 fn next_minute(now: Instant) -> Instant {
     let z = jiff::Zoned::now();
@@ -280,7 +299,6 @@ impl Desktop {
         cols: u16,
         rows: u16,
     ) -> Self {
-        let theme = config.theme.theme(None, None);
         let (keys, key_errors) = KeyTables::from_config(&config);
         let placeholder = Session::new(
             opts.session_name.clone(),
@@ -288,8 +306,8 @@ impl Desktop {
         );
         let mut d = Self {
             opts,
-            theme,
             keys,
+            term_colors: default_term_colors(None),
             session: placeholder,
             panes: BTreeMap::new(),
             pty_tx,
@@ -669,7 +687,8 @@ impl Desktop {
         ];
         spec.env.extend(self.opts.pane_env.iter().cloned());
         let pty = PtyPane::spawn(id, &spec, self.pty_tx.clone())?;
-        let vt: Box<dyn VtBackend> = Box::new(AlacrittyVt::new(w, h, self.config.scrollback));
+        let mut vt: Box<dyn VtBackend> = Box::new(AlacrittyVt::new(w, h, self.config.scrollback));
+        vt.set_default_colors(self.term_colors.0, self.term_colors.1);
         self.panes.insert(
             id,
             Pane {
@@ -844,8 +863,41 @@ impl Desktop {
         self.recompute_size();
     }
 
-    /// The session size under the `window-size` policy.
+    /// Rebuilds every client's theme (after a config change or a pick).
+    fn refresh_themes(&mut self) {
+        let cfg = &self.config.theme;
+        for ui in self.clients.values_mut() {
+            ui.theme = cfg.theme(ui.theme_pick, ui.caps.background);
+        }
+        if self.current.is_some() {
+            self.ui.theme = cfg.theme(self.ui.theme_pick, self.ui.caps.background);
+        }
+        self.dirty = true;
+    }
+
+    /// Gives the panes the default colours of the most recently active
+    /// client's terminal, so programs that ask (OSC 10/11) get them.
+    fn update_term_colors(&mut self) {
+        let bg = self
+            .last_active
+            .and_then(|c| self.ui_of(c))
+            .and_then(|u| u.caps.background);
+        let colors = default_term_colors(bg);
+        if colors == self.term_colors {
+            return;
+        }
+        self.term_colors = colors;
+        for pane in self.panes.values_mut() {
+            if let PaneKind::Term { vt, .. } = &mut pane.kind {
+                vt.set_default_colors(colors.0, colors.1);
+            }
+        }
+    }
+
+    /// The session size under the `window-size` policy (and the panes'
+    /// default colours, which follow the same client).
     fn recompute_size(&mut self) {
+        self.update_term_colors();
         let sizes: Vec<(u16, u16)> = self
             .clients
             .values()
@@ -883,6 +935,7 @@ impl Desktop {
             self.leave();
             let ui = self.clients.entry(client).or_default();
             ui.caps = caps.clone();
+            ui.theme = self.config.theme.theme(ui.theme_pick, caps.background);
             ui.cols = (*cols).max(2);
             ui.rows = (*rows).max(2);
             // A fresh client must not inherit a stale title.
@@ -1437,6 +1490,20 @@ impl Desktop {
                 self.open_app(Box::new(app));
             }
             Command::ReloadConfig => self.reload_config(),
+            Command::ThemeSelect(base) => {
+                // The client that asked (the control API acts as the
+                // session's newest client); without one, every client.
+                match self.current {
+                    Some(_) => self.ui.theme_pick = Some(base),
+                    None => {
+                        for ui in self.clients.values_mut() {
+                            ui.theme_pick = Some(base);
+                        }
+                    }
+                }
+                self.refresh_themes();
+                self.notify(Level::Info, format!("theme: {base}"));
+            }
             Command::SendPrefix => {
                 if let Some(id) = self.focused() {
                     let modes = match self.panes.get(&id) {
@@ -1530,7 +1597,8 @@ impl Desktop {
             match cmd {
                 Command::LayoutSelect(_)
                 | Command::WorkspaceSelect(_)
-                | Command::SessionSwitch(_) => continue,
+                | Command::SessionSwitch(_)
+                | Command::ThemeSelect(_) => continue,
                 _ => {}
             }
             items.push(PaletteItem {
@@ -1541,6 +1609,14 @@ impl Desktop {
         }
         for p in termos_wm::layout::Preset::ALL {
             let cmd = Command::LayoutSelect(p);
+            items.push(PaletteItem {
+                label: cmd.description(),
+                command: cmd.to_string(),
+                hint: self.keys.key_for(&cmd).unwrap_or_default(),
+            });
+        }
+        for b in ThemeBase::ALL {
+            let cmd = Command::ThemeSelect(b);
             items.push(PaletteItem {
                 label: cmd.description(),
                 command: cmd.to_string(),
@@ -1584,7 +1660,6 @@ impl Desktop {
         match Config::load(&self.opts.config_path) {
             Ok(config) => {
                 let (keys, errors) = KeyTables::from_config(&config);
-                self.theme = config.theme.theme(None, None);
                 self.keys = keys;
                 if config.status.clock && self.clock_deadline.is_none() {
                     self.clock_deadline = Some(next_minute(Instant::now()));
@@ -1593,6 +1668,7 @@ impl Desktop {
                     self.clock_deadline = None;
                 }
                 self.config = config;
+                self.refresh_themes();
                 self.ui.key_state = KeyState::Normal;
                 for ui in self.clients.values_mut() {
                     ui.key_state = KeyState::Normal;
@@ -2253,7 +2329,7 @@ impl Desktop {
         };
         {
             let panes = &mut self.panes;
-            let theme = &self.theme;
+            let theme = &self.ui.theme;
             let copy = &self.copy;
             compose(
                 grid,
@@ -2281,17 +2357,23 @@ impl Desktop {
 
         let status_y = self.status_y();
         let info = self.status_info();
-        let (regions, prompt_cursor) = status::draw(grid, status_y, &self.theme, &info);
+        let (regions, prompt_cursor) = status::draw(grid, status_y, &self.ui.theme, &info);
         self.ui.status_regions = regions;
 
         if self.ui.whichkey_visible || self.ui.whichkey_full {
-            whichkey::draw(grid, area, &self.theme, &self.keys, self.ui.whichkey_full);
+            whichkey::draw(
+                grid,
+                area,
+                &self.ui.theme,
+                &self.keys,
+                self.ui.whichkey_full,
+            );
         }
         let palette_cursor = self
             .ui
             .palette
             .as_ref()
-            .map(|p| p.render(grid, area, &self.theme));
+            .map(|p| p.render(grid, area, &self.ui.theme));
 
         let title = format!("TermOS · {}", self.session.active().name);
         if title != self.ui.title_sent {

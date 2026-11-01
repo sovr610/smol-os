@@ -172,6 +172,61 @@ async fn starts_with_a_shell_and_a_status_line() {
 }
 
 #[tokio::test]
+async fn themes_follow_each_terminal_and_can_be_picked() {
+    use termos_render::color::{Color, Rgb};
+    use termos_render::theme::ThemeColors;
+
+    let mut h = Harness::new("");
+    // A second terminal, with a light background.
+    const L: ClientId = ClientId(2);
+    h.desktop.handle_client(
+        L,
+        ClientMsg::Hello {
+            version: termos_core::proto::PROTOCOL_VERSION,
+            caps: Caps {
+                background: Some(Rgb::new(250, 250, 250)),
+                ..Caps::default()
+            },
+            cols: COLS,
+            rows: ROWS,
+        },
+    );
+    let status_bg = |d: &mut Desktop, client: ClientId| -> Color {
+        let mut g = Grid::new(COLS, ROWS);
+        d.render(client, &mut g);
+        g.get(COLS - 1, ROWS - 1).expect("status cell").style.bg
+    };
+    assert_eq!(status_bg(&mut h.desktop, C), ThemeColors::dark().status_bg);
+    assert_eq!(status_bg(&mut h.desktop, L), ThemeColors::light().status_bg);
+
+    // The first client picks high contrast in the palette; the other
+    // keeps its own theme.
+    h.key("C-Space");
+    h.type_text("theme high");
+    h.key("Enter");
+    assert_eq!(
+        status_bg(&mut h.desktop, C),
+        ThemeColors::high_contrast().status_bg
+    );
+    assert_eq!(status_bg(&mut h.desktop, L), ThemeColors::light().status_bg);
+    assert!(h.screen().contains("theme: high-contrast"));
+
+    // A config with a fixed base applies to the client without a pick;
+    // the pick survives the reload.
+    std::fs::write(
+        h.config_path(),
+        base_config("[theme]\nbase = \"dark\"\n[status]\nclock = false\n[tutorial]\nshow-on-first-run = false\n"),
+    )
+    .expect("write config");
+    h.desktop.reload_config();
+    assert_eq!(status_bg(&mut h.desktop, L), ThemeColors::dark().status_bg);
+    assert_eq!(
+        status_bg(&mut h.desktop, C),
+        ThemeColors::high_contrast().status_bg
+    );
+}
+
+#[tokio::test]
 async fn split_right_type_and_see_separator() {
     let mut h = Harness::new("");
     h.keys("C-b %");

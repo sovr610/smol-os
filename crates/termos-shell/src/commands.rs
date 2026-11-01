@@ -9,6 +9,7 @@
 use std::fmt;
 use std::str::FromStr;
 
+use termos_render::theme::ThemeBase;
 use termos_wm::layout::{Direction, Preset};
 use termos_wm::workspace::{Snap, SplitHow};
 
@@ -58,6 +59,8 @@ pub enum Command {
     SessionRename,
     /// Restore saved sessions that are not running.
     SessionRestore,
+    /// Switch this client's theme (all clients' from the control API).
+    ThemeSelect(ThemeBase),
 }
 
 /// Static description of a command name.
@@ -170,6 +173,11 @@ pub const COMMANDS: &[CommandInfo] = &[
     },
     info("session.rename", "Rename this session"),
     info("session.restore", "Restore saved sessions"),
+    CommandInfo {
+        name: "theme.select",
+        description: "Theme",
+        arg: Some("auto"),
+    },
 ];
 
 /// Error for an unknown or malformed command.
@@ -312,6 +320,16 @@ impl FromStr for Command {
             "session.switch" => arg
                 .map(|a| Command::SessionSwitch(a.to_owned()))
                 .ok_or_else(|| CommandError("`session.switch` needs a session name".into())),
+            "theme.select" => {
+                let a = arg.ok_or_else(|| {
+                    CommandError(
+                        "`theme.select` needs a theme: auto, dark, light or high-contrast".into(),
+                    )
+                })?;
+                a.parse::<ThemeBase>()
+                    .map(Command::ThemeSelect)
+                    .map_err(CommandError)
+            }
             "" => Err(CommandError("empty command".into())),
             _ => Err(CommandError(format!("unknown command `{name}`"))),
         }
@@ -365,6 +383,7 @@ impl fmt::Display for Command {
             Command::SessionSwitch(name) => write!(f, "session.switch {name}"),
             Command::SessionRename => f.write_str("session.rename"),
             Command::SessionRestore => f.write_str("session.restore"),
+            Command::ThemeSelect(b) => write!(f, "theme.select {b}"),
         }
     }
 }
@@ -381,6 +400,7 @@ impl Command {
         match self {
             Command::Resize(_, n) if *n > 1 => format!("{base} by {n}"),
             Command::LayoutSelect(p) => format!("{base}: {}", p.name()),
+            Command::ThemeSelect(b) => format!("{base}: {b}"),
             Command::WorkspaceSelect(n) => format!("{base} {n}"),
             Command::SessionSwitch(name) => format!("{base} {name}"),
             _ => base.to_owned(),

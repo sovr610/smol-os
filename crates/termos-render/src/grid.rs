@@ -377,6 +377,50 @@ impl Grid {
         }
         out
     }
+
+    /// The text plus a style layer, for snapshot tests of anything that
+    /// is about colour (themes, block images): every cell's style as one
+    /// character, then a legend. `.` is the default style.
+    pub fn to_styled_text(&self) -> String {
+        const KEYS: &str = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+        let mut styles: Vec<Style> = Vec::new();
+        let mut layer = String::new();
+        for y in 0..self.rows {
+            let mut row = String::new();
+            for cell in self.row(y).iter().filter(|c| !c.is_continuation()) {
+                if cell.style == Style::new() {
+                    row.push('.');
+                    continue;
+                }
+                let i = styles
+                    .iter()
+                    .position(|s| *s == cell.style)
+                    .unwrap_or_else(|| {
+                        styles.push(cell.style);
+                        styles.len() - 1
+                    });
+                row.push(KEYS.chars().nth(i).unwrap_or('?'));
+            }
+            layer.push_str(row.trim_end_matches('.'));
+            layer.push('\n');
+        }
+        let mut out = self.to_text();
+        out.push_str("--- styles\n");
+        out.push_str(&layer);
+        out.push_str("--- legend\n");
+        for (i, s) in styles.iter().enumerate() {
+            let key = KEYS.chars().nth(i).unwrap_or('?');
+            out.push_str(&format!("{key}: fg={} bg={}", s.fg, s.bg));
+            if s.ul != Color::Default {
+                out.push_str(&format!(" ul={}", s.ul));
+            }
+            if !s.attrs.is_empty() {
+                out.push_str(&format!(" {:?}", s.attrs));
+            }
+            out.push('\n');
+        }
+        out
+    }
 }
 
 #[cfg(test)]

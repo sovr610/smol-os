@@ -238,6 +238,33 @@ mod tests {
     }
 
     #[test]
+    fn snapshot_each_theme() {
+        use termos_render::theme::{ThemeBase, ThemeConfig};
+        let mut ws = three_panes();
+        ws.add_float(PaneId(7), AREA);
+        ws.set_float_rect(PaneId(7), Rect::new(6, 2, 24, 7), AREA);
+        let pl = ws.placement(AREA);
+        for base in [ThemeBase::Dark, ThemeBase::Light, ThemeBase::HighContrast] {
+            let theme = ThemeConfig {
+                base,
+                ..ThemeConfig::default()
+            }
+            .theme(None, None);
+            let mut g = Grid::new(AREA.w, AREA.h);
+            compose(
+                &mut g,
+                &pl,
+                ws.focus(),
+                &theme,
+                &ComposeOptions::default(),
+                &|p| format!("pane {}", p.0),
+                &mut letters,
+            );
+            insta::assert_snapshot!(format!("theme-{}", base.name()), g.to_styled_text());
+        }
+    }
+
+    #[test]
     fn snapshot_zoom() {
         let mut ws = three_panes();
         ws.toggle_zoom();
