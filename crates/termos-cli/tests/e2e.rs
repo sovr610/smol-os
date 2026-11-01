@@ -30,15 +30,14 @@ fn split_type_close_and_exit() {
             .is_some_and(|l| l.starts_with("[main]"))
     );
     t.send(b"echo ri''ght\r");
-    let screen = t.wait_for("output in the right pane", T, |s| {
-        s.lines()
-            .any(|l| l.trim_end().ends_with("right") && !l.contains("echo"))
+    // The output is in the right-hand cell of a row (after the separator).
+    t.wait_for("output in the right pane", T, |s| {
+        s.lines().any(|l| {
+            l.split('│')
+                .nth(1)
+                .is_some_and(|cell| is_output(cell, "right"))
+        })
     });
-    let line = screen
-        .lines()
-        .find(|l| l.trim_end().ends_with("right") && !l.contains("echo"))
-        .unwrap_or_default();
-    assert!(line.find("right").unwrap_or(0) > 40, "{line:?}");
 
     // Palette via C-Space (NUL), then Escape.
     t.send(b"\x00");
@@ -63,13 +62,16 @@ fn split_type_close_and_exit() {
 /// (typeahead), but not the command that printed it. Rows hold several
 /// panes side by side, separated by `│`.
 fn in_a_pane(screen: &str, text: &str) -> bool {
-    screen.lines().any(|l| {
-        l.split('│').any(|cell| {
-            cell.trim().strip_suffix(text).is_some_and(|before| {
-                let before = before.trim_end();
-                before.is_empty() || before.ends_with(['$', '#'])
-            })
-        })
+    screen
+        .lines()
+        .any(|l| l.split('│').any(|cell| is_output(cell, text)))
+}
+
+/// Whether one pane's part of a row is `text`, possibly after a prompt.
+fn is_output(cell: &str, text: &str) -> bool {
+    cell.trim().strip_suffix(text).is_some_and(|before| {
+        let before = before.trim_end();
+        before.is_empty() || before.ends_with(['$', '#'])
     })
 }
 
