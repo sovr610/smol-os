@@ -498,6 +498,7 @@ async fn kill(srv: TestServer) {
 }
 
 /// Polls `pane.list` until `pred` holds for it.
+#[cfg(target_os = "linux")]
 async fn until_panes(socket: &Path, what: &str, pred: impl Fn(&[Value]) -> bool) -> Vec<Value> {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
     loop {
