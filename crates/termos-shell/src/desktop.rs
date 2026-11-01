@@ -1532,7 +1532,10 @@ impl Desktop {
             pane.size = size;
             if let PaneKind::Term { vt, pty } = &mut pane.kind {
                 vt.resize(size.0, size.1);
-                if let Err(e) = pty.resize(size.0, size.1) {
+                // The emulator may be larger than the pane (MIN_COLS); the
+                // program must see the emulator's size.
+                let (cols, rows) = vt.size();
+                if let Err(e) = pty.resize(cols, rows) {
                     tracing::warn!("resize of pane {id} failed: {e}");
                 }
             }

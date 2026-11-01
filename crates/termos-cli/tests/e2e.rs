@@ -16,7 +16,8 @@ fn split_type_close_and_exit() {
     t.wait_ready();
     t.send(b"echo e2''e-ok\r");
     t.wait_for("command output", T, |s| {
-        s.lines().any(|l| l.trim() == "e2e-ok")
+        s.lines()
+            .any(|l| l.trim_end().ends_with("e2e-ok") && !l.contains("echo"))
     });
 
     // C-b % splits; the new pane is on the right.

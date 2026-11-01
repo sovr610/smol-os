@@ -94,6 +94,12 @@ impl EventListener for Listener {
     }
 }
 
+/// The emulator is never narrower than this. `alacritty_terminal` cannot
+/// reflow a double-width character into a single column: memory grows
+/// without bound (found by the `vt_advance` fuzz target). A pane drawn one
+/// cell wide simply shows the first column of a two-column screen.
+pub const MIN_COLS: u16 = 2;
+
 /// [`VtBackend`] over `alacritty_terminal`.
 pub struct AlacrittyVt {
     term: Term<Listener>,
@@ -132,7 +138,7 @@ impl Dimensions for Size {
 
 impl AlacrittyVt {
     pub fn new(cols: u16, rows: u16, scrollback: usize) -> Self {
-        let (cols, rows) = (cols.max(1), rows.max(1));
+        let (cols, rows) = (cols.max(MIN_COLS), rows.max(1));
         let listener = Listener::default();
         let config = TermConfig {
             scrolling_history: scrollback,
@@ -329,7 +335,7 @@ impl VtBackend for AlacrittyVt {
     }
 
     fn resize(&mut self, cols: u16, rows: u16) {
-        let (cols, rows) = (cols.max(1), rows.max(1));
+        let (cols, rows) = (cols.max(MIN_COLS), rows.max(1));
         if (cols, rows) == (self.cols, self.rows) {
             return;
         }
@@ -579,6 +585,34 @@ mod tests {
         let all: Vec<String> = (-history..3).map(|l| vt.line_text(l)).collect();
         let joined = all.join("|");
         assert!(joined.contains("abcd|efgh"), "{joined}");
+    }
+
+    #[test]
+    fn wide_char_survives_one_column_resize() {
+        // Minimized from a vt_advance fuzz case that exhausted memory.
+        let mut vt = AlacrittyVt::new(40, 10, 50);
+        vt.advance("+\u{cd75}".as_bytes());
+        vt.resize(1, 1);
+        assert_eq!(vt.size(), (MIN_COLS, 1));
+        vt.resize(7, 7);
+        let history = i32::try_from(vt.history_size()).expect("small");
+        let all: String = (-history..7).map(|l| vt.line_text(l)).collect();
+        assert!(all.contains('\u{cd75}'), "{all:?}");
+        // The exact fuzz input, replayed the way the target does.
+        let input = [
+            43u8, 236, 181, 181, 28, 181, 246, 254, 252, 0, 252, 9, 0, 0, 0, 0, 254, 252, 6,
+        ];
+        let mut vt = AlacrittyVt::new(40, 10, 50);
+        for chunk in input.split(|&b| b == 0xFE) {
+            match chunk.first() {
+                Some(&op) if op >= 0xF0 => {
+                    let arg = chunk.get(1).copied().unwrap_or(1);
+                    vt.resize(u16::from(arg % 120) + 1, u16::from(arg % 50) + 1);
+                }
+                _ => vt.advance(chunk),
+            }
+        }
+        assert_eq!(vt.size(), (7, 7));
     }
 
     #[test]

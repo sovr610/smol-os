@@ -162,9 +162,14 @@ async fn split_right_type_and_see_separator() {
     let focused = h.desktop.focused();
     assert_eq!(focused, Some(h.panes()[1]));
     h.type_text("echo ri''ght\n");
-    // The output line: "right" alone in the right-hand pane (the status
-    // line may also contain the word, e.g. in a workspace name).
-    let is_output = |l: &str| l.split('│').nth(1).is_some_and(|r| r.trim() == "right");
+    // The output line in the right-hand pane ends with "right" (it may
+    // follow a prompt when the keys were typed before the shell printed
+    // it); the echoed command line contains "echo".
+    let is_output = |l: &str| {
+        l.split('│')
+            .nth(1)
+            .is_some_and(|r| r.trim_end().ends_with("right") && !r.contains("echo"))
+    };
     let screen = h
         .wait_for("output in the right pane", move |s, _| {
             s.lines().any(is_output)
@@ -226,7 +231,8 @@ async fn copy_mode_search_select_yank() {
     let mut h = Harness::new("");
     h.type_text("echo cop''ytext\n");
     h.wait_for("output line", |s, _| {
-        s.lines().any(|l| l.trim() == "copytext")
+        s.lines()
+            .any(|l| l.trim_end().ends_with("copytext") && !l.contains("echo"))
     })
     .await;
     h.keys("C-b [");

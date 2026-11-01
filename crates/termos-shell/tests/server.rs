@@ -108,7 +108,8 @@ async fn frames_are_incremental_and_idle_is_silent() {
         client.tx.send(ClientMsg::Key(key)).expect("alive");
     }
     until(&mut client, &mut mirror, "ready", |s| {
-        s.lines().any(|l| l.trim() == "ready")
+        s.lines()
+            .any(|l| l.trim_end().ends_with("ready") && !l.contains("echo"))
     })
     .await;
     // Let the prompt settle, then make sure nothing else arrives: no
