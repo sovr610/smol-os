@@ -25,6 +25,10 @@ use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 mod unix;
 #[cfg(unix)]
 use unix as sys;
+#[cfg(windows)]
+mod windows;
+#[cfg(windows)]
+use windows as sys;
 
 /// A bound endpoint that accepts connections.
 #[derive(Debug)]

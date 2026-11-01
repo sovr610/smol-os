@@ -1966,6 +1966,7 @@ dependencies = [
  "tracing-appender",
  "tracing-subscriber",
  "unicode-width",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
