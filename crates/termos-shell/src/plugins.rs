@@ -675,7 +675,7 @@ mod tests {
     fn the_sdk_speaks_the_server_protocol() {
         assert_eq!(
             termos_plugin::proto::PROTOCOL_VERSION,
-            termos_core::proto::PROTOCOL_VERSION
+            termos_core::wire::RPC_VERSION
         );
     }
 

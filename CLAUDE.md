@@ -30,7 +30,7 @@ Dependency direction is fixed in ARCHITECTURE.md §4. Never add an edge that poi
 - `cargo xtask check-todos`: work-marker format, ROADMAP sync and SPDX headers.
 - `cargo run -p termos-cli -- <args>`: run `termos`. With no arguments it starts the desktop, which needs a real terminal.
 - `cargo xtask perf [SECS]`: performance budgets on a release build (Linux), with SECS seconds of idle measurement (default 60).
-- `cd fuzz && cargo +nightly fuzz run <target> -- -max_total_time=60`: fuzz a parser. The targets are `vt_advance`, `config_parse` and `keyspec_parse`.
+- `cd fuzz && cargo +nightly fuzz run <target> -- -max_total_time=60`: fuzz a parser. The targets are `vt_advance`, `config_parse`, `keyspec_parse`, `proto_decode` and `caps_reply`.
 - `INSTA_UPDATE=always cargo test -p <crate>`: write new snapshots; review the `.snap` files before committing.
 - `cargo zigbuild --release -p termos-cli --target aarch64-unknown-linux-gnu.2.31`: cross-build. Needs zig and cargo-zigbuild.
 - `cargo deny check`: licenses, advisories, sources.

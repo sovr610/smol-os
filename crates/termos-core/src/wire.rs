@@ -115,10 +115,24 @@ pub struct Hello {
     pub cwd: Option<String>,
 }
 
+/// The JSON-RPC API that control clients and plugins speak. Frontends
+/// use [`PROTOCOL_VERSION`] instead, since their frames change more often.
+pub const RPC_VERSION: u32 = 1;
+
+impl ConnKind {
+    /// The handshake version a connection of this kind must speak.
+    pub const fn version(self) -> u32 {
+        match self {
+            Self::Frontend => PROTOCOL_VERSION,
+            Self::Control | Self::Plugin => RPC_VERSION,
+        }
+    }
+}
+
 impl Hello {
     pub fn new(kind: ConnKind) -> Self {
         Self {
-            version: PROTOCOL_VERSION,
+            version: kind.version(),
             kind,
             client: format!("termos {}", env!("CARGO_PKG_VERSION")),
             session: None,
@@ -318,7 +332,7 @@ pub fn to_line<T: Serialize>(msg: &T) -> String {
 }
 
 /// Validates a `hello` request: it must be the method `hello` with valid
-/// params and the server's protocol version.
+/// params and the version the server speaks for that kind of connection.
 pub fn check_hello(req: &Request) -> Result<Hello, RpcError> {
     if req.method != "hello" {
         return Err(RpcError::new(
@@ -327,11 +341,12 @@ pub fn check_hello(req: &Request) -> Result<Hello, RpcError> {
         ));
     }
     let hello: Hello = req.params_as()?;
-    if hello.version != PROTOCOL_VERSION {
+    let expected = hello.kind.version();
+    if hello.version != expected {
         return Err(RpcError::new(
             codes::VERSION_MISMATCH,
             format!(
-                "protocol version mismatch: this server speaks {PROTOCOL_VERSION}, the client speaks {}; restart the server (`termos kill-server`) after upgrading",
+                "protocol version mismatch: this server speaks {expected}, the client speaks {}; restart the server (`termos kill-server`) after upgrading",
                 hello.version
             ),
         ));

@@ -11,8 +11,13 @@ use termos_render::encode::CursorState;
 
 use crate::input::{KeyEvent, MouseEvent};
 
-/// Bumped on any incompatible change to these messages.
-pub const PROTOCOL_VERSION: u32 = 1;
+/// The frontend protocol: bumped on any incompatible change to these
+/// messages. (Control clients and plugins speak JSON-RPC, versioned
+/// separately by [`crate::wire::RPC_VERSION`].)
+///
+/// - 2: capabilities v2 (graphics, pixel sizes, background colour,
+///   remote/tmux/reduced-motion flags).
+pub const PROTOCOL_VERSION: u32 = 2;
 
 /// A frame for one client: the cells that changed since the last frame this
 /// client received, plus where the cursor goes.

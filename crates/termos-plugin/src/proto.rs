@@ -3,7 +3,8 @@
 
 use serde::{Deserialize, Serialize};
 
-/// The handshake version (the server's protocol version; must match).
+/// The handshake version: the server's JSON-RPC API version (must
+/// match). Frontends speak a separately versioned binary protocol.
 pub const PROTOCOL_VERSION: u32 = 1;
 
 /// Environment variables the server sets for a plugin process.

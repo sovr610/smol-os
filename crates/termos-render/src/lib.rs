@@ -8,7 +8,8 @@
 //! - [`diff`]: output damage, the minimal [`Span`]s between two frames.
 //! - [`encode`]: turns spans into escape sequences for one terminal, with
 //!   synchronized output and colour downsampling.
-//! - [`caps`]: terminal capability detection.
+//! - [`caps`], [`probe`]: terminal capability detection, from the
+//!   environment and from the terminal's replies to queries.
 //! - [`color`], [`theme`]: colours, palettes and the desktop's styles.
 //!
 //! See `ARCHITECTURE.md` §5 for how these fit into the rendering pipeline.
@@ -19,9 +20,10 @@ pub mod color;
 pub mod diff;
 pub mod encode;
 pub mod grid;
+pub mod probe;
 pub mod theme;
 
-pub use caps::Caps;
+pub use caps::{Caps, Graphics, ImageProtocol, PxSize};
 pub use cell::{Attrs, Cell, Style};
 pub use color::{Color, ColorDepth, Palette, Rgb};
 pub use diff::Span;

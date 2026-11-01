@@ -200,9 +200,9 @@ fn stopping() -> RpcError {
     RpcError::new(codes::INTERNAL_ERROR, "the server is stopping")
 }
 
-fn hello_reply(session: Option<String>) -> HelloReply {
+fn hello_reply(kind: ConnKind, session: Option<String>) -> HelloReply {
     HelloReply {
-        version: PROTOCOL_VERSION,
+        version: kind.version(),
         server: format!("termos {}", env!("CARGO_PKG_VERSION")),
         pid: std::process::id(),
         session,
@@ -230,7 +230,7 @@ impl Connector {
     pub async fn attach(&self, hello: Hello) -> Result<(HelloReply, ClientEnd), RpcError> {
         let att = self.attach_raw(hello).await?;
         let client = att.client;
-        let reply = hello_reply(Some(att.session));
+        let reply = hello_reply(ConnKind::Frontend, Some(att.session));
         let (user_tx, mut user_rx) = mpsc::unbounded_channel::<ClientMsg>();
         let (to_user_tx, to_user_rx) = mpsc::unbounded_channel::<ServerMsg>();
         let events = self.events.clone();
@@ -1701,6 +1701,7 @@ impl Server {
                 "pid": std::process::id(),
                 "version": env!("CARGO_PKG_VERSION"),
                 "protocol": PROTOCOL_VERSION,
+                "rpc": termos_core::wire::RPC_VERSION,
                 "name": self.opts.name,
                 "socket": self.opts.socket_path.display().to_string(),
                 "sessions": self.sessions.len(),
@@ -2153,8 +2154,11 @@ async fn handle_conn(stream: LocalStream, connector: Connector, allowed: PeerId)
     match hello.kind {
         ConnKind::Frontend => match connector.attach_raw(hello).await {
             Ok(att) => {
-                let reply = serde_json::to_value(hello_reply(Some(att.session.clone())))
-                    .unwrap_or(Value::Null);
+                let reply = serde_json::to_value(hello_reply(
+                    ConnKind::Frontend,
+                    Some(att.session.clone()),
+                ))
+                .unwrap_or(Value::Null);
                 if write_response(&mut write, &Response::ok(id, reply))
                     .await
                     .is_err()
@@ -2171,7 +2175,8 @@ async fn handle_conn(stream: LocalStream, connector: Connector, allowed: PeerId)
             }
         },
         ConnKind::Control => {
-            let reply = serde_json::to_value(hello_reply(None)).unwrap_or(Value::Null);
+            let reply =
+                serde_json::to_value(hello_reply(ConnKind::Control, None)).unwrap_or(Value::Null);
             if write_response(&mut write, &Response::ok(id, reply))
                 .await
                 .is_ok()
@@ -2183,7 +2188,8 @@ async fn handle_conn(stream: LocalStream, connector: Connector, allowed: PeerId)
             let token = hello.token.clone().unwrap_or_default();
             match connector.plugin_hello(token).await {
                 Ok((name, conn, rx)) => {
-                    let reply = serde_json::to_value(hello_reply(None)).unwrap_or(Value::Null);
+                    let reply = serde_json::to_value(hello_reply(ConnKind::Plugin, None))
+                        .unwrap_or(Value::Null);
                     if write_response(&mut write, &Response::ok(id, reply))
                         .await
                         .is_ok()
