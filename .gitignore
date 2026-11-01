@@ -1,0 +1,16 @@
+/target/
+**/*.rs.bk
+# Fuzzing artifacts (cargo-fuzz)
+/fuzz/target/
+/fuzz/corpus/
+/fuzz/artifacts/
+# Snapshot tests: pending snapshots are reviewed with `cargo insta review`
+*.pending-snap
+*.snap.new
+# Buildroot output trees (M8)
+/output/
+# Editor/OS noise
+.DS_Store
+*.swp
+.idea/
+.vscode/

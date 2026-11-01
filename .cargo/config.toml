@@ -1,0 +1,3 @@
+[alias]
+# `cargo xtask <cmd>`: repository automation (ci, check-todos, todos).
+xtask = "run --quiet --package xtask --"

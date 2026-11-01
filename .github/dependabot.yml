@@ -1,0 +1,18 @@
+version: 2
+updates:
+  # Resolver 3 is MSRV-aware, so updates respect the pinned toolchain
+  # (rust-version in Cargo.toml).
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      cargo:
+        patterns: ["*"]
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      github-actions:
+        patterns: ["*"]

@@ -1,0 +1,52 @@
+[workspace]
+resolver = "3"
+members = ["crates/*", "xtask"]
+# `cargo build`/`cargo test` at the root operate on the product crates; xtask is
+# reached through the `cargo xtask` alias (see .cargo/config.toml).
+default-members = ["crates/*"]
+
+[workspace.package]
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.97"
+license = "GPL-3.0-or-later"
+repository = "https://github.com/sovr610/smol-os"
+homepage = "https://github.com/sovr610/smol-os"
+authors = ["TermOS contributors"]
+publish = false
+
+[workspace.dependencies]
+# Internal crates. Declare a dependency on another termos crate only when it is
+# actually used; see ARCHITECTURE.md for the intended dependency direction.
+termos-core = { path = "crates/termos-core" }
+termos-render = { path = "crates/termos-render" }
+termos-wm = { path = "crates/termos-wm" }
+termos-term = { path = "crates/termos-term" }
+termos-shell = { path = "crates/termos-shell" }
+termos-apps = { path = "crates/termos-apps" }
+termos-ai = { path = "crates/termos-ai" }
+termos-models = { path = "crates/termos-models" }
+termos-devkit = { path = "crates/termos-devkit" }
+termos-image = { path = "crates/termos-image" }
+
+# Third-party crates. Pin versions here so every member uses the same one.
+clap = { version = "4.6.7", features = ["derive"] }
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+unreachable_pub = "warn"
+rust_2018_idioms = { level = "warn", priority = -1 }
+
+[workspace.lints.clippy]
+# "No silent stubs" (DECISIONS.md D-018): unfinished work is a milestone-tagged
+# work-marker comment mirrored in ROADMAP.md, never a panicking placeholder.
+todo = "deny"
+unimplemented = "deny"
+dbg_macro = "deny"
+# Every unsafe block must carry a `// SAFETY:` justification.
+undocumented_unsafe_blocks = "deny"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "debuginfo"

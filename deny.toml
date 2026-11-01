@@ -1,0 +1,63 @@
+# cargo-deny configuration. Run with `cargo deny check`.
+# TermOS is GPL-3.0-or-later (DECISIONS.md D-003): every dependency must be
+# under a license that can be combined with GPLv3.
+
+[graph]
+all-features = true
+
+[advisories]
+version = 2
+yanked = "deny"
+ignore = []
+
+[licenses]
+version = 2
+confidence-threshold = 0.9
+# Permissive and weak-copyleft licenses that are GPLv3-compatible, plus the
+# GPL family itself. Deliberately absent: GPL-2.0-only (incompatible with
+# GPLv3), AGPL (network clause we do not want to impose), OpenSSL/SSLeay
+# (incompatible; we use rustls), and anything proprietary.
+allow = [
+  "0BSD",
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "BSL-1.0",
+  "CC0-1.0",
+  "CDLA-Permissive-2.0",
+  "GPL-2.0-or-later",
+  "GPL-3.0-only",
+  "GPL-3.0-or-later",
+  "ISC",
+  "LGPL-2.1-or-later",
+  "LGPL-3.0-only",
+  "LGPL-3.0-or-later",
+  "MIT",
+  "MIT-0",
+  "MPL-2.0",
+  "Unicode-3.0",
+  "Unicode-DFS-2016",
+  "Unlicense",
+  "Zlib",
+]
+unused-allowed-license = "allow"
+
+[licenses.private]
+# Our own unpublished workspace crates.
+ignore = true
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+allow-wildcard-paths = true
+deny = [
+  { name = "openssl", reason = "OpenSSL license is not GPLv3-compatible; use rustls" },
+  { name = "openssl-sys", reason = "OpenSSL license is not GPLv3-compatible; use rustls" },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

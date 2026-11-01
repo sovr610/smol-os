@@ -1,0 +1,6 @@
+# Pinned so that new clippy lints in a fresh stable release cannot break the
+# `-D warnings` gate unexpectedly. Bump deliberately (see DECISIONS.md D-005).
+[toolchain]
+channel = "1.97.0"
+components = ["rustfmt", "clippy"]
+profile = "minimal"

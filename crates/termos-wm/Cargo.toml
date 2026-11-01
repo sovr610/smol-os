@@ -1,0 +1,16 @@
+[package]
+name = "termos-wm"
+description = "TermOS window manager: floating and tiled windows, workspaces, z-order, input routing"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[dependencies]
+
+[lints]
+workspace = true
