@@ -18,7 +18,8 @@ questions (DECISIONS.md, "Open questions").
 | M2 | Merged into M1 | 🔍 |
 | M3 | Session server, detach/attach, persistence, plugin API | 🔍 |
 | M3.5 | Native Windows and CI test builds (D-035 to D-041) | 🔍 |
-| M4 | Graphics, themes, first built-in apps, WASM widgets | ⏳ |
+| M4a | Graphics and themes: capability probe, images, themes, animations, Kitty keyboard (D-042) | 🚧 |
+| M4b | Apps, `termos-hw`, WASM widgets (D-042) | ⏳ |
 | M5 | Developer environment | ⏳ |
 | M6 | AI agents | ⏳ |
 | M7 | Local models | ⏳ |
@@ -285,29 +286,55 @@ ssh -t host termos
 
 ---
 
-## M4 — Graphics, themes, first apps, WASM widgets
-**Status:** ⏳ · **Ask first:** O-8 (WASM engine). M4 may be split into M4a (graphics and themes) and M4b (apps and widgets) if it grows too large; the owner decides.
+## M4a — Graphics and themes
+**Status:** 🚧 · Owner answers: M4 is split, graphics and themes first (D-042); animations are on by default but off over SSH and with reduced motion (D-042).
 
 **Deliverables**
-- **Capability detection:** full detection with active queries (ARCHITECTURE.md §5.7).
-- **Images:** the fallback ladder (Kitty / Sixel / iTerm2 / blocks / braille), with occlusion-correct placement.
-- **Widgets:** chart and image widgets for apps.
-- **Images in PTY windows:** intercepting Kitty and Sixel sequences.
-- **Themes and polish:**
-  - dark, light and high-contrast themes, with the default following OSC 11;
-  - drop shadows and rounded borders;
-  - smooth animations (window open/close, toasts) that respect reduced motion.
-- **`termos-hw`:** a new crate (logged in DECISIONS.md) for CPU/GPU/RAM/temperature probing.
-- **Apps:** file manager, system monitor (CPU/GPU/RAM/temperatures), image viewer, markdown viewer, settings, clipboard manager.
-- **WASM widgets:** the runtime behind the `wasm-widgets` feature, the WIT world, and a sample widget.
+- **Capability probe** (ARCHITECTURE.md §5.7):
+  - [ ] One query batch at attach (XTVERSION, Kitty graphics, DECRQM 2026, `CSI ? u`, cell and window pixel sizes, OSC 11), terminated by DA1; 200 ms timeout (800 ms over SSH); `TERMOS_PROBE=0` skips it
+  - [ ] A pure, fuzzed reply parser; fixtures for kitty, WezTerm, foot, iTerm2, xterm, Windows Terminal, GNOME Terminal and tmux
+  - [ ] Caps v2 in the handshake (protocol version 2); `termos debug caps`
+- **Themes:**
+  - [ ] Dark, light and high-contrast presets; `[theme] base = "auto" | "dark" | "light" | "high-contrast"` plus per-colour overrides
+  - [ ] `auto` follows the terminal background (OSC 11, then `COLORFGBG`); themes are per client; `theme.select`
+  - [ ] Programs in panes get real answers to OSC 10/11 colour queries
+- **Animations:**
+  - [ ] Float open/close and toasts (120 ms, ease-out), per client; off over SSH, with `[ui] reduced-motion`, or `[ui] animations = false`
+  - [ ] No timer unless an animation is running for some client (D-028)
+- **Kitty keyboard protocol for programs in panes** (flags 1, 8, 16)
+- **Images:**
+  - [ ] The fallback ladder per client: Kitty → Sixel → iTerm2 → half/quadrant blocks → braille, with occlusion-correct placement (§5.8)
+  - [ ] Images as compositor objects; Kitty placements cropped per visible piece; Sixel/iTerm2 only when fully visible, blocks otherwise
+  - [ ] Image viewer app (`image.open PATH`)
+  - [ ] Images inside panes: Kitty graphics and Sixel from programs, anchored to their text so they scroll and clear with it
 
 **Acceptance**
-- Capability-detection unit tests replaying recorded responses from kitty, WezTerm, foot, iTerm2, xterm, Windows Terminal, GNOME Terminal and tmux.
+- Reply-parser tests replaying fixtures from the terminals above; fuzz targets `caps_reply`, `sixel_decode`, `apc_dcs_intercept`.
+- Snapshots for each theme, block and braille images, an image under a float, and a frame mid-animation.
+- Proptests for rectangle subtraction and the block raster; golden bytes for each encoder and a Sixel round trip.
+- Server tests: an idle server with an image sends nothing; an animation produces a handful of frames and then no deadline; an SSH client gets no animation frames; an image is uploaded once per variant.
+- Idle CPU and RSS within budget with an image open (`cargo xtask perf`).
+
+**Demo:** the detected capabilities; `theme.select high-contrast`; an animated float while an SSH-flagged client stays still; the image viewer with a float dragged over it; a script's Kitty image in a pane scrolling with `seq` and cleared by `clear`; `printf '\e[>1u'` then Esc shows `CSI 27 u`.
+
+---
+
+## M4b — Apps, termos-hw, WASM widgets
+**Status:** ⏳ · Owner answers: O-8 → wasmtime (D-042).
+
+**Deliverables**
+- **Widgets:** chart and image widgets for apps.
+- **Polish:** drop shadows and rounded borders.
+- **`termos-hw`:** a new crate (logged in DECISIONS.md) for CPU/GPU/RAM/temperature probing.
+- **Apps:** file manager, system monitor (CPU/GPU/RAM/temperatures), markdown viewer, settings, clipboard manager. (The image viewer comes with M4a.)
+- **WASM widgets:** the wasmtime runtime behind the `wasm-widgets` feature, the WIT world, and a sample widget.
+
+**Acceptance**
 - A snapshot test for each app.
 - Idle CPU stays under 1% with the system monitor closed.
 - With no WASM widget configured, RAM is unchanged.
 
-**Demo:** open the file manager and preview an image; open the system monitor; switch to the high-contrast theme.
+**Demo:** open the file manager and preview an image; open the system monitor; a WASM widget in the status line.
 
 ---
 

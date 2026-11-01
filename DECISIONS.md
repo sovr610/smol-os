@@ -471,6 +471,14 @@ rewrite history.
   - Builds are unsigned: macOS needs `xattr -d com.apple.quarantine`, and Windows SmartScreen needs "More info → Run anyway" or `Unblock-File` (docs/getting-started.md). Signing comes with releases (M9).
 - **Alternatives:** test builds only on `main` or on demand (the owner wanted every push); GitHub releases for test builds (they'd clutter the release list).
 
+## D-042: M4 is split; wasmtime for widgets; animation policy
+- **Status:** Accepted (owner) · 2026-11-01
+- **Decision:**
+  - **Split (owner):** M4 becomes **M4a, graphics and themes** (the capability probe, images with the fallback ladder, images inside panes, the image viewer, themes following OSC 11, animations, the Kitty keyboard protocol for programs in panes) and **M4b, apps and widgets** (`termos-hw`, the other apps, chart widgets, shadows and rounded borders, WASM widgets). M4a goes first. Both stay under milestone number 4 for work markers.
+  - **WASM engine (owner, resolves O-8):** wasmtime, used in M4b. Its RAM cost on a Pi 4 is measured there; the runtime stays behind the `wasm-widgets` feature, so builds without widgets don't pay for it.
+  - **Animations (owner):** on by default, decided per client: off when the client is remote (SSH), when `[ui] reduced-motion = true`, or with `[ui] animations = false`. They never add a timer while nothing animates (D-028).
+- **Alternatives:** one M4 (too large to review in one step); wasmi (smaller, interpreted; the owner chose wasmtime); animations off by default.
+
 ---
 
 ## Open questions (the owner will be asked before the milestone that needs each one)
@@ -484,7 +492,7 @@ rewrite history.
 | O-5 | Secret store on bare metal, where there's no Secret Service: an age-encrypted file unlocked by passphrase, a TPM-sealed key, or something else? | M6 | age file with a passphrase; TPM later. |
 | O-6 | llama.cpp integration: a managed `llama-server` subprocess or FFI (`llama-cpp-2`)? | M7 | Subprocess: crash isolation, a ready-made OpenAI API, easy CUDA/ROCm/Vulkan build swaps. |
 | O-7 | Rust-native inference: ONNX Runtime (`ort`), candle, or both? | M7 | candle first (pure Rust, no C++ runtime). |
-| O-8 | WASM engine for widgets: wasmtime (component model, JIT, larger) or wasmi (interpreter, small)? | M4 | **Owner: wasmtime** (to be logged with M4b). |
+| O-8 | WASM engine for widgets: wasmtime (component model, JIT, larger) or wasmi (interpreter, small)? | M4 | **Resolved by D-042:** wasmtime. |
 | O-9 | KMS font rasterizer: swash or fontdue? | M8 | swash (shaping and hinting quality). |
 | O-10 | Init system: BusyBox init, s6, or systemd? | M8 | BusyBox init or s6, for size. |
 | O-11 | Network management: connman, NetworkManager, or iwd + a small DHCP client? | M8 | iwd + dhcpcd, with a TermOS settings UI. |
