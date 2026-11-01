@@ -1,22 +1,34 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! # termos-shell
 //!
-//! The desktop shell around the window manager, and the top-level `Desktop`
-//! state the server runs.
+//! The TermOS desktop: everything the server does, tmux-style
+//! (DECISIONS.md D-023).
 //!
-//! **Status:** not started. Scheduled for M2, extended in M3 and M4
-//! (see `ROADMAP.md`).
-//!
-//! Planned modules (see `ARCHITECTURE.md`, "Desktop shell"):
-//! - `desktop` — top-level server state: sessions, the WM, shell overlays.
-//! - `palette` — command palette (Ctrl+Space) with fuzzy matching.
-//! - `launcher` — app/command launcher.
-//! - `whichkey` — key-hint overlay after a leader/prefix key.
-//! - `bar` — status bar with built-in and plugin widgets.
-//! - `notify` — notification toasts and the notification center.
-//! - `tutorial` — first-run tutorial.
-//! - `plugins` — host for out-of-process plugins (M3) and WASM widgets (M4).
+//! - [`desktop`]: the [`desktop::Desktop`] state machine: panes, input
+//!   routing (prefix key, overlays, copy mode, mouse), commands, rendering.
+//! - [`server`]: the event loop that drives a desktop for one client.
+//! - [`commands`] and [`keys`]: named commands and the tmux-compatible key
+//!   tables.
+//! - [`status`], [`palette`], [`whichkey`], [`prompt`]: the status line, the
+//!   command palette, key hints and status-line prompts.
+//! - [`copymode`]: scrollback navigation, selection, search and copy.
+//! - [`notify`] and [`apps`]: notifications, the notification center and
+//!   the first-run tutorial.
 
-// TODO(M2): Desktop state, command palette, which-key, status bar, notifications, first-run tutorial.
+pub mod apps;
+pub mod commands;
+pub mod copymode;
+pub mod desktop;
+pub mod keys;
+pub mod notify;
+pub mod palette;
+pub mod prompt;
+pub mod server;
+pub mod status;
+pub mod ui;
+pub mod whichkey;
+
+pub use desktop::{Desktop, DesktopOptions};
+
 // TODO(M3): out-of-process plugin host over the JSON-RPC control API.
 // TODO(M4): optional WASM runtime for status-bar widgets (behind a cargo feature).

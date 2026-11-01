@@ -553,6 +553,11 @@ impl Session {
         self.active
     }
 
+    /// The previously active workspace (tmux `-` flag).
+    pub fn last_index(&self) -> Option<usize> {
+        self.last.filter(|l| *l < self.workspaces.len())
+    }
+
     pub fn active(&self) -> &Workspace {
         &self.workspaces[self.active]
     }

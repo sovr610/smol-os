@@ -297,7 +297,6 @@ Generated from the `TODO(M<n>)` markers in the code. Don't edit by hand; run `ca
 | Milestone | Where | What |
 | --- | --- | --- |
 | M1 | `crates/termos-cli/src/main.rs` | run the hosted desktop (server + terminal client) when invoked without a subcommand. |
-| M2 | `crates/termos-shell/src/lib.rs` | Desktop state, command palette, which-key, status bar, notifications, first-run tutorial. |
 | M3 | `crates/termos-core/src/paths.rs` | runtime directory for server sockets ($XDG_RUNTIME_DIR/termos, 0700, with a per-uid fallback). |
 | M3 | `crates/termos-core/src/transport.rs` | Unix-socket adapter (postcard frames, SO_PEERCRED/getpeereid checks, handshake versioning). |
 | M3 | `crates/termos-shell/src/lib.rs` | out-of-process plugin host over the JSON-RPC control API. |
