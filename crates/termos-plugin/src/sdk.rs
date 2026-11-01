@@ -201,7 +201,7 @@ impl Plugin {
         let mut line = serde_json::to_vec(&req)?;
         line.push(b'\n');
         self.writer.write_all(&line)?;
-        self.reader.get_ref().set_read_timeout(None)?;
+        self.set_timeout(None)?;
         loop {
             let msg = self.read_message()?.ok_or(Error::Closed)?;
             if msg.get("method").is_some() {
@@ -222,6 +222,15 @@ impl Plugin {
                 });
             }
             return Ok(msg.get("result").cloned().unwrap_or(Value::Null));
+        }
+    }
+
+    fn set_timeout(&self, timeout: Option<Duration>) -> Result<(), Error> {
+        match self.reader.get_ref().set_read_timeout(timeout) {
+            // macOS refuses socket options once the server has hung up;
+            // reading then returns what is left, then end of stream.
+            Err(e) if e.kind() == io::ErrorKind::InvalidInput => Ok(()),
+            other => other.map_err(Error::from),
         }
     }
 
@@ -248,7 +257,7 @@ impl Plugin {
         if let Some(e) = self.queued.pop_front() {
             return Ok(Some(e));
         }
-        self.reader.get_ref().set_read_timeout(None)?;
+        self.set_timeout(None)?;
         match self.read_message()? {
             Some(msg) => Ok(Some(parse_event(&msg))),
             None => Ok(None),
@@ -262,9 +271,7 @@ impl Plugin {
         if let Some(e) = self.queued.pop_front() {
             return Ok(Some(e));
         }
-        self.reader
-            .get_ref()
-            .set_read_timeout(Some(timeout.max(Duration::from_millis(1))))?;
+        self.set_timeout(Some(timeout.max(Duration::from_millis(1))))?;
         match self.read_message() {
             Ok(Some(msg)) => Ok(Some(parse_event(&msg))),
             Ok(None) => Err(Error::Closed),
