@@ -186,30 +186,34 @@ Rendering is event-driven, with no fixed tick.
 - Each frame is one buffered write wrapped in synchronized-update brackets (DEC mode 2026) when the terminal supports them.
 - Colours are downsampled truecolor → 256 → 16 according to the client's capabilities.
 
-### 5.7 Capability detection (planned, M4; basic env detection in M1)
-1. **Environment heuristics:** `COLORTERM`, `TERM`, `TERM_PROGRAM`, `KITTY_WINDOW_ID`, `WT_SESSION`, `VTE_VERSION`, and whether we're inside tmux or screen.
-2. **Active queries,** sent as one batch and terminated by DA1. Terminals answer in order, so the DA1 reply marks the end. Timeout ≈ 200 ms. The batch contains:
+### 5.7 Capability detection (D-043)
+1. **Environment heuristics:** `COLORTERM`, `TERM`, `TERM_PROGRAM`, `KITTY_WINDOW_ID`, `WT_SESSION`, `COLORFGBG`, `SSH_CONNECTION`, and whether we're inside tmux or screen. `TERMOS_COLOR`, `TERMOS_SYNC`, `TERMOS_GRAPHICS` and `TERMOS_REDUCED_MOTION` override.
+2. **Active queries** (`termos_render::probe`), sent at attach as one batch terminated by DA1: terminals answer in order, so the DA1 reply marks the end. The client reads stdin directly for up to 200 ms (800 ms over SSH); keys typed meanwhile are passed on. `TERMOS_PROBE=0` skips it, and Windows consoles use the environment only. The batch:
    - XTVERSION (`CSI > q`);
    - the Kitty graphics query (`APC G a=q`);
    - DECRQM `?2026`;
    - the Kitty keyboard query (`CSI ? u`);
-   - cell and window pixel size (`CSI 16 t`, `CSI 14 t`);
-   - the background colour (OSC 11, used to choose a light or dark theme);
-   - DA1 itself, whose attribute 4 means Sixel support.
+   - cell and text-area pixel size (`CSI 16 t`, `CSI 14 t`);
+   - the background colour (OSC 11, for the `auto` theme);
+   - DA1 itself, whose attribute 4 means Sixel.
 
-The result is a `Caps` struct that each client sends in its handshake.
-Recorded responses from real terminals become unit-test fixtures.
+The result is `Caps` v2 (graphics, pixel sizes, background, terminal name,
+`in_tmux`, `remote`, `reduced_motion`), sent in the client's `Hello`.
+`termos debug caps --raw` shows it and the raw replies, which become test
+fixtures.
 
-### 5.8 Graphics fallback ladder
-Kitty graphics → Sixel → iTerm2 inline images → Unicode half-blocks and
-quadrants/sextants (2+ pixels per cell, coloured with fg/bg) → braille (for
-line art and charts).
+### 5.8 Graphics fallback ladder (D-047, D-048)
+Kitty graphics → Sixel → iTerm2 inline images → Unicode quadrant blocks
+(2×2 pixels per cell, two colours) → braille (for line art and charts).
 
-Images are compositor objects with a rectangle and occlusion state:
-- Kitty supports placements and z-index.
-- Sixel and iTerm2 images can't be partially occluded. When one is, that image falls back to blocks. We choose correctness over fidelity.
-- The KMS backend draws images natively.
-- `ratatui-image` will be evaluated for protocol encoding (M4).
+Images come from apps (`App::images`) and from programs in panes (Kitty
+graphics and Sixel, intercepted before the emulator and anchored to their
+text). For each client and image the desktop decides how to show it:
+- **Blocks** are drawn into the cell grid, so windows and overlays cover them without any special handling.
+- **Kitty** gets one placement per visible piece: the image minus the floats above it and the palette and which-key boxes, each a crop of a single upload.
+- **Sixel and iTerm2** can't be partly covered. They're used only for an image that is wholly visible, not on the last row, while nothing moves; otherwise the visible pieces are drawn as blocks. We choose correctness over fidelity.
+- The server uploads each image once per client and size; the client encodes and draws pixel images after the cells. A Sixel or iTerm2 image that moves is painted over by poisoning the client's previous grid, so the next diff redraws those cells.
+- The KMS backend draws images natively (M8).
 
 ### 5.9 KMS backend (planned, M8)
 - **Input and buffers:** it consumes the same `Grid` and rasterizes cells into DRM dumb buffers on the CPU (no GPU needed), double-buffered with page flips.
@@ -260,10 +264,10 @@ Window = { id, title, source: Pty | App | Plugin | Agent, state: normal | minimi
   - `hello {version, kind: frontend | control | plugin, client, session?, create?, token?, cwd?}`.
   - The reply is `{version, server, pid, session}`, or an error: `-32001` version mismatch, `-32004` no such session, `-32003` forbidden.
 - **Frontend stream:** after the reply, frames are a little-endian u32 length plus a postcard body (at most 16 MiB). These are the serde types in `termos-core::proto`:
-  - Server → client: `Frame(FrameUpdate { cols, rows, clear, spans, cursor })`, `Clipboard`, `Bell`, `Title`, `Detached { session }`, `Exit { reason }`.
+  - Server → client: `Frame(FrameUpdate { cols, rows, clear, spans, cursor, images })`, `ImageData { id, chunk, last }`, `ImageFree { id }`, `Clipboard`, `Bell`, `Title`, `Detached { session }`, `Exit { reason }`. `images` is the client's whole placement list, sent only when it changed.
   - Client → server: `Hello { version, caps, cols, rows }` (first), `Key`, `Mouse`, `Paste`, `Resize`, `Focus`.
   - **Backpressure:** a client gets its next frame only after the previous one was written to it (D-032).
-  - Planned for M4: `Image(op)`.
+  - **Versions (D-043):** frontends speak protocol 3; control clients and plugins speak JSON-RPC version 1. Each is checked in the `hello` for its kind of connection.
 - **Control stream:** newline-delimited JSON-RPC 2.0 (lines up to 4 MiB). It's used by `termos msg …`, `termos ls` and the other subcommands, and by scripts. The v1 methods:
   - server: `server.info`, `server.kill`, `config.reload`;
   - sessions: `session.list/new/kill/rename/restore/saved`;
@@ -284,7 +288,9 @@ Window = { id, title, source: Pty | App | Plugin | Agent, state: normal | minimi
   - Validation errors point at the exact span.
   - Hot reload uses `notify` with debouncing. An invalid edit keeps the last good config and posts a notification with the error.
   - `termos config check` validates without running.
-- **Themes:** semantic tokens such as `bg`, `fg`, `accent`, `border.active`, `shadow` and `status.*`, plus the 16-colour ANSI palette given to child terminals. Built-in themes are dark, light and high-contrast (M4). The default follows the terminal background (OSC 11).
+- **Themes (D-044):** semantic tokens such as `fg`, `accent`, `border`, `status-*` and `overlay-bg` from which every style is derived. Presets dark, light and high-contrast; `[theme] base = "auto"` follows each client's terminal background (OSC 11, then `COLORFGBG`). Themes are per client; `theme.select` switches one. Programs asking for default colours (OSC 10/11) get the terminal's.
+- **Motion (D-042, D-045):** `[ui] animations` and `reduced-motion`; never over SSH.
+- **Graphics:** `[graphics] protocol = "auto" | "kitty" | "sixel" | "iterm2" | "blocks"`.
 - **Session persistence (D-011, D-033):**
   - **Where:** snapshots go to `$XDG_STATE_HOME/termos/sessions/<server>/<session>.json`, with a versioned schema, mode 0600, written atomically.
   - **What:** the layout of every workspace and, per pane, the directory, the foreground program, and optionally (`save-scrollback`) the text. Command lines are kept only for allowlisted programs.
@@ -300,7 +306,8 @@ Window = { id, title, source: Pty | App | Plugin | Agent, state: normal | minimi
 - **Built-in apps** (`termos-apps`) implement an in-process trait defined in `termos-core` (agent windows and devkit panels implement it too):
   `App { title, handle(event) -> effects, render(area, &mut ratatui::Buffer), wants_tick, save_state, restore_state }`.
   They run on the server loop and push heavy work to tasks.
-- **Plain TUI programs** are first-class without any integration: they run in PTY windows.
+- **Images (D-049):** apps report images with `App::images()` (a shared picture fitted into a cell rectangle), shown through the ladder of §5.8. `AppWaker` lets an app ask for a redraw when background work (decoding) finishes. The image viewer (`image.open PATH`) is the first app in `termos-apps`.
+- **Plain TUI programs** are first-class without any integration: they run in PTY windows, including the images they print (Kitty graphics, Sixel; D-048) and the Kitty keyboard protocol (D-046).
 - **Out-of-process plugins (D-034):** a directory under `~/.config/termos/plugins/<name>/` with an executable and a `plugin.toml` (name, version, exec, `[permissions] windows/status/commands/notify`). Plugins run only while listed in `[plugins] enabled`.
   - **Launch:** the server launches them with its first session, passing `TERMOS_SOCKET`, `TERMOS_PLUGIN_NAME` and a per-launch `TERMOS_PLUGIN_TOKEN`.
   - **Connection:** the plugin connects with `kind = plugin` and its token.
@@ -459,12 +466,13 @@ Window = { id, title, source: Pty | App | Plugin | Agent, state: normal | minimi
 - **Unit tests** in each crate, next to the code.
 - **Snapshot tests** (`insta`): a `Grid` renders to text plus a style layer. The headless client drives the full desktop: inject input, then snapshot the screen. These cover chrome, layouts, apps and overlays.
 - **Integration tests:** real PTYs (`sh -c …`), client/server over the socket (sessions, detach, snapshots and restore, plugins), the real daemon driven through its CLI, config hot reload, and recorded provider fixtures with mock servers. CI never uses live API keys.
-- **Property tests** (`proptest`) for layout invariants: no overlaps or gaps, and sizes always sum to the parent.
+- **Property tests** (`proptest`) for layout invariants (no overlaps or gaps, sizes sum to the parent), rectangle subtraction and the block raster.
+- **Golden bytes** for the Kitty, Sixel and iTerm2 encoders and the Kitty keyboard protocol table, and a Sixel round trip.
 - **Fuzzing** with `cargo-fuzz` (on a nightly toolchain, separate from the pinned one):
   - VT input (M1);
   - config parsing (M2);
   - protocol decoding (`proto_decode`: frames and JSON-RPC);
-  - capability-reply parsing (M4).
+  - capability replies (`caps_reply`), Sixel decoding (`sixel_decode`) and the image interceptor (`apc_dcs_intercept`).
   
   CI runs a timed smoke pass on every push and longer scheduled runs.
 - **QEMU boot tests** (M8).

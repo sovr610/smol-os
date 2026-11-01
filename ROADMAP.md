@@ -18,7 +18,7 @@ questions (DECISIONS.md, "Open questions").
 | M2 | Merged into M1 | 🔍 |
 | M3 | Session server, detach/attach, persistence, plugin API | 🔍 |
 | M3.5 | Native Windows and CI test builds (D-035 to D-041) | 🔍 |
-| M4a | Graphics and themes: capability probe, images, themes, animations, Kitty keyboard (D-042) | 🚧 |
+| M4a | Graphics and themes: capability probe, images, themes, animations, Kitty keyboard (D-042 to D-049) | 🔍 |
 | M4b | Apps, `termos-hw`, WASM widgets (D-042) | ⏳ |
 | M5 | Developer environment | ⏳ |
 | M6 | AI agents | ⏳ |
@@ -292,26 +292,26 @@ All 13 CI jobs, including the Windows tests and both Windows/macOS test builds, 
 ---
 
 ## M4a — Graphics and themes
-**Status:** 🚧 · Owner answers: M4 is split, graphics and themes first (D-042); animations are on by default but off over SSH and with reduced motion (D-042).
+**Status:** 🔍 done, awaiting review · Owner answers: M4 is split, graphics and themes first (D-042); animations are on by default but off over SSH and with reduced motion (D-042). Design: D-043 to D-049, ARCHITECTURE.md §5.7, §5.8, §8 and §9; user guide [graphics.md](docs/graphics.md).
 
 **Deliverables**
-- **Capability probe** (ARCHITECTURE.md §5.7):
-  - [ ] One query batch at attach (XTVERSION, Kitty graphics, DECRQM 2026, `CSI ? u`, cell and window pixel sizes, OSC 11), terminated by DA1; 200 ms timeout (800 ms over SSH); `TERMOS_PROBE=0` skips it
-  - [ ] A pure, fuzzed reply parser; fixtures for kitty, WezTerm, foot, iTerm2, xterm, Windows Terminal, GNOME Terminal and tmux
-  - [ ] Caps v2 in the handshake (protocol version 2); `termos debug caps`
-- **Themes:**
-  - [ ] Dark, light and high-contrast presets; `[theme] base = "auto" | "dark" | "light" | "high-contrast"` plus per-colour overrides
-  - [ ] `auto` follows the terminal background (OSC 11, then `COLORFGBG`); themes are per client; `theme.select`
-  - [ ] Programs in panes get real answers to OSC 10/11 colour queries
-- **Animations:**
-  - [ ] Float open/close and toasts (120 ms, ease-out), per client; off over SSH, with `[ui] reduced-motion`, or `[ui] animations = false`
-  - [ ] No timer unless an animation is running for some client (D-028)
-- **Kitty keyboard protocol for programs in panes** (flags 1, 8, 16)
-- **Images:**
-  - [ ] The fallback ladder per client: Kitty → Sixel → iTerm2 → half/quadrant blocks → braille, with occlusion-correct placement (§5.8)
-  - [ ] Images as compositor objects; Kitty placements cropped per visible piece; Sixel/iTerm2 only when fully visible, blocks otherwise
-  - [ ] Image viewer app (`image.open PATH`)
-  - [ ] Images inside panes: Kitty graphics and Sixel from programs, anchored to their text so they scroll and clear with it
+- **Capability probe** (ARCHITECTURE.md §5.7, D-043):
+  - [x] One query batch at attach (XTVERSION, Kitty graphics, DECRQM 2026, `CSI ? u`, cell and window pixel sizes, OSC 11), terminated by DA1; 200 ms timeout (800 ms over SSH); `TERMOS_PROBE=0` skips it; Windows consoles are detected from the environment
+  - [x] A pure, fuzzed reply parser; fixtures for kitty, WezTerm, foot, iTerm2, xterm, Windows Terminal and GNOME Terminal (rebuilt from documented formats) and tmux 3.4 (recorded)
+  - [x] Caps v2 in the handshake; `termos debug caps` (`--raw` prints the replies). The frontend protocol is now version 3; the JSON-RPC used by `msg` and plugins has its own version, so plugins don't break when frames change
+- **Themes** (D-044):
+  - [x] Dark, light and high-contrast presets; `[theme] base = "auto" | "dark" | "light" | "high-contrast"` plus per-colour overrides; existing configs stay valid
+  - [x] `auto` follows the terminal background (OSC 11, then `COLORFGBG`); themes are per client; `theme.select`
+  - [x] Programs in panes get real answers to OSC 10/11 colour queries (from the last active client's terminal)
+- **Animations** (D-045):
+  - [x] Float open/close and toasts (120 ms, ease-out), per client; off over SSH, with `[ui] reduced-motion` or `TERMOS_REDUCED_MOTION=1`, or `[ui] animations = false`
+  - [x] No timer unless an animation is running for some client (D-028)
+- [x] **Kitty keyboard protocol for programs in panes** (flags 1, 8, 16), with a guard against the emulator's unbounded mode stack (D-046)
+- **Images** (§5.8, D-047 to D-049):
+  - [x] The fallback ladder per client: Kitty → Sixel → iTerm2 → quadrant blocks, with occlusion-correct placement. Braille is not on the ladder (one colour per cell); its raster is kept for M4b's charts
+  - [x] Images as compositor objects; Kitty placements cropped per visible piece from one upload; Sixel/iTerm2 only when fully visible, off the last row and still, blocks otherwise
+  - [x] Image viewer app (`image.open PATH`): fit or actual size, next/previous image in the folder, decoded off the server loop
+  - [x] Images inside panes: Kitty graphics and Sixel from programs, anchored to their text so they scroll and clear with it; Kitty's file and shared-memory transmissions refused; per-pane limits
 
 **Acceptance**
 - Reply-parser tests replaying fixtures from the terminals above; fuzz targets `caps_reply`, `sixel_decode`, `apc_dcs_intercept`.
@@ -320,8 +320,46 @@ All 13 CI jobs, including the Windows tests and both Windows/macOS test builds, 
 - Server tests: an idle server with an image sends nothing; an animation produces a handful of frames and then no deadline; an SSH client gets no animation frames; an image is uploaded once per variant.
 - Idle CPU and RSS within budget with an image open (`cargo xtask perf`).
 
-**Demo:** the detected capabilities; `theme.select high-contrast`; an animated float while an SSH-flagged client stays still; the image viewer with a float dragged over it; a script's Kitty image in a pane scrolling with `seq` and cleared by `clear`; `printf '\e[>1u'` then Esc shows `CSI 27 u`.
+**What the tests cover**
+- **Probe and caps:** replies from the eight terminals above; tmux never gets Kitty or iTerm2 even if they answer; SSH, reduced-motion and graphics overrides. The three new fuzz targets run in the CI fuzz job.
+- **Snapshots:** the dark, light and high-contrast themes; half and quadrant block images; a float halfway through opening. The braille raster and the image under a float are checked cell by cell instead (`images_fall_back_to_blocks_that_floats_cover`).
+- **Proptests:** rectangle subtraction (at most four pieces, inside the first rectangle, outside the second, disjoint, exact area) and the block raster (a uniform image gives uniform cells).
+- **Encoders:** golden bytes for Kitty, iTerm2 and Sixel; a Sixel round trip; colour reduction to 256; decoding bounded by the pixels drawn; chunked Kitty uploads.
+- **Animation:** the local client gets 5 to 10 changed frames, an SSH client sees only the final frame, and no deadline remains afterwards (`floats_animate_only_where_they_should`).
+- **Server:** a Kitty client gets one upload; under the palette the image becomes crops of that same upload with matching source offsets; closing the palette brings the whole image back with no new upload; an idle server with an image sends nothing. An image printed by a program in a pane scrolls with its text and is cleared with it (Unix).
+- **End to end:** the real binary, given a canned Kitty probe reply, writes Kitty upload and placement bytes to the terminal.
+- **Emulator:** Kitty images anchored to the text, chunked transmissions, refused file transmissions and `a=q` queries; Sixel images, `CSI 16 t` and XTSMGRAPHICS answers; the Kitty keyboard spec table; the keyboard mode stack stays bounded.
+- **Budgets** (release build on the dev container, `cargo xtask perf 10`, client and daemon together):
 
+  | Metric | Measured | Budget |
+  | --- | --- | --- |
+  | Keystroke-to-screen latency, p50 | 0.7 ms | — |
+  | Keystroke-to-screen latency, p99 | 2.0 ms | < 16 ms |
+  | Idle CPU over 10 s | 0.1% | < 1% |
+  | RSS | 6.1 MB client + 8.1 MB server = 14.1 MB | < 150 MB |
+  | 300k-line flood | rendered in 0.18 s | — |
+  | A 3840×2160 PNG opened in the viewer | shown in 0.36 s | — |
+  | Idle CPU with that image open | 0.000% | < 1% |
+  | RSS with that image open | 7.0 MB client + 60.1 MB server = 67.1 MB | < 150 MB |
+
+  Most of the server's share is the decoded 4K picture (33 MB of RGBA) and its scaled variants.
+
+**Demo** (live, Linux, in an isolated `tmux -L termos-m4a` with its own TermOS home):
+1. `termos debug caps` inside tmux 3.4 reports Sixel as the image protocol (tmux passes Sixel on, never Kitty or iTerm2).
+2. `TERMOS_GRAPHICS=blocks termos`, then `termos msg image.open '{"arg": "/tmp/m4a/pics/sunset.png"}'`: the viewer float shows the sunset in quadrant blocks, with the info line `sunset.png  160×80  fit  2/2   n/p next/prev · z zoom · q close`.
+3. `Ctrl+Space` opens the palette over the image and covers its rows; `termos msg theme.select '{"arg": "high-contrast"}'` turns the status line to yellow on black.
+4. `q` closes the viewer. `cat kitty.img` (a Kitty APC image, 40×40 px) draws the image as blocks in the pane; `seq 1 40` scrolls it out of view; printed again, then `clear` removes it.
+5. `printf '\e[>1u'; cat -v`, then Esc, shows `^[[27u`.
+
+The animated float and an SSH-flagged client staying still are covered by the test above rather than shown live: a tmux capture can't show motion. Pixel protocols are checked through the raw output in tests; the owner can confirm them in kitty, WezTerm or Windows Terminal.
+
+All 13 CI jobs passed for the last code commit, including the Windows tests and the three new fuzz targets (run 41357183710).
+
+**Not in this milestone:**
+- Kitty keyboard release events and alternate keys (flags 2 and 4) for programs in panes (`TODO(M9)`);
+- images printed inside panes on Windows, where ConPTY can filter the sequences out (`TODO(M9)`);
+- Kitty's Unicode placeholders, and animated GIFs (the first frame is shown);
+- chart widgets, drop shadows and rounded borders (M4b).
 ---
 
 ## M4b — Apps, termos-hw, WASM widgets
@@ -464,9 +502,7 @@ Generated from the `TODO(M<n>)` markers in the code. Don't edit by hand; run `ca
 | Milestone | Where | What |
 | --- | --- | --- |
 | M4 | `crates/termos-apps/src/lib.rs` | file manager, system monitor, markdown viewer, settings, clipboard manager. |
-| M4 | `crates/termos-render/src/lib.rs` | image protocols (Kitty, Sixel, iTerm2, block/braille fallback) with occlusion handling. |
 | M4 | `crates/termos-shell/src/lib.rs` | optional WASM runtime for status-bar widgets (behind a cargo feature). |
-| M4 | `crates/termos-term/src/lib.rs` | intercept Kitty graphics / Sixel sequences so images work inside PTY windows. |
 | M5 | `crates/termos-apps/src/lib.rs` | package manager UI over mise, the dev rootfs and the host package manager. |
 | M5 | `crates/termos-devkit/src/lib.rs` | mise-backed toolchain manager, Neovim + LSP/DAP setup, dev rootfs, Git/build panels. |
 | M6 | `crates/termos-ai/src/lib.rs` | providers, streaming agent windows, sandboxed tools, permission engine, audit log, MCP, secrets. |
@@ -477,6 +513,7 @@ Generated from the `TODO(M<n>)` markers in the code. Don't edit by hand; run `ca
 | M9 | `crates/termos-cli/src/client.rs` | VT input mode on Windows, for bracketed paste and the Kitty keyboard protocol. |
 | M9 | `crates/termos-image/src/lib.rs` | installer and atomic A/B updates. |
 | M9 | `crates/termos-shell/src/server.rs` | a hidden window for WM_ENDSESSION, so logoff and shutdown always save. |
+| M9 | `crates/termos-term/src/intercept.rs` | images from programs in panes on Windows, where ConPTY can filter APC and DCS sequences out. |
 | M9 | `crates/termos-term/src/pty.rs` | foreground program name, directory and command line on macOS (libproc) and Windows (process snapshot APIs), so snapshots there name and restore programs too. |
 | M9 | `crates/termos-term/src/vt.rs` | Kitty keyboard release events (flag 2) and alternate keys (flag 4) for programs in panes. |
 <!-- open-work:end -->

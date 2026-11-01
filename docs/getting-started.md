@@ -5,8 +5,9 @@ you already know most of it: a prefix key, panes, windows in a status
 line, copy mode. On top of that it adds floating windows you can drag
 around, a command palette, key hints, and a mouse that works everywhere.
 
-> **Status:** milestone M3.5 (hosted mode on Linux, macOS and Windows, with
-> sessions you can detach from and restore). See [ROADMAP.md](../ROADMAP.md).
+> **Status:** milestone M4a (hosted mode on Linux, macOS and Windows, with
+> sessions you can detach from and restore, images and themes). See
+> [ROADMAP.md](../ROADMAP.md).
 
 ## Install and run
 
@@ -159,7 +160,11 @@ border = "square"       # rounded | square | heavy | double
 shadow = true
 
 [theme]
+base = "auto"           # auto | dark | light | high-contrast
 accent = "#ff8800"      # "#rrggbb", "colourN" (0-255), "brightblue", "default"
+
+[ui]
+animations = true       # off over SSH anyway; reduced-motion = true turns them off
 
 [keys.prefix]
 "v" = "pane.split-right"
@@ -174,6 +179,9 @@ accent = "#ff8800"      # "#rrggbb", "colourN" (0-255), "brightblue", "default"
 
 Every command name, such as `pane.zoom`, `layout.select tiled` or
 `workspace.select 3`, is listed in the command palette.
+
+Images, the image viewer, themes and animations are described in
+[graphics.md](graphics.md).
 
 ## Test builds
 

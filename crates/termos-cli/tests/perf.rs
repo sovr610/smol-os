@@ -110,4 +110,48 @@ fn latency_idle_cpu_and_memory_budgets() {
     let flood = start.elapsed();
     println!("300000-line flood rendered in {flood:?}");
     assert!(flood < Duration::from_secs(30), "flood took {flood:?}");
+
+    // An image open (4K in the optimized build; debug builds encode and
+    // decode too slowly for that): still no idle cost, still within the
+    // memory budget. The harness answers the probe like kitty, so the
+    // image goes to the terminal as a Kitty upload.
+    let (w, h) = if cfg!(debug_assertions) {
+        (1280u32, 720u32)
+    } else {
+        (3840, 2160)
+    };
+    let mut rgba = Vec::with_capacity((w * h * 4) as usize);
+    for y in 0..h {
+        for x in 0..w {
+            rgba.extend_from_slice(&[
+                (x * 255 / w) as u8,
+                (y * 255 / h) as u8,
+                ((x ^ y) & 0xff) as u8,
+                255,
+            ]);
+        }
+    }
+    let png = termos_render::graphics::Picture::from_rgba(w, h, rgba)
+        .expect("valid picture")
+        .to_png();
+    let path = t.env.path().join("big.png");
+    std::fs::write(&path, png).expect("write image");
+    let arg = serde_json::json!({ "arg": path.display().to_string() }).to_string();
+    let start = std::time::Instant::now();
+    assert!(t.run(&["msg", "image.open", &arg]).status.success());
+    t.wait_output(Duration::from_secs(120), "\x1b_Ga=p,i=");
+    println!("{w}x{h} image decoded and shown in {:?}", start.elapsed());
+    std::thread::sleep(Duration::from_millis(500));
+    let before = cpu();
+    std::thread::sleep(Duration::from_secs(idle_secs));
+    let used = cpu() - before;
+    let pct = used / idle_secs as f64 * 100.0;
+    println!("idle CPU with the image open over {idle_secs}s: {used:.2}s = {pct:.3}%");
+    assert!(pct < 1.0, "idle CPU with an image {pct:.3}% exceeds 1%");
+    let (rss_client, rss_server) = (rss_mb(client), rss_mb(server));
+    let rss = rss_client + rss_server;
+    println!(
+        "RSS with the image open: client {rss_client:.1} MB + server {rss_server:.1} MB = {rss:.1} MB"
+    );
+    assert!(rss < 150.0, "RSS with an image {rss:.1} MB exceeds 150 MB");
 }

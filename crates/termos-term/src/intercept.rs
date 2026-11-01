@@ -9,6 +9,8 @@
 //! through unchanged, in order. A sequence longer than [`MAX_SEQUENCE`] is
 //! dropped (its remainder discarded up to the terminator).
 
+// TODO(M9): images from programs in panes on Windows, where ConPTY can filter APC and DCS sequences out.
+
 /// Largest image sequence accepted.
 pub const MAX_SEQUENCE: usize = 32 * 1024 * 1024;
 

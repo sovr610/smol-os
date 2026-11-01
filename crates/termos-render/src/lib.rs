@@ -32,5 +32,4 @@ pub use encode::{CursorShape, CursorState, Encoder};
 pub use grid::{BorderKind, Grid, Rect};
 pub use theme::{Theme, ThemeBase, ThemeColors, ThemeConfig};
 
-// TODO(M4): image protocols (Kitty, Sixel, iTerm2, block/braille fallback) with occlusion handling.
 // TODO(M8): DRM/KMS backend with font rasterizer and adjustable font size.

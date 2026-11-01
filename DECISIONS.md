@@ -309,7 +309,7 @@ rewrite history.
   - **Plugins** start with the first session (D-034).
 
 ## D-031: Socket, handshake and framing (refines D-010)
-- **Status:** Accepted (lead), refined by D-036 for Windows · 2026-11-01
+- **Status:** Accepted (lead), refined by D-036 for Windows and D-043 (protocol versions) · 2026-11-01
 - **Decision:**
   - **Socket:** `$XDG_RUNTIME_DIR/termos/<name>.sock`, falling back to `$TMPDIR/termos-<uid>/<name>.sock`.
     - The directory is created with mode 0700; one owned by another user is refused, and wider permissions are tightened.
@@ -478,6 +478,60 @@ rewrite history.
   - **WASM engine (owner, resolves O-8):** wasmtime, used in M4b. Its RAM cost on a Pi 4 is measured there; the runtime stays behind the `wasm-widgets` feature, so builds without widgets don't pay for it.
   - **Animations (owner):** on by default, decided per client: off when the client is remote (SSH), when `[ui] reduced-motion = true`, or with `[ui] animations = false`. They never add a timer while nothing animates (D-028).
 - **Alternatives:** one M4 (too large to review in one step); wasmi (smaller, interpreted; the owner chose wasmtime); animations off by default.
+
+## D-043: The capability probe; capabilities v2; frontend and RPC versions apart
+- **Status:** Accepted (lead) · 2026-11-01
+- **Decision:**
+  - **Probe:** at attach, in raw mode, the client writes one query batch (XTVERSION, a Kitty graphics query, DECRQM 2026, `CSI ? u`, `CSI 16 t`, `CSI 14 t`, OSC 11) ending with DA1, which every terminal answers last, and reads stdin directly (`poll` + `read`) until the DA1 reply or 200 ms (800 ms over SSH). It replaces crossterm's keyboard probe, which could wait 2 s. Keys typed meanwhile are passed on. `TERMOS_PROBE=0` skips it; Windows consoles are detected from the environment only.
+  - **Parser:** `termos_render::probe::parse_replies` is pure, fuzzed (`caps_reply`) and tested against replies from kitty, WezTerm, foot, iTerm2, xterm, Windows Terminal, GNOME Terminal (rebuilt from documented formats) and tmux 3.4 (recorded with `termos debug caps --raw`).
+  - **Caps v2:** graphics (Kitty, Sixel, iTerm2), a `TERMOS_GRAPHICS` override, cell and text-area pixel sizes, the background colour (or `COLORFGBG`), the terminal's name, `in_tmux`, `remote` (SSH) and `reduced_motion`. Inside tmux or screen, never Kitty or iTerm2 (they would not pass it on); Sixel only if tmux itself reports it.
+  - **Versions (refines D-031):** the frontend protocol (postcard frames) is now version 3 (capabilities v2, then images). Control clients and plugins keep their own JSON-RPC version (1), so scripts and plugins are not affected by frame changes. `server.info` reports both.
+- **Alternatives:** crossterm's probes (one query at a time, long timeouts); querying through the server (the client owns the terminal).
+
+## D-044: Themes are presets, follow the terminal, and are per client
+- **Status:** Accepted (lead) · 2026-11-01
+- **Decision:**
+  - Presets dark, light and high contrast (every text colour 7:1 or more against its background, tested). `[theme] base = "auto" | "dark" | "light" | "high-contrast"`; the colour keys are overrides, so existing configs keep working.
+  - `auto` is light on a light terminal background (OSC 11, then `COLORFGBG`), dark otherwise.
+  - Each client has its own theme, from its terminal's background or a `theme.select` pick (from the control API: the session's newest client). Drop shadows blend toward the real background.
+  - Programs in panes asking for the default colours (OSC 10/11) get the most recently active client's terminal colours.
+- **Alternatives:** one theme per session (two terminals with different backgrounds would get one wrong).
+
+## D-045: Animations are drawn per client and cost nothing at rest
+- **Status:** Accepted (lead), policy by D-042 · 2026-11-01
+- **Decision:** floats grow from their centre when they open, a closing float's frame shrinks away, a toast slides in: 120 ms, cubic ease-out. They change only how a frame is drawn for clients that animate, never the layout, hit-testing or PTY sizes. A 16 ms frame deadline exists only while an animation runs and some client animates; other clients' frames do not change, so they receive nothing. `Desktop::render_at(now)` makes frames testable.
+- **Alternatives:** animating the layout (PTY resizes mid-animation); a fixed frame timer (idle cost).
+
+## D-046: The Kitty keyboard protocol for programs in panes; two guards for the emulator
+- **Status:** Accepted (lead) · 2026-11-01
+- **Decision:**
+  - Programs can enable the Kitty keyboard protocol in their pane; TermOS encodes flags 1 (disambiguate), 8 (all keys as escape codes) and 16 (associated text), and the `CSI ? u` reply lists only those. Release events and alternate keys (flags 2 and 4) are `TODO(M9)`.
+  - `alacritty_terminal` 0.26 panics when a program pushes more than 4096 keyboard modes (it removes from the wrong stack). A streaming guard in front of the emulator mirrors both screens' stack depths and drops pushes beyond 256; it follows the parser's rules (control bytes inside sequences, aborted sequences, long parameter lists) so it never under-counts.
+  - Any panic while parsing program output now resets that pane's emulator instead of taking the server, and every session, down. Both layers were verified against the real panic.
+- **Alternatives:** waiting for an upstream fix (a crafted 16 KB of output could stop the server meanwhile); forking alacritty_terminal.
+
+## D-047: Images: one model, a per-client ladder, the server decides, the client encodes
+- **Status:** Accepted (lead) · 2026-11-01
+- **Decision:**
+  - **Decoding:** the `image` crate (png, jpeg, gif first frame, webp, bmp; no rayon), at most 8192 px per side and 256 MiB per decode. Our own area-average resampling (sharp at whole ratios), block and braille rasters, Kitty/Sixel/iTerm2 encoders and a Sixel decoder bounded by the pixels actually drawn. `ratatui-image` was evaluated and not used: it writes straight to a terminal and has no notion of several clients or of occlusion.
+  - **Ladder, per client:** Kitty → Sixel → iTerm2 → quadrant blocks. Blocks are drawn into the cell grid (windows simply cover them). Kitty gets one placement per visible piece (the image minus floats above and the palette and which-key boxes), each a crop of one upload. Sixel and iTerm2 are used only for a wholly visible image, off the last row, while nothing moves; otherwise blocks in the visible pieces. `[graphics] protocol` or `TERMOS_GRAPHICS` forces one. Braille is not on the ladder: it has one colour per cell, so quadrant blocks show pictures better; its raster is kept for charts (M4b).
+  - **Wire (protocol 3):** `FrameUpdate.images` carries the whole placement list only when it changed, so idle frames stay silent; image data travels as PNG in `ImageData` chunks of at most 1 MiB, once per client and size, and `ImageFree` releases it. The server keeps PNG variants in a shared cache and poisons a client's previous grid where a Sixel or iTerm2 image moved or went away, so the next diff paints over its pixels. The client writes images after the cells in the same synchronized frame and frees Kitty images when it leaves.
+- **Alternatives:** encoding on the server (it would need every terminal's protocol); one placement per image with z-index tricks (Kitty would draw over overlays).
+
+## D-048: Images inside panes are anchored to the text
+- **Status:** Accepted (lead) · 2026-11-01
+- **Decision:**
+  - A streaming interceptor takes Kitty graphics APCs and Sixel DCSs (at most 32 MiB each, across reads), `CSI 16 t` and XTSMGRAPHICS out of program output before the emulator; everything else passes unchanged. Fuzz target `apc_dcs_intercept`.
+  - Kitty graphics: direct transmission only (files, temp files and shared memory are refused, so program output can never make TermOS read a file), PNG/RGB/RGBA, zlib, chunks, put, crops, cell sizes, delete, and replies as kitty sends them. Sixel is decoded within the pane's budget. At most 16 MiB and 128 images per pane, oldest first out.
+  - Each image is anchored by a hidden OSC 8 link on its top-left cell: it scrolls, reflows and clears with the text, and the cursor moves as kitty and xterm move it. Nothing in TermOS reads links, so the anchors never show.
+  - Programs get what image tools need: DA1 with Sixel, real `14t`/`16t` pixel sizes, XTSMGRAPHICS, and pixel sizes on the PTY. Pane images go through the same ladder as app images, including images partly scrolled above the view.
+  - Windows: not supported yet (`TODO(M9)`). The system ConPTY can filter these sequences out before TermOS reads them, so the pane tests run on Unix only.
+- **Alternatives:** our own grid overlay keyed by line numbers (breaks with reflow and clears); Kitty's Unicode placeholders (few programs use them).
+
+## D-049: Apps show images; the image viewer
+- **Status:** Accepted (lead) · 2026-11-01
+- **Decision:** `App::images()` reports images (a shared `Picture`, a key, a cell rect to fit in); `AppWaker` lets an app ask for a redraw from another thread (it reaches the desktop as a pane event). The image viewer (`image.open PATH`, also `termos msg image.open '{"arg": "…"}'`) decodes on its own thread within a 64 MiB file limit, pages through the folder's images and toggles fit/1:1. It is the first app in `termos-apps`.
+- **Alternatives:** decoding on the server loop (a large image would stall every session); a separate viewer process (no occlusion or per-client ladder).
 
 ---
 

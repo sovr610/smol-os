@@ -21,5 +21,3 @@ pub mod vt;
 
 pub use pty::{PtyEvent, PtyPane, SpawnSpec};
 pub use vt::{AlacrittyVt, VtBackend, VtEvent, VtModes};
-
-// TODO(M4): intercept Kitty graphics / Sixel sequences so images work inside PTY windows.
