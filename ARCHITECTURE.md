@@ -5,8 +5,11 @@ updated whenever the design changes. "D-xxx" refers to entries in
 [DECISIONS.md](DECISIONS.md) and "Mn" to milestones in
 [ROADMAP.md](ROADMAP.md). Anything not built yet is described as *planned*.
 
-**Current state (M0):** the workspace, CI and documentation exist. Only
-`termos --version` / `--help` are implemented.
+**Current state (M1):** the hosted, tmux-style desktop works. That covers
+the renderer, PTY panes, the window manager with floats, workspaces, the
+palette, which-key, copy mode, config with hot reload, the tutorial and
+notifications. Server and client run in one process; the socket arrives in
+M3.
 
 ---
 
@@ -85,8 +88,8 @@ agents and models. A frontend is only a *client* of the server (D-007).
 | `termos-render` | `Grid`/`Cell`/colour, frame diffing, themes, capability detection, backends (terminal, headless, KMS) | M1 |
 | `termos-core` | tokio event loop and frame scheduler, in-process bus, `Transport`, protocol, config, paths | M1 |
 | `termos-term` | PTY spawning/resizing, `VtBackend` over alacritty_terminal, blitting VT cells into the grid | M1 |
-| `termos-wm` | Window tree, floating + tiling layouts, workspaces, z-order, input routing, composition of window chrome | M2 |
-| `termos-shell` | `Desktop` state, command palette, launcher, which-key, status bar, notifications, tutorial, plugin host | M2 |
+| `termos-wm` | Window tree, floating + tiling layouts, workspaces, z-order, hit testing, composition of window chrome | M1 |
+| `termos-shell` | `Desktop` state and server loop, key tables, command palette, which-key, status bar, copy mode, notifications, tutorial, plugin host (M3) | M1 |
 | `termos-apps` | Built-in apps on the in-process `App` trait | M4 |
 | `termos-devkit` | mise-backed toolchains, Neovim/Helix + LSP/DAP, dev rootfs, Git/build panels | M5 |
 | `termos-ai` | Providers, agent loop, tools, permission engine, sandbox, audit, MCP, secrets | M6 |
@@ -165,12 +168,14 @@ Each window is clipped to its rectangle, and occluded regions are never drawn.
 
 Snapshot tests assert both levels. For example, a single echoed character must produce output for exactly one cell.
 
-### 5.5 Frame scheduling
+### 5.5 Frame scheduling (D-026, D-028)
 Rendering is event-driven, with no fixed tick.
-- Any dirty source schedules a frame. Frames are coalesced within a frame interval (target 8 ms), and the interval adapts to output backpressure.
-- A PTY flood (`cat` of a huge file) is parsed continuously but rendered at most once per interval.
-- When idle there are no armed timers, which is how we stay under 1% CPU.
-- Animations register short-lived tickers that stop when they finish, and a reduced-motion setting disables them.
+- Any change marks the desktop dirty.
+- A small change (keys, mouse, typing echo, or under 4 KB of pane output since the last frame) is drawn **immediately**.
+- During an output flood (`cat` of a huge file), PTY output is parsed continuously but drawn at most once per 8 ms. The reader's bounded channel slows the child instead of buffering without limit.
+- Output from panes that aren't visible updates their VT but never triggers a redraw.
+- While idle no timers are armed, except the optional once-a-minute status clock. Which-key, toast and sync-update timers exist only while active.
+- Animations (M4) will register short-lived tickers that stop when they finish, and a reduced-motion setting will disable them.
 
 ### 5.6 Terminal encoder
 - crossterm handles raw mode, the alternate screen, mouse and keyboard modes, and bracketed paste.
@@ -231,7 +236,10 @@ Window = { id, title, source: Pty | App | Plugin | Agent, state: normal | minimi
   - Hit tests run top-down. Dragging a title bar moves the window; dragging an edge or corner resizes it; clicking focuses; the wheel scrolls scrollback.
   - When a child has enabled mouse reporting, events inside its content are forwarded with translated coordinates, in the child's encoding.
 - **Snapping:** drag a window to a screen edge or corner to get halves or quarters; snap commands do the same from the keyboard. Minimized windows go to a task strip in the status bar.
-- **Commands:** every action is a named command, such as `window.close` or `layout.set bsp`. Commands can be bound in config, run from the palette (Ctrl+Space, fuzzy-matched) and called over JSON-RPC. The which-key overlay lists the bindings available after a prefix. The default keybinding scheme is **Open (O-1)**.
+- **Commands:** every action is a named command, such as `pane.split-right`, `pane.resize-left 5` or `layout.select tiled`. Commands can be bound in config, run from the palette (Ctrl+Space or prefix `:`, fuzzy-matched) and, from M3, called over JSON-RPC. The which-key overlay lists the bindings available after the prefix.
+- **tmux-style keys (D-023):** prefix `C-b`, then tmux's default keys (`%`, `"`, arrows, `z`, `x`, `c`, `n`, `p`, `0`–`9`, `[`, `]`, …), plus TermOS keys for floats (`f`, `F`, `m`, `M`). Resize keys repeat without the prefix for `repeat-time-ms`. A TermOS *workspace* is a tmux *window* (a tab in the status line); a *pane* is a tmux *pane*.
+- **Tiling (D-024):** tmux-style panes separated by one-cell lines, sized by weights that respect each subtree's minimum extent. Presets are even-horizontal, even-vertical, main-vertical (master-stack), main-horizontal and tiled (grid). Splits that wouldn't fit are refused.
+- **Copy mode:** vi motions over the scrollback, selection, search, and yank to the paste buffer and the system clipboard (OSC 52). The mouse wheel and drag-select use it too.
 - **PTY resize:** resizing a terminal window issues `TIOCSWINSZ`, which sends SIGWINCH to the child.
 - **Multiple clients:** when clients of different sizes attach, the session size follows `latest` (default), `smallest` or `largest`, as tmux's `window-size` does.
 
@@ -242,9 +250,10 @@ Window = { id, title, source: Pty | App | Plugin | Agent, state: normal | minimi
 - **Transport:** a `Transport` trait. M1 uses an in-memory channel; M3 adds a Unix socket at `$XDG_RUNTIME_DIR/termos/<server>.sock`, in a 0700 directory, falling back to `$TMPDIR/termos-$UID/`.
 - **Authentication:** the server checks the peer's uid (`SO_PEERCRED` / `getpeereid`) and rejects anyone else.
 - **Handshake:** the client sends `Hello { proto_version, kind: frontend | control | plugin, caps, size, env }`. The server replies `Welcome` or `Incompatible { supported }`, and supports the current and the previous major protocol version.
-- **Frontend stream:** length-prefixed postcard messages.
-  - Server → client: `Frame(spans)`, `Cursor`, `Bell`, `Title`, `Clipboard(OSC 52)`, `Image(op)`, `Detached`.
-  - Client → server: `Input(events)`, `Resize`, `Focus`, `Paste`, `Detach`.
+- **Frontend stream:** length-prefixed postcard messages. As of M1 these are the serde types in `termos-core::proto`:
+  - Server → client: `Frame(FrameUpdate { cols, rows, clear, spans, cursor })`, `Clipboard`, `Bell`, `Title`, `Exit`.
+  - Client → server: `Hello { version, caps, cols, rows }`, `Key`, `Mouse`, `Paste`, `Resize`, `Focus`.
+  - Planned for M3 and M4: `Image(op)`, `Detach`.
 - **Control stream:** newline-delimited JSON-RPC 2.0, with methods such as `window.new`, `session.list`, `notify.send` and `subscribe`. It's used by `termos msg …`, scripts and plugins.
 - **In-process bus:** typed events, with tokio broadcast for fan-out and mpsc for commands.
 - **Over SSH:** `ssh -t host termos attach` runs a client on the remote host. Later, a local client could attach to a remote server through a forwarded socket so that local capabilities such as Kitty graphics apply; the protocol is transport-agnostic.

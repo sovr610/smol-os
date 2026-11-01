@@ -28,7 +28,10 @@ Dependency direction is fixed in ARCHITECTURE.md §4. Never add an edge that poi
 - `cargo xtask ci`: fmt check, clippy `-D warnings`, tests, repo checks and cargo-deny. **Must pass before every commit.**
 - `cargo xtask todos --write`: regenerate the ROADMAP open-work table after adding or removing work markers.
 - `cargo xtask check-todos`: work-marker format, ROADMAP sync and SPDX headers.
-- `cargo run -p termos-cli -- <args>`: run `termos`.
+- `cargo run -p termos-cli -- <args>`: run `termos`. With no arguments it starts the desktop, which needs a real terminal.
+- `cargo xtask perf [SECS]`: performance budgets on a release build (Linux), with SECS seconds of idle measurement (default 60).
+- `cd fuzz && cargo +nightly fuzz run <target> -- -max_total_time=60`: fuzz a parser. The targets are `vt_advance`, `config_parse` and `keyspec_parse`.
+- `INSTA_UPDATE=always cargo test -p <crate>`: write new snapshots; review the `.snap` files before committing.
 - `cargo zigbuild --release -p termos-cli --target aarch64-unknown-linux-gnu.2.31`: cross-build. Needs zig and cargo-zigbuild.
 - `cargo deny check`: licenses, advisories, sources.
 
@@ -64,4 +67,8 @@ Dependency direction is fixed in ARCHITECTURE.md §4. Never add an edge that poi
 - Use `insta` snapshots of rendered grids for anything visual, driven through the headless backend. Review them with `cargo insta review`, and commit the `.snap` files.
 - Use `proptest` for layout and diff invariants.
 - Fuzz targets live in `fuzz/` (cargo-fuzz, nightly toolchain). Add one for every parser: VT, config, protocol, capability replies.
+- For the desktop, test end to end:
+  - `termos-shell/tests/desktop.rs` drives a `Desktop` with real `/bin/sh` panes;
+  - `termos-cli/tests/e2e.rs` runs the real binary on a PTY and reads the screen through `vt100`.
+- To try the UI by hand in a sandbox, use an isolated tmux socket (`tmux -L <name>`), never the user's default server.
 - CI never uses live API keys. Use recorded fixtures and mock servers.

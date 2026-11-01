@@ -13,9 +13,9 @@ questions (DECISIONS.md, "Open questions").
 
 | Milestone | Theme | Status |
 | --- | --- | --- |
-| M0 | Plan docs, repo scaffold, CI, CLAUDE.md | 🔍 |
-| M1 | Hosted-mode renderer: one window running a shell | ⏳ |
-| M2 | Window manager, palette, config | ⏳ |
+| M0 | Plan docs, repo scaffold, CI, CLAUDE.md | ✅ |
+| M1 | tmux-style hosted desktop: renderer, PTY panes, window manager, palette, config (M1+M2 combined, D-022) | 🔍 |
+| M2 | Merged into M1 | 🔍 |
 | M3 | Session server, detach/attach, persistence, plugin API | ⏳ |
 | M4 | Graphics, themes, first built-in apps, WASM widgets | ⏳ |
 | M5 | Developer environment | ⏳ |
@@ -30,7 +30,7 @@ generated table at the end of this file lists every open marker.
 ---
 
 ## M0 — Plan docs, repo scaffold, CI, CLAUDE.md
-**Status:** 🔍 awaiting review
+**Status:** ✅ done
 
 **Deliverables**
 - [x] ARCHITECTURE.md, ROADMAP.md, DECISIONS.md (D-001 to D-021, open questions O-1 to O-14)
@@ -54,74 +54,90 @@ cargo xtask todos
 
 ---
 
-## M1 — Hosted-mode renderer: one window, one shell, damage tracking
-**Status:** ⏳ · **Ask first:** nothing; O-2 (PTY layer) is the lead's call and gets logged.
+## M1 — tmux-style hosted desktop (M1 and M2 combined)
+**Status:** 🔍 done, awaiting review · Combined at the owner's request (D-022); tmux-style interaction (D-023), tiled-first with floats (D-024).
 
 **Deliverables**
-- **`termos-render`:**
-  - `Grid` / `Cell` / `Color`, wide-char handling (`unicode-width`, grapheme segmentation);
-  - frame diff into row spans;
-  - the terminal backend: crossterm, synchronized output, colour downsampling, env-based capability detection;
-  - the headless backend.
-- **`termos-term`:**
-  - PTY spawning of `$SHELL` with resize (`TIOCSWINSZ`);
-  - `VtBackend` over `alacritty_terminal` (pinned) and blitting into the grid;
-  - title and bell events.
-- **`termos-core`:**
-  - the tokio event loop and the event-driven frame scheduler (coalescing, no idle timers);
-  - the in-memory `Transport`;
-  - the first protocol message types;
-  - XDG paths;
-  - file logging (`tracing`).
-- **`termos-cli`:** `termos` opens the alternate screen with one bordered, titled window running the user's shell. A quit binding exits. Terminal resizes resize the window and PTY.
-- **Fuzzing:** a `fuzz/` target that feeds arbitrary bytes into `VtBackend`, and a CI fuzz smoke job (timed run on nightly).
-- **Performance harness:** the idle-CPU test, input→flush latency instrumentation, and criterion benchmarks for diff/encode.
+- **Renderer (`termos-render`):**
+  - [x] `Grid` / `Cell` / `Color` with wide characters and graphemes; clipped drawing helpers (text, boxes, shadows)
+  - [x] Frame diffing into minimal spans; terminal encoder with cursor/SGR state, DEC 2026 synchronized output and 256/16-colour downsampling
+  - [x] Environment-based capability detection; themes derived from configurable base colours
+- **Terminal panes (`termos-term`):**
+  - [x] PTY panes on portable-pty with reader and writer threads (D-025)
+  - [x] `VtBackend` over `alacritty_terminal`: rendering, events, modes, scrollback, OSC 7, sync updates
+  - [x] xterm encoding of keys, mouse (SGR/X10), paste and focus for child programs
+- **Core (`termos-core`):**
+  - [x] Protocol-neutral input and tmux key notation
+  - [x] `ClientMsg` / `ServerMsg` / `FrameUpdate`; in-process transport (D-026)
+  - [x] `config.toml` with errors located by line and column, hot reload, XDG paths, file logging
+  - [x] The in-process `App` trait over ratatui
+- **Window manager (`termos-wm`):**
+  - [x] Layout tree with splits, BSP auto-split, resize, swap, directional focus
+  - [x] Presets: even-horizontal, even-vertical, main-vertical (master-stack), main-horizontal, tiled (grid); "no space" refusal
+  - [x] Workspaces; floating windows (raise, cascade, minimize, snap, minimum size); zoom
+  - [x] Hit testing; composition with junction-aware separators, an accent ring on the focused pane, and float borders, titles, buttons and shadows
+- **Desktop (`termos-shell`):**
+  - [x] Prefix key `C-b` with tmux default bindings, repeatable resize, root bindings, config overrides and unbinding
+  - [x] Command registry shared by keys, palette and (later) JSON-RPC
+  - [x] tmux-style status line: session, tabs with `*`, `-`, `!` and `Z` flags, minimized chips, PREFIX/COPY badges, toasts, optional clock
+  - [x] Command palette (`C-Space`, `prefix :`) with fuzzy matching and key hints
+  - [x] Which-key after a pause following the prefix; `prefix ?` shows every binding
+  - [x] Status-line prompts: rename; y/n confirmations
+  - [x] Copy mode: vi motions, selection, search, yank to the paste buffer and OSC 52, paste
+  - [x] Mouse:
+    - [x] focus;
+    - [x] separator drag;
+    - [x] float move, resize and edge-snap;
+    - [x] title buttons;
+    - [x] wheel scrollback;
+    - [x] drag-select to copy;
+    - [x] forwarding to mouse-aware programs (Shift bypasses);
+    - [x] alternate scroll for less/man;
+    - [x] status-line clicks
+  - [x] Notifications and the notification-center app; the first-run tutorial app
+  - [x] Event-driven server loop: immediate frames for small updates, coalescing only for floods, no idle wakeups apart from the optional clock (D-028)
+- **The `termos` command (`termos-cli`):**
+  - [x] `termos` runs server and client in-process, with panic-safe terminal restore and a nesting guard (D-027)
+  - [x] `termos config check | default | path`
+- **Quality:**
+  - [x] Fuzz targets (VT, config, key notation) and a CI fuzz job
+  - [x] Release-mode performance-budget job (`cargo xtask perf`)
+  - [x] [docs/getting-started.md](docs/getting-started.md)
 
-**Acceptance**
-- Interactive shells, `vim`/`nvim`, `htop` and `less` work, including resize.
-- Damage tracking is proven: echoing one character emits bytes for exactly one cell (headless test).
-- Snapshot tests of window chrome and shell output.
-- Idle CPU < 1% and p99 input→flush < 16 ms on the CI x86_64 runner.
-- Hosted RSS < 150 MB.
-- The fuzz smoke run finds no crash.
+**Acceptance (measured)**
+- **Interactive use:** shells, splits, floats, workspaces, palette, copy mode and quit all work, driven in a real terminal (tmux) and by the PTY end-to-end test.
+- **Damage tracking:** one echoed keystroke produces a one-cell frame, and an idle desktop sends nothing (server test).
+- **Snapshots:** splits, every preset, floats with shadows and zoom.
+- **Property tests:** encoded frames reproduce the grid in an independent emulator; any sequence of layout operations tiles the screen exactly.
+- **Budgets, release build on the dev container:**
 
-**Demo:** `cargo run --release -p termos-cli`
+  | Metric | Measured | Budget |
+  | --- | --- | --- |
+  | Keystroke-to-screen latency, p50 | 0.5 ms | — |
+  | Keystroke-to-screen latency, p99 | 2.6 ms | < 16 ms |
+  | Idle CPU over 10 s | 0.000% | < 1% |
+  | RSS | 5.8 MB | < 150 MB |
+  | 300k-line flood | rendered in 0.23 s | — |
+
+- **Fuzzing:** 20 s locally on each target with no crashes; CI runs 60 s per target.
+
+**Demo**
+```bash
+cargo run --release -p termos-cli
+```
+Then try: `C-b %`, `C-b "`, `C-b f`, `C-b c`, `Ctrl+Space`, `C-b [`, and the mouse.
+
+**Not in this milestone:** detach/attach and the socket transport (M3); images and active capability queries (M4); the Kitty keyboard protocol *for child programs* (M4).
 
 ---
 
-## M2 — Window manager
-**Status:** ⏳ · **Ask first:** O-1 (default keybinding scheme).
-
-**Deliverables**
-- **Windows and layouts:**
-  - the window tree: workspaces, a floating layer, and a tiling tree with splits, tabs and stacks;
-  - master-stack, grid and BSP layouts;
-  - minimize/maximize/fullscreen, z-order and snapping.
-- **Mouse:** focus, drag-move via the title bar, edge/corner resize, wheel scrollback, and forwarding to mouse-aware children.
-- **Workspaces:** virtual desktops with switching.
-- **Shell (`termos-shell`):**
-  - the command palette (Ctrl+Space) over named commands, fuzzy-matched with `nucleo`;
-  - the which-key overlay;
-  - a status bar showing workspaces, a task strip and a clock;
-  - notification toasts and a notification center;
-  - the first-run tutorial.
-- **Clipboard:** mouse selection and copy, internal clipboard ring, OSC 52 passthrough.
-- **App trait:** the in-process `App` trait in `termos-core` (ARCHITECTURE.md §9).
-- **Config:** `config.toml` with keybindings and layout defaults, span-accurate errors, hot reload, `termos config check`, and a config-parser fuzz target.
-
-**Acceptance**
-- Snapshot tests for every layout.
-- proptest invariants for the layouts.
-- Scripted mouse drag/resize tests through the headless client.
-- A hot-reload test.
-- The latency and idle budgets still hold with 8 windows open.
-
-**Demo:** `termos`, then open several shells and drag, tile, switch workspaces and use the palette.
+## M2 — merged into M1
+**Status:** 🔍 · Everything planned for M2 was delivered in M1 (D-022). This heading stays so milestone numbers and work markers stay stable.
 
 ---
 
 ## M3 — Session server, persistence, control and plugin API
-**Status:** ⏳ · **Ask first:** nothing new.
+**Status:** ⏳ · **Ask first:** nothing new. Session restore (D-011) should store the tmux-style layout tree and float geometry from M1.
 
 **Deliverables**
 - **Server and socket:**

@@ -13,31 +13,52 @@ TermOS runs in two modes:
 
 ## Status
 
-**Milestone M0: planning, scaffold and CI.** There's nothing to use yet:
-`termos --version` is the only working feature. See [ROADMAP.md](ROADMAP.md)
-for what comes next.
+**Milestone M1: a tmux-style desktop in hosted mode.** You get:
+- panes with splits and layout presets;
+- floating windows you can drag, resize and snap;
+- workspaces;
+- a command palette, key hints and copy mode;
+- full mouse support;
+- live-reloading configuration.
 
-## Build
+Detach and reattach come next, in M3. See [ROADMAP.md](ROADMAP.md).
+
+## Try it
 
 TermOS needs the Rust toolchain pinned in `rust-toolchain.toml`; rustup
-installs it automatically.
+installs it automatically. It runs on Linux, macOS or WSL2.
 
 ```bash
-cargo build
+cargo run --release -p termos-cli
 ```
 
-```bash
-cargo run -p termos-cli -- --version
-```
+Press **Ctrl+B**, then:
+- **%** splits the pane;
+- **f** floats it;
+- **c** opens a new workspace.
+
+**Ctrl+Space** opens the command palette. Pause after Ctrl+B and a panel lists
+every key. [docs/getting-started.md](docs/getting-started.md) has the full
+guide.
+
+## Build and test
 
 ```bash
 cargo xtask ci
 ```
 
-`cargo xtask ci` runs every check CI runs.
+That runs everything CI runs: fmt, clippy, tests and the repo checks.
+
+```bash
+cargo xtask perf
+```
+
+That checks the latency, idle-CPU and memory budgets on a release build
+(Linux only).
 
 ## Documentation
 
+- [docs/getting-started.md](docs/getting-started.md): using TermOS.
 - [ARCHITECTURE.md](ARCHITECTURE.md): how the system is put together.
 - [ROADMAP.md](ROADMAP.md): milestones M0–M9 and open work.
 - [DECISIONS.md](DECISIONS.md): the decision log and open questions.

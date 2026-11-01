@@ -219,14 +219,76 @@ rewrite history.
   - Agents use this endpoint like any other OpenAI-compatible provider.
 - **Consequences:** The server stays small and crash-isolated from inference. External tools can use the endpoint too.
 
+## D-022: M1 and M2 are built together
+- **Status:** Accepted (owner) · 2026-11-01
+- **Decision:** M1 (renderer and a shell in a PTY) and M2 (window manager, palette, config) are one milestone. ROADMAP.md keeps both headings: `## M1` holds the combined scope, and `## M2` points to it.
+- **Consequences:** Milestone numbers after M2 don't change.
+
+## D-023: tmux-style interaction model
+- **Status:** Accepted (owner; resolves O-1) · 2026-11-01
+- **Decision:**
+  - **Prefix:** `C-b`, as in tmux, configurable. Pressing the prefix twice sends it to the program.
+  - **Key tables:** a prefix table with tmux's default keys wherever tmux has an equivalent (`%`, `"`, `c`, `n`, `p`, `l`, `z`, `x`, `[`, `]`, `,`, `&`, `0`–`9`, `Space`, `{`, `}`, `o`, `;`, Ctrl/Alt+arrows to resize), plus a root table (no prefix) holding `C-Space` for the palette. The prefix `:` also opens the palette.
+  - **Additions:** TermOS-only keys use free slots: `f`/`F` float, `m`/`M` minimize/restore, `N` notifications, `F1` tutorial, `r` reload config, `?` all keys.
+  - **Repeatable keys:** resize bindings repeat without the prefix for `repeat-time-ms` (tmux `bind -r`).
+  - **Terminology:** a TermOS *workspace* is a tmux *window* and appears as a tab in the status line. A TermOS *window* or *pane* is a tmux *pane*.
+  - **Status line:** tmux-style (`[session] 0:name* 1:name-`), with prompts and confirmations in the status line (`confirm-before`).
+- **Alternatives:** Modifier chords (Alt/Super). These collide with shells and editors, and many terminals don't pass Super through.
+- **Consequences:**
+  - There are no vim-style `hjkl` focus keys by default, because tmux's `l` is "last window". Users can add them in `[keys.prefix]`.
+  - `d` (detach) is reserved for M3.
+
+## D-024: Tiled-first layout with a float toggle
+- **Status:** Accepted (owner) · 2026-11-01
+- **Decision:**
+  - Panes tile as in tmux, with one-cell shared separators, splits and presets. The presets are even-horizontal, even-vertical, main-vertical (master-stack), main-horizontal and tiled (grid). BSP comes as an auto-split along the longer side.
+  - `prefix f` turns any pane into a floating window, and back. Floating windows have a rounded border, title, minimize/close buttons and a drop shadow. They can be dragged to move, dragged by an edge to resize, snapped to halves or maximized when dropped on a screen edge, and minimized to the status line.
+  - Zoom (`prefix z`) maximizes any pane.
+  - Splits and presets refuse when panes would have no room ("no space for new pane").
+
+## D-025: PTY layer is portable-pty, with reader and writer threads per pane
+- **Status:** Accepted (lead; resolves O-2) · 2026-11-01
+- **Decision:**
+  - `portable-pty` (from WezTerm) spawns and resizes children on Linux and macOS.
+  - Each pane has a blocking reader thread. It sends output chunks over a bounded channel to the server task, which owns every VT and parses on its own loop.
+  - Each pane also has a writer thread, so a child that stops reading input can't block the desktop.
+- **Alternatives:**
+  - alacritty_terminal's own `EventLoop`: we would lose the read loop that M4 needs to intercept image sequences.
+  - `pty-process`.
+  - `rustix` openpty with `AsyncFd`: more unsafe code (fork/exec) for little gain.
+- **Consequences:** Two sleeping threads per pane, which cost nothing while idle.
+
+## D-026: The server sends diffs, the client encodes them, and only output floods are coalesced
+- **Status:** Accepted (lead) · 2026-11-01
+- **Decision:**
+  - **Server side:** the server composes a full grid per client and keeps the last grid that client received. It sends `FrameUpdate { spans, cursor, clear }` containing only the changed cell runs.
+  - **Client side:** the client encodes the spans with our own SGR and cursor encoder (minimal moves, DEC 2026 synchronized output, colour downsampling). crossterm is used only for terminal modes and input.
+  - **Scheduling:** a frame is drawn as soon as something changes, which keeps typing latency low. While a pane is flooding output (≥ 4 KB since the last frame), frames are capped at one per 8 ms.
+- **Consequences:** The M3 socket transport carries the same messages unchanged. Measured on the M1 build: p50 keystroke-to-screen latency is about 0.5 ms, and a 300k-line flood renders in about 0.25 s.
+
+## D-027: Child environment and nesting
+- **Status:** Accepted (lead) · 2026-11-01
+- **Decision:**
+  - Panes get `TERM=xterm-256color`, `COLORTERM=truecolor`, `TERMOS=<server pid>` and `TERMOS_PANE=%N`.
+  - `termos` refuses to start inside a TermOS pane unless `--force` is given, as tmux does.
+  - New panes start in the focused pane's working directory: from OSC 7 when the shell reports it, otherwise from `/proc/<pid>/cwd` on Linux.
+  - OSC 52 *reads* from programs are refused (an exfiltration risk); OSC 52 copies are passed through to the outer terminal.
+
+## D-028: The only periodic wakeups
+- **Status:** Accepted (lead) · 2026-11-01
+- **Decision:**
+  - An idle desktop has no timers, with one exception: the optional status-line clock wakes once per wall-clock minute.
+  - Which-key, toast-expiry, key-repeat and program sync-update timers are armed only while those things are active.
+- **Consequences:** Idle CPU measured over 10 s on the M1 build is 0.000%.
+
 ---
 
 ## Open questions (the owner will be asked before the milestone that needs each one)
 
 | ID | Question | Needed by | Current lean |
 | --- | --- | --- | --- |
-| O-1 | Default WM keybinding scheme: a tmux-style leader key, or modifier chords (Alt/Super)? | M2 | Leader key, so it doesn't collide with shells and editors. Ctrl+Space stays the palette. |
-| O-2 | PTY layer: `portable-pty`, `pty-process` or direct `rustix` openpty with tokio `AsyncFd`? | M1 | Lead's call; logged when made. |
+| O-1 | Default WM keybinding scheme: a tmux-style leader key, or modifier chords (Alt/Super)? | M2 | **Resolved by D-023:** tmux prefix `C-b`. |
+| O-2 | PTY layer: `portable-pty`, `pty-process` or direct `rustix` openpty with tokio `AsyncFd`? | M1 | **Resolved by D-025:** `portable-pty`. |
 | O-3 | Git UI: embed lazygit/gitui in a window, or build our own panel? | M5 | Embed first, integrate later. |
 | O-4 | LLM clients: provider SDK crates (async-openai, others) or our own thin reqwest clients behind `Provider`? | M6 | Own thin clients plus shared SSE parsing, so the model-listing and tool-calling shapes stay uniform. |
 | O-5 | Secret store on bare metal, where there's no Secret Service: an age-encrypted file unlocked by passphrase, a TPM-sealed key, or something else? | M6 | age file with a passphrase; TPM later. |
