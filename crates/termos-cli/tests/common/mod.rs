@@ -170,21 +170,33 @@ impl Termos {
                     Ok(0) | Err(_) => break,
                     Ok(n) => n,
                 };
-                // Answer the primary device attributes query (crossterm's
-                // keyboard-protocol probe) like a VT220 would.
-                if buf[..n].windows(3).any(|w| w == b"\x1b[c")
-                    && let Ok(mut w) = w2.lock()
-                {
-                    let _ = w.write_all(b"\x1b[?62;22c");
-                    let _ = w.flush();
-                }
+                let chunk = &buf[..n];
                 let (lock, cv) = &*s2;
+                let mut cursor = (0, 0);
                 if let Ok(mut s) = lock.lock() {
-                    s.parser.process(&buf[..n]);
-                    s.raw.extend_from_slice(&buf[..n]);
+                    s.parser.process(chunk);
+                    s.raw.extend_from_slice(chunk);
                     s.generation += 1;
+                    cursor = s.parser.screen().cursor_position();
                 }
                 cv.notify_all();
+                // Answer queries like a VT220 would: primary device
+                // attributes (crossterm's keyboard-protocol probe), and the
+                // cursor position (ConPTY asks when it starts and holds
+                // back all output until it gets the answer).
+                let mut answer = Vec::new();
+                if chunk.windows(3).any(|w| w == b"\x1b[c") {
+                    answer.extend_from_slice(b"\x1b[?62;22c");
+                }
+                if chunk.windows(4).any(|w| w == b"\x1b[6n") {
+                    answer.extend(format!("\x1b[{};{}R", cursor.0 + 1, cursor.1 + 1).bytes());
+                }
+                if !answer.is_empty()
+                    && let Ok(mut w) = w2.lock()
+                {
+                    let _ = w.write_all(&answer);
+                    let _ = w.flush();
+                }
             }
             let (lock, cv) = &*s2;
             if let Ok(mut s) = lock.lock() {

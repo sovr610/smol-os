@@ -322,11 +322,19 @@ mod tests {
     use super::*;
     use std::time::Duration;
 
-    async fn collect(rx: &mut mpsc::Receiver<PtyEvent>) -> (Vec<u8>, Option<u32>) {
+    /// Collects output until the program exits. Answers cursor-position
+    /// queries the way a terminal would: ConPTY asks one (`CSI 6n`) when it
+    /// starts and holds back all output until it gets the answer.
+    async fn collect(pane: &PtyPane, rx: &mut mpsc::Receiver<PtyEvent>) -> (Vec<u8>, Option<u32>) {
         let mut out = Vec::new();
         loop {
             match tokio::time::timeout(Duration::from_secs(10), rx.recv()).await {
-                Ok(Some(PtyEvent::Output(_, bytes))) => out.extend(bytes),
+                Ok(Some(PtyEvent::Output(_, bytes))) => {
+                    if bytes.windows(4).any(|w| w == b"\x1b[6n") {
+                        pane.write(b"\x1b[1;1R".to_vec());
+                    }
+                    out.extend(bytes);
+                }
                 Ok(Some(PtyEvent::Exited(_, code))) => return (out, code),
                 Ok(None) | Err(_) => {
                     panic!("pty did not exit; got {:?}", String::from_utf8_lossy(&out))
@@ -347,8 +355,8 @@ mod tests {
             env: vec![("TERMOS_TEST".into(), "there".into())],
             ..SpawnSpec::shell("/bin/sh", 40, 5)
         };
-        let _pane = PtyPane::spawn(PaneId(1), &spec, tx).expect("spawn");
-        let (out, code) = collect(&mut rx).await;
+        let pane = PtyPane::spawn(PaneId(1), &spec, tx).expect("spawn");
+        let (out, code) = collect(&pane, &mut rx).await;
         assert!(String::from_utf8_lossy(&out).contains("hi there"));
         assert_eq!(code, Some(3));
     }
@@ -366,7 +374,7 @@ mod tests {
         };
         let pane = PtyPane::spawn(PaneId(2), &spec, tx).expect("spawn");
         pane.write(b"hello\r".to_vec());
-        let (out, code) = collect(&mut rx).await;
+        let (out, code) = collect(&pane, &mut rx).await;
         let text = String::from_utf8_lossy(&out);
         assert!(text.contains("7 50"), "{text:?}");
         assert!(text.contains("got:hello"), "{text:?}");
@@ -406,8 +414,8 @@ mod tests {
             env: vec![("TERMOS_TEST".into(), "there".into())],
             ..SpawnSpec::shell("cmd.exe", 40, 5)
         };
-        let _pane = PtyPane::spawn(PaneId(11), &spec, tx).expect("spawn");
-        let (out, code) = collect(&mut rx).await;
+        let pane = PtyPane::spawn(PaneId(11), &spec, tx).expect("spawn");
+        let (out, code) = collect(&pane, &mut rx).await;
         assert!(String::from_utf8_lossy(&out).contains("hi there"));
         assert_eq!(code, Some(3));
     }
@@ -426,7 +434,7 @@ mod tests {
         };
         let pane = PtyPane::spawn(PaneId(12), &spec, tx).expect("spawn");
         pane.write(b"hello\r".to_vec());
-        let (out, code) = collect(&mut rx).await;
+        let (out, code) = collect(&pane, &mut rx).await;
         let text = String::from_utf8_lossy(&out);
         assert!(text.contains("got:hello"), "{text:?}");
         assert_eq!(code, Some(0));

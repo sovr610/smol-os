@@ -91,12 +91,21 @@ impl AsyncWrite for Pipe {
     }
 }
 
+/// How many pipe instances wait for clients at once. A client that finds
+/// none free gets `ERROR_PIPE_BUSY`; ours retry, but plugins in other
+/// languages simply `open()` the pipe, and several start together.
+const WAITING: usize = 4;
+
 #[derive(Debug)]
 pub(super) struct Listener {
     name: std::ffi::OsString,
-    /// The instance waiting for the next client.
-    next: NamedPipeServer,
     descriptor: security::Descriptor,
+    /// The first instance, created by `bind` to claim the name; it starts
+    /// waiting with the first `accept`.
+    first: Option<NamedPipeServer>,
+    /// Instances waiting for a client, each in its own task (a pending
+    /// overlapped connect: no wakeups until a client arrives).
+    waiting: tokio::task::JoinSet<io::Result<NamedPipeServer>>,
 }
 
 fn create(
@@ -125,18 +134,28 @@ impl Listener {
         })?;
         Ok(Self {
             name,
-            next,
             descriptor,
+            first: Some(next),
+            waiting: tokio::task::JoinSet::new(),
         })
     }
 
     pub(super) async fn accept(&mut self) -> io::Result<Stream> {
-        let connected = self.next.connect().await;
-        // The next instance exists before we hand this one out, so clients
-        // see "busy" (and retry) rather than "no server".
-        let fresh = create(&self.name, &self.descriptor, false)?;
-        let pipe = std::mem::replace(&mut self.next, fresh);
-        connected.map(|()| Stream(Pipe::Server(pipe)))
+        while self.waiting.len() < WAITING {
+            let pipe = match self.first.take() {
+                Some(p) => p,
+                None => create(&self.name, &self.descriptor, false)?,
+            };
+            self.waiting.spawn(async move {
+                pipe.connect().await?;
+                Ok(pipe)
+            });
+        }
+        match self.waiting.join_next().await {
+            Some(Ok(connected)) => connected.map(|p| Stream(Pipe::Server(p))),
+            Some(Err(e)) => Err(io::Error::other(e)),
+            None => Err(io::Error::other("no pipe instance is waiting")),
+        }
     }
 }
 
