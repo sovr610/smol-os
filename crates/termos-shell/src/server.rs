@@ -12,6 +12,7 @@
 use std::collections::BTreeMap;
 use std::io;
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::Deserialize;
@@ -25,6 +26,7 @@ use termos_core::transport::{ClientEnd, read_line};
 use termos_core::wire::{
     self, ConnKind, FrameDecoder, Hello, HelloReply, Message, Request, Response, RpcError, codes,
 };
+use termos_plugin::proto::{self, methods};
 use termos_render::caps::Caps;
 use termos_render::cell::Cell;
 use termos_render::diff::{Span, diff, full};
@@ -39,6 +41,10 @@ use tokio::sync::{mpsc, oneshot};
 use crate::commands::{Command, CommandError};
 use crate::desktop::{Desktop, DesktopOptions, SessionRequest};
 use crate::notify::Level;
+use crate::plugins::{
+    Cells, HostEvent, PluginHost, PluginView, PluginWindow, SharedView, to_cells, truncate_cells,
+    valid_command,
+};
 use crate::snapshot::{self, SessionSnapshot};
 
 /// Minimum time between frames during output floods (~120 fps cap).
@@ -104,7 +110,24 @@ enum Event {
         req: Request,
         reply: oneshot::Sender<Option<Response>>,
     },
+    PluginHello {
+        token: String,
+        reply: oneshot::Sender<Result<PluginConn, RpcError>>,
+    },
+    PluginRequest {
+        plugin: String,
+        req: Request,
+        reply: oneshot::Sender<Option<Response>>,
+    },
+    PluginGone {
+        plugin: String,
+        conn: u64,
+    },
 }
+
+/// An admitted plugin connection: its name, connection id, and the lines
+/// the server sends it.
+type PluginConn = (String, u64, mpsc::UnboundedReceiver<String>);
 
 /// A frontend admitted by the server.
 #[derive(Debug)]
@@ -253,6 +276,28 @@ impl Connector {
             None => Err(stopping()),
         }
     }
+
+    async fn plugin_hello(&self, token: String) -> Result<PluginConn, RpcError> {
+        let (tx, rx) = oneshot::channel();
+        self.events
+            .send(Event::PluginHello { token, reply: tx })
+            .map_err(|_| stopping())?;
+        rx.await.map_err(|_| stopping())?
+    }
+
+    async fn plugin_request(&self, plugin: &str, req: Request) -> Option<Response> {
+        let id = req.id.clone();
+        let (tx, rx) = oneshot::channel();
+        let ev = Event::PluginRequest {
+            plugin: plugin.to_owned(),
+            req,
+            reply: tx,
+        };
+        if self.events.send(ev).is_err() {
+            return id.map(|id| Response::err(id, stopping()));
+        }
+        rx.await.ok().flatten()
+    }
 }
 
 /// The session server.
@@ -269,6 +314,8 @@ pub struct Server {
     events_tx: mpsc::UnboundedSender<Event>,
     events_rx: mpsc::UnboundedReceiver<Event>,
     reload_rx: Option<mpsc::UnboundedReceiver<()>>,
+    plugins: PluginHost,
+    host_rx: mpsc::UnboundedReceiver<HostEvent>,
     /// Notices for the next session created (startup problems).
     notices: Vec<(Level, String)>,
     /// Saved sessions not restored (yet).
@@ -342,6 +389,8 @@ impl Server {
     pub fn new(opts: ServerOptions, config: Config) -> Self {
         let (pty_tx, pty_rx) = mpsc::channel(1024);
         let (events_tx, events_rx) = mpsc::unbounded_channel();
+        let (host_tx, host_rx) = mpsc::unbounded_channel();
+        let plugins = PluginHost::new(opts.paths.plugins_dir(), host_tx);
         Self {
             opts,
             config,
@@ -355,6 +404,8 @@ impl Server {
             events_tx,
             events_rx,
             reload_rx: None,
+            plugins,
+            host_rx,
             notices: Vec::new(),
             saved: Vec::new(),
             ask: Ask::No,
@@ -504,6 +555,7 @@ impl Server {
         for (level, text) in self.notices.drain(..) {
             desktop.post(level, text);
         }
+        desktop.set_plugin_ui(self.plugins.status_widgets(), self.plugins.commands());
         self.sessions.insert(
             key,
             SessionEntry {
@@ -514,6 +566,7 @@ impl Server {
                 saved_as: None,
             },
         );
+        self.sync_plugins(false);
     }
 
     // ----- snapshots and restore (D-033) -------------------------------
@@ -819,6 +872,9 @@ impl Server {
                 }
             })
         });
+        if owns_socket {
+            self.plugins.set_socket(self.opts.socket_path.clone());
+        }
         self.load_saved();
         let mut signals = if self.opts.handle_signals {
             Signals::new()
@@ -841,6 +897,7 @@ impl Server {
                         self.on_pty(ev);
                     }
                 }
+                Some(ev) = self.host_rx.recv() => self.on_host(ev),
                 r = recv_reload(&mut self.reload_rx) => match r {
                     Some(()) => self.reload_config(),
                     None => self.reload_rx = None,
@@ -894,6 +951,317 @@ impl Server {
         }
         for e in self.sessions.values_mut() {
             e.desktop.reload_config();
+        }
+        self.sync_plugins(true);
+    }
+
+    // ----- plugins (D-034) ------------------------------------------------
+
+    /// Shows `text` in every session (or the next one created).
+    fn post_everywhere(&mut self, level: Level, text: &str) {
+        if self.sessions.is_empty() {
+            self.notices.push((level, text.to_owned()));
+        }
+        for e in self.sessions.values_mut() {
+            e.desktop.post(level, text);
+        }
+    }
+
+    /// Starts and stops plugins to match `[plugins] enabled`. Plugins start
+    /// with the first session, so they have somewhere to open windows.
+    fn sync_plugins(&mut self, retry: bool) {
+        if self.sessions.is_empty() {
+            return;
+        }
+        let (problems, closed) = self.plugins.sync(&self.config.plugins.enabled, retry);
+        self.close_windows(&closed);
+        for p in problems {
+            tracing::warn!("{p}");
+            self.post_everywhere(Level::Warn, &p);
+        }
+        self.push_plugin_ui();
+    }
+
+    /// Gives every desktop the current plugin widgets and commands.
+    fn push_plugin_ui(&mut self) {
+        let status = self.plugins.status_widgets();
+        let commands = self.plugins.commands();
+        for e in self.sessions.values_mut() {
+            e.desktop.set_plugin_ui(status.clone(), commands.clone());
+        }
+    }
+
+    fn close_windows(&mut self, ids: &[PaneId]) {
+        for id in ids {
+            if let Some(e) = self.sessions.values_mut().find(|e| e.desktop.has_pane(*id)) {
+                e.desktop.kill_pane(*id);
+            }
+        }
+    }
+
+    fn on_host(&mut self, ev: HostEvent) {
+        let (plugin, method, params) = match ev {
+            HostEvent::Key {
+                plugin,
+                window,
+                key,
+            } => (
+                plugin,
+                methods::WINDOW_KEY,
+                json!({"window": window.0, "key": key.to_string()}),
+            ),
+            HostEvent::Mouse {
+                plugin,
+                window,
+                kind,
+                x,
+                y,
+            } => (
+                plugin,
+                methods::WINDOW_MOUSE,
+                json!({"window": window.0, "kind": kind, "x": x, "y": y}),
+            ),
+            HostEvent::Resize {
+                plugin,
+                window,
+                cols,
+                rows,
+            } => (
+                plugin,
+                methods::WINDOW_RESIZE,
+                json!({"window": window.0, "cols": cols, "rows": rows}),
+            ),
+            HostEvent::Closed { plugin, window } => {
+                // Only windows the plugin still knows about (not ones it
+                // closed itself, nor those of a plugin that went away).
+                let known = self
+                    .plugins
+                    .plugins
+                    .get_mut(&plugin)
+                    .is_some_and(|st| st.windows.remove(&window).is_some());
+                if !known {
+                    return;
+                }
+                (plugin, methods::WINDOW_CLOSED, json!({"window": window.0}))
+            }
+            HostEvent::Exited {
+                plugin,
+                generation,
+                status,
+            } => {
+                if let Some(closed) = self.plugins.exited(&plugin, generation) {
+                    tracing::warn!("plugin {plugin} exited ({status})");
+                    self.close_windows(&closed);
+                    self.push_plugin_ui();
+                    self.post_everywhere(
+                        Level::Warn,
+                        &format!("plugin {plugin} exited ({status})"),
+                    );
+                }
+                return;
+            }
+        };
+        if let Some(st) = self.plugins.plugins.get(&plugin) {
+            // Input for a window the plugin no longer has is dropped.
+            let known = params["window"]
+                .as_u64()
+                .is_some_and(|w| st.windows.contains_key(&PaneId(w)))
+                || method == methods::WINDOW_CLOSED;
+            if known {
+                st.notify(method, params);
+            }
+        }
+    }
+
+    /// Runs a plugin command (`<plugin>.<name>`) on behalf of `session`.
+    fn invoke_plugin_command(&mut self, full: &str, session: Option<String>) -> bool {
+        let Some((plugin, name)) = full.split_once('.') else {
+            return false;
+        };
+        match self.plugins.plugins.get(plugin) {
+            Some(st) if st.commands.contains_key(name) => {
+                st.notify(
+                    methods::COMMAND_INVOKED,
+                    json!({"name": name, "session": session}),
+                );
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// One request from a connected plugin, checked against its manifest.
+    fn plugin_request(&mut self, plugin: &str, req: &Request) -> Result<Value, RpcError> {
+        /// Bounds what one plugin can make the server hold.
+        const MAX_WINDOWS: usize = 16;
+        const MAX_LINES: usize = 1000;
+        const MAX_LINE_WIDTH: usize = 1000;
+        let perms = self
+            .plugins
+            .plugins
+            .get(plugin)
+            .map(|st| st.manifest.permissions)
+            .ok_or_else(|| RpcError::not_found(format!("plugin {plugin} is not running")))?;
+        let need = |allowed: bool, what: &str, key: &str| {
+            if allowed {
+                Ok(())
+            } else {
+                Err(RpcError::forbidden(format!(
+                    "plugin {plugin} may not {what}: add `{key} = true` under [permissions] in its plugin.toml"
+                )))
+            }
+        };
+        let lines = |ls: &[termos_plugin::Line]| -> Vec<Cells> {
+            ls.iter()
+                .take(MAX_LINES)
+                .map(|l| truncate_cells(to_cells(l), MAX_LINE_WIDTH))
+                .collect()
+        };
+        let clean_title =
+            |t: &str| -> String { t.chars().filter(|c| !c.is_control()).take(64).collect() };
+        match req.method.as_str() {
+            methods::WINDOW_OPEN => {
+                need(perms.windows, "open windows", "windows")?;
+                let p: proto::WindowOpen = req.params_as()?;
+                let open = self
+                    .plugins
+                    .plugins
+                    .get(plugin)
+                    .map_or(0, |st| st.windows.len());
+                if open >= MAX_WINDOWS {
+                    return Err(RpcError::invalid_params(format!(
+                        "a plugin may have at most {MAX_WINDOWS} windows"
+                    )));
+                }
+                let key = self.target(p.session.as_deref())?;
+                let view: SharedView = Arc::new(Mutex::new(PluginView {
+                    title: clean_title(&p.title),
+                    lines: lines(&p.lines),
+                }));
+                let events = self.plugins.events();
+                let shared = view.clone();
+                let e = self
+                    .sessions
+                    .get_mut(&key)
+                    .ok_or_else(|| RpcError::not_found("no such session"))?;
+                let id = e
+                    .desktop
+                    .open_window_with(|id| Box::new(PluginWindow::new(plugin, id, shared, events)));
+                if let Some(st) = self.plugins.plugins.get_mut(plugin) {
+                    st.windows.insert(id, view);
+                }
+                Ok(json!({"window": id.0}))
+            }
+            methods::WINDOW_DRAW => {
+                need(perms.windows, "draw windows", "windows")?;
+                let p: proto::WindowDraw = req.params_as()?;
+                let id = PaneId(p.window);
+                let view = self
+                    .plugins
+                    .plugins
+                    .get(plugin)
+                    .and_then(|st| st.windows.get(&id))
+                    .cloned()
+                    .ok_or_else(|| {
+                        RpcError::not_found(format!("plugin {plugin} has no window {}", p.window))
+                    })?;
+                {
+                    let mut v = view.lock().unwrap_or_else(PoisonError::into_inner);
+                    v.lines = lines(&p.lines);
+                    if let Some(t) = &p.title {
+                        v.title = clean_title(t);
+                    }
+                }
+                if let Some(e) = self.sessions.values_mut().find(|e| e.desktop.has_pane(id)) {
+                    e.desktop.touch();
+                }
+                Ok(json!({}))
+            }
+            methods::WINDOW_CLOSE => {
+                need(perms.windows, "close windows", "windows")?;
+                let p: proto::WindowRef = req.params_as()?;
+                let id = PaneId(p.window);
+                let owned = self
+                    .plugins
+                    .plugins
+                    .get_mut(plugin)
+                    .is_some_and(|st| st.windows.remove(&id).is_some());
+                if !owned {
+                    return Err(RpcError::not_found(format!(
+                        "plugin {plugin} has no window {}",
+                        p.window
+                    )));
+                }
+                self.close_windows(&[id]);
+                Ok(json!({}))
+            }
+            methods::STATUS_SET => {
+                need(perms.status, "show a status widget", "status")?;
+                let p: proto::StatusSet = req.params_as()?;
+                let cells = p.text.map(|l| truncate_cells(to_cells(&l), 40));
+                let changed = match self.plugins.plugins.get_mut(plugin) {
+                    Some(st) if st.status != cells => {
+                        st.status = cells;
+                        true
+                    }
+                    _ => false,
+                };
+                if changed {
+                    self.push_plugin_ui();
+                }
+                Ok(json!({}))
+            }
+            methods::COMMAND_REGISTER => {
+                need(perms.commands, "add commands", "commands")?;
+                let p: proto::CommandRegister = req.params_as()?;
+                let full = valid_command(plugin, &p.name).map_err(RpcError::invalid_params)?;
+                let description: String = p
+                    .description
+                    .chars()
+                    .filter(|c| !c.is_control())
+                    .take(80)
+                    .collect();
+                if let Some(st) = self.plugins.plugins.get_mut(plugin) {
+                    if st.commands.len() >= 64 && !st.commands.contains_key(&p.name) {
+                        return Err(RpcError::invalid_params(
+                            "a plugin may register at most 64 commands",
+                        ));
+                    }
+                    st.commands.insert(p.name, description);
+                }
+                self.push_plugin_ui();
+                Ok(json!({"command": full}))
+            }
+            methods::NOTIFY_SEND => {
+                need(perms.notify, "post notifications", "notify")?;
+                let p: proto::NotifySend = req.params_as()?;
+                let level = match p.level.as_deref() {
+                    None | Some("info") => Level::Info,
+                    Some("warn" | "warning") => Level::Warn,
+                    Some("error") => Level::Error,
+                    Some(other) => {
+                        return Err(RpcError::invalid_params(format!(
+                            "unknown level `{other}` (info, warn, error)"
+                        )));
+                    }
+                };
+                let text: String = p
+                    .text
+                    .chars()
+                    .filter(|c| !c.is_control())
+                    .take(200)
+                    .collect();
+                self.post_everywhere(level, &format!("{plugin}: {text}"));
+                Ok(json!({}))
+            }
+            methods::HELLO => Err(RpcError::new(
+                codes::INVALID_REQUEST,
+                "this connection already said hello",
+            )),
+            other => Err(RpcError::new(
+                codes::METHOD_NOT_FOUND,
+                format!("unknown plugin method `{other}`"),
+            )),
         }
     }
 
@@ -973,6 +1341,31 @@ impl Server {
                 }
             }
             Event::Disconnected { client } => self.remove_client(client),
+            Event::PluginHello { token, reply } => {
+                let result = self.plugins.connect(&token).ok_or_else(|| {
+                    RpcError::forbidden("unknown plugin token, or the plugin is already connected")
+                });
+                if let Ok((name, _, _)) = &result {
+                    tracing::info!("plugin {name} connected");
+                }
+                if let Err(Ok((name, conn, _))) = reply.send(result) {
+                    self.plugins.disconnected(&name, conn);
+                }
+            }
+            Event::PluginRequest { plugin, req, reply } => {
+                let id = req.id.clone();
+                let result = self.plugin_request(&plugin, &req);
+                let resp = id.map(|id| match result {
+                    Ok(v) => Response::ok(id, v),
+                    Err(e) => Response::err(id, e),
+                });
+                let _ = reply.send(resp);
+            }
+            Event::PluginGone { plugin, conn } => {
+                let closed = self.plugins.disconnected(&plugin, conn);
+                self.close_windows(&closed);
+                self.push_plugin_ui();
+            }
             Event::Control { req, reply } => {
                 let id = req.id.clone();
                 let result = self.control(&req);
@@ -1165,6 +1558,18 @@ impl Server {
                         .post(Level::Info, "there are no saved sessions to restore");
                 }
             }
+            SessionRequest::PluginCommand { name } => {
+                let session = self
+                    .sessions
+                    .get(&origin)
+                    .map(|e| e.desktop.name().to_owned());
+                if !self.invoke_plugin_command(&name, session)
+                    && let Some(e) = self.sessions.get_mut(&origin)
+                {
+                    e.desktop
+                        .post(Level::Warn, format!("plugin command {name} is gone"));
+                }
+            }
             SessionRequest::RestoreDeclined => {
                 if self.ask == Ask::Asked(origin) {
                     self.ask = Ask::No;
@@ -1302,6 +1707,24 @@ impl Server {
                 "started": unix_secs(self.started),
                 "restorable": self.saved.iter().map(|s| s.name.clone()).collect::<Vec<_>>(),
             })),
+            "plugin.list" => Ok(Value::Array(
+                self.plugins
+                    .plugins
+                    .iter()
+                    .map(|(name, st)| {
+                        json!({
+                            "name": name,
+                            "version": st.manifest.version,
+                            "description": st.manifest.description,
+                            "running": st.running(),
+                            "connected": st.conn.is_some(),
+                            "windows": st.windows.keys().map(|w| w.0).collect::<Vec<_>>(),
+                            "commands": st.commands.keys().map(|c| format!("{name}.{c}")).collect::<Vec<_>>(),
+                            "status": st.status.as_ref().map(|c| c.iter().map(|(t, _)| t.as_str()).collect::<String>()),
+                        })
+                    })
+                    .collect(),
+            )),
             "session.saved" => Ok(Value::Array(
                 self.saved
                     .iter()
@@ -1512,6 +1935,12 @@ impl Server {
                     Some(a) => format!("{other} {a}"),
                     None => other.to_owned(),
                 };
+                if self.plugins.commands().iter().any(|c| c.name == other) {
+                    let key = self.target(target().as_deref())?;
+                    let session = Some(self.session_name(key));
+                    self.invoke_plugin_command(other, session);
+                    return Ok(json!({ "invoked": other }));
+                }
                 match text.parse::<Command>() {
                     Ok(cmd) => self.run_command(target().as_deref(), cmd),
                     Err(_) => Err(RpcError::new(
@@ -1706,9 +2135,24 @@ async fn handle_conn(stream: UnixStream, connector: Connector, allowed_uid: u32)
             }
         }
         ConnKind::Plugin => {
-            // TODO(M3): plugin connections (token check, plugin API).
-            let e = RpcError::forbidden("plugin connections are not supported yet");
-            let _ = write_response(&mut write, &Response::err(id, e)).await;
+            let token = hello.token.clone().unwrap_or_default();
+            match connector.plugin_hello(token).await {
+                Ok((name, conn, rx)) => {
+                    let reply = serde_json::to_value(hello_reply(None)).unwrap_or(Value::Null);
+                    if write_response(&mut write, &Response::ok(id, reply))
+                        .await
+                        .is_ok()
+                    {
+                        plugin_loop(reader, write, &name, rx, &connector).await;
+                    }
+                    let _ = connector
+                        .events
+                        .send(Event::PluginGone { plugin: name, conn });
+                }
+                Err(e) => {
+                    let _ = write_response(&mut write, &Response::err(id, e)).await;
+                }
+            }
         }
     }
 }
@@ -1769,6 +2213,47 @@ async fn frontend_pump(
     let _ = write.shutdown().await;
     reader_task.abort();
     let _ = connector.events.send(Event::Disconnected { client });
+}
+
+/// A plugin's requests in, its responses and the server's notifications
+/// out, until either side hangs up.
+async fn plugin_loop(
+    mut reader: BufReader<OwnedReadHalf>,
+    mut write: OwnedWriteHalf,
+    name: &str,
+    mut notes: mpsc::UnboundedReceiver<String>,
+    connector: &Connector,
+) {
+    let (resp_tx, mut resp_rx) = mpsc::unbounded_channel::<String>();
+    let writer = tokio::spawn(async move {
+        loop {
+            let line = tokio::select! {
+                Some(l) = notes.recv() => l,
+                Some(l) = resp_rx.recv() => l,
+                else => break,
+            };
+            if write.write_all(line.as_bytes()).await.is_err() {
+                break;
+            }
+        }
+        let _ = write.shutdown().await;
+    });
+    while let Ok(Some(line)) = read_line(&mut reader).await {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let resp = match wire::parse_message(&line) {
+            Ok(Message::Request(req)) => connector.plugin_request(name, req).await,
+            Ok(Message::Response(_)) => None,
+            Err(e) => Some(Response::err(Value::Null, e)),
+        };
+        if let Some(r) = resp
+            && resp_tx.send(wire::to_line(&r)).is_err()
+        {
+            break;
+        }
+    }
+    writer.abort();
 }
 
 /// Newline-delimited JSON-RPC requests until the peer hangs up.

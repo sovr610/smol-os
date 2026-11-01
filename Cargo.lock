@@ -1978,6 +1978,15 @@ name = "termos-models"
 version = "0.0.0"
 
 [[package]]
+name = "termos-plugin"
+version = "0.0.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "termos-render"
 version = "0.0.0"
 dependencies = [
@@ -2006,10 +2015,12 @@ dependencies = [
  "serde_json",
  "tempfile",
  "termos-core",
+ "termos-plugin",
  "termos-render",
  "termos-term",
  "termos-wm",
  "tokio",
+ "toml",
  "tracing",
  "unicode-width",
 ]

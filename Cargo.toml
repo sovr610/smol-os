@@ -30,6 +30,7 @@ termos-ai = { path = "crates/termos-ai" }
 termos-models = { path = "crates/termos-models" }
 termos-devkit = { path = "crates/termos-devkit" }
 termos-image = { path = "crates/termos-image" }
+termos-plugin = { path = "crates/termos-plugin" }
 
 # Third-party crates. Pin versions here so every member uses the same one.
 alacritty_terminal = "=0.26.0"

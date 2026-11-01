@@ -14,6 +14,7 @@
 //!   command palette, key hints and status-line prompts.
 //! - [`copymode`]: scrollback navigation, selection, search and copy.
 //! - [`snapshot`]: saved sessions and how they are restored.
+//! - [`plugins`]: the out-of-process plugin host.
 //! - [`notify`] and [`apps`]: notifications, the notification center and
 //!   the first-run tutorial.
 
@@ -24,6 +25,7 @@ pub mod desktop;
 pub mod keys;
 pub mod notify;
 pub mod palette;
+pub mod plugins;
 pub mod prompt;
 pub mod server;
 pub mod snapshot;
@@ -33,5 +35,4 @@ pub mod whichkey;
 
 pub use desktop::{Desktop, DesktopOptions};
 
-// TODO(M3): out-of-process plugin host over the JSON-RPC control API.
 // TODO(M4): optional WASM runtime for status-bar widgets (behind a cargo feature).

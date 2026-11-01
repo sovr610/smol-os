@@ -36,6 +36,7 @@ use crate::copymode::{CopyAction, CopyMode};
 use crate::keys::KeyTables;
 use crate::notify::{Level, Notifications};
 use crate::palette::{Palette, PaletteAction, PaletteItem};
+use crate::plugins::{Cells, PluginCommand};
 use crate::prompt::{Confirmed, Prompt, PromptAction, PromptKind};
 use crate::snapshot::{self, PaneSnapshot, Relaunch, SNAPSHOT_VERSION, SavedKind, SessionSnapshot};
 use crate::status::{self, StatusInfo, StatusRegions, TabInfo};
@@ -207,6 +208,8 @@ pub enum SessionRequest {
     RestoreSaved { from_question: bool },
     /// The startup restore question was answered "no".
     RestoreDeclined,
+    /// Run a plugin's command (`<plugin>.<name>`).
+    PluginCommand { name: String },
 }
 
 /// All state of one session: its workspaces and panes, plus the UI state of
@@ -237,6 +240,9 @@ pub struct Desktop {
     requests: Vec<SessionRequest>,
     /// Names of all sessions on the server (for the palette).
     known_sessions: Vec<String>,
+    /// Status-line widgets and palette commands of plugins (D-034).
+    plugin_status: Vec<Cells>,
+    plugin_commands: Vec<PluginCommand>,
     dirty: bool,
     /// The workspace/pane structure changed since the last snapshot.
     layout_changed: bool,
@@ -298,6 +304,8 @@ impl Desktop {
             outbox: Vec::new(),
             requests: Vec::new(),
             known_sessions: Vec::new(),
+            plugin_status: Vec::new(),
+            plugin_commands: Vec::new(),
             dirty: true,
             layout_changed: true,
             quit: None,
@@ -567,6 +575,28 @@ impl Desktop {
         self.known_sessions = names;
     }
 
+    /// Plugin status widgets and palette commands.
+    pub fn set_plugin_ui(&mut self, status: Vec<Cells>, commands: Vec<PluginCommand>) {
+        if status != self.plugin_status {
+            self.plugin_status = status;
+            self.dirty = true;
+        }
+        self.plugin_commands = commands;
+    }
+
+    /// Something drawn by the desktop changed outside of it (a plugin
+    /// redrew its window).
+    pub fn touch(&mut self) {
+        self.dirty = true;
+    }
+
+    /// Opens a floating window whose app needs its own pane id.
+    pub fn open_window_with(&mut self, make: impl FnOnce(PaneId) -> Box<dyn App>) -> PaneId {
+        let id = self.alloc_id();
+        self.insert_app(id, make(id));
+        id
+    }
+
     /// Takes requests for the server (session switching and creation).
     pub fn take_requests(&mut self) -> Vec<SessionRequest> {
         std::mem::take(&mut self.requests)
@@ -654,6 +684,11 @@ impl Desktop {
 
     fn open_app(&mut self, app: Box<dyn App>) -> PaneId {
         let id = self.alloc_id();
+        self.insert_app(id, app);
+        id
+    }
+
+    fn insert_app(&mut self, id: PaneId, app: Box<dyn App>) {
         self.panes.insert(
             id,
             Pane {
@@ -668,7 +703,7 @@ impl Desktop {
         let area = self.layout_area();
         self.session.active_mut().add_float(id, area);
         self.dirty = true;
-        id
+        self.layout_changed = true;
     }
 
     /// The focused pane's working directory, for new panes.
@@ -967,6 +1002,10 @@ impl Desktop {
                     self.ui.palette = None;
                     match cmd.parse::<Command>() {
                         Ok(c) => self.run(c),
+                        Err(_) if self.plugin_commands.iter().any(|c| c.name == cmd) => {
+                            self.requests
+                                .push(SessionRequest::PluginCommand { name: cmd });
+                        }
                         Err(e) => self.notify(Level::Error, e.to_string()),
                     }
                 }
@@ -1523,6 +1562,13 @@ impl Desktop {
             items.push(PaletteItem {
                 label: format!("Switch to session {name}"),
                 command: cmd.to_string(),
+                hint: String::new(),
+            });
+        }
+        for c in &self.plugin_commands {
+            items.push(PaletteItem {
+                label: format!("{} ({})", c.description, c.plugin),
+                command: c.name.clone(),
                 hint: String::new(),
             });
         }
@@ -2152,6 +2198,7 @@ impl Desktop {
                 .status
                 .clock
                 .then(|| jiff::Zoned::now().strftime("%H:%M").to_string()),
+            widgets: &self.plugin_status,
             prompt: self
                 .ui
                 .prompt

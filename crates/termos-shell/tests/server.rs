@@ -631,3 +631,180 @@ async fn sessions_survive_a_server_restart() {
         .collect();
     assert!(left.is_empty(), "snapshots left behind: {left:?}");
 }
+
+fn write_plugin(dir: &Path, name: &str, exec: &[&str], permissions: &str) {
+    let d = paths_in(dir).plugins_dir().join(name);
+    std::fs::create_dir_all(&d).expect("mkdir");
+    let exec: Vec<String> = exec.iter().map(|a| format!("{a:?}")).collect();
+    std::fs::write(
+        d.join("plugin.toml"),
+        format!(
+            "name = \"{name}\"\nversion = \"0.1.0\"\nexec = [{}]\n[permissions]\n{permissions}\n",
+            exec.join(", ")
+        ),
+    )
+    .expect("write manifest");
+}
+
+/// Polls `plugin.list` until `pred` holds for the named plugin.
+async fn until_plugin(socket: &Path, name: &str, what: &str, pred: impl Fn(&Value) -> bool) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    loop {
+        let list = call(socket, "plugin.list", json!({})).await;
+        let entry = list
+            .as_array()
+            .and_then(|l| l.iter().find(|p| p["name"] == name))
+            .cloned()
+            .unwrap_or(Value::Null);
+        if pred(&entry) {
+            return;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "timed out waiting for {what}: {list}"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+#[tokio::test]
+async fn plugins_add_windows_widgets_and_commands() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/hello_plugin.py");
+    let script = script.to_str().expect("utf-8 path");
+    let all = "windows = true\nstatus = true\ncommands = true\nnotify = true";
+    write_plugin(dir.path(), "hello", &["python3", script], all);
+    write_plugin(dir.path(), "limited", &["python3", script], "notify = true");
+    // Stands in for a plugin process so the test can drive the Rust SDK
+    // with its token.
+    write_plugin(
+        dir.path(),
+        "rusty",
+        &[
+            "/bin/sh",
+            "-c",
+            "printf %s \"$TERMOS_PLUGIN_TOKEN\" > token.tmp && mv token.tmp token && exec sleep 600",
+        ],
+        all,
+    );
+    let enabled = "[plugins]\nenabled = [\"hello\", \"limited\", \"rusty\", \"missing\"]\n";
+    let config_file = paths_in(dir.path()).config_file();
+    std::fs::create_dir_all(config_file.parent().expect("dir")).expect("mkdir");
+    std::fs::write(&config_file, format!("{BASE_CONFIG}{enabled}")).expect("config");
+    let srv = start_in(dir.path(), enabled, |_| {});
+    let mut s = Screen::attach(&srv.socket, frontend(None, true), 120, 40).await;
+
+    // The Python plugin's window and status widget appear.
+    s.until("the plugin window", |t| t.contains("Hello from Python"))
+        .await;
+    s.until("the status widget", |t| t.contains("py:hello"))
+        .await;
+    until_plugin(&srv.socket, "hello", "hello's command", |p| {
+        p["commands"] == json!(["hello.ping"])
+    })
+    .await;
+    // Without the windows permission the plugin is refused, and told why.
+    until_plugin(&srv.socket, "limited", "limited connected", |p| {
+        p["connected"] == true && p["windows"] == json!([])
+    })
+    .await;
+
+    // Commands run from the control API and from the palette.
+    call(&srv.socket, "hello.ping", json!({})).await;
+    s.until("the first pong", |t| t.contains("hello: pong #1 in main"))
+        .await;
+    s.key(KeyEvent::ctrl(' '));
+    s.type_text("ping the plugin");
+    s.until("the plugin command in the palette", |t| {
+        t.contains("Ping the plugin (hello)")
+    })
+    .await;
+    s.key(KeyEvent::plain(KeyCode::Enter));
+    s.until("the second pong", |t| t.contains("hello: pong #2 in main"))
+        .await;
+
+    // Keys in the (focused) plugin window go to the plugin.
+    s.key(KeyEvent::ch('x'));
+    s.until("the plugin's redraw", |t| t.contains("you pressed x"))
+        .await;
+
+    // The Rust SDK against the real server, with the token the server gave
+    // the stand-in process.
+    let token_file = paths_in(dir.path()).plugins_dir().join("rusty/token");
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    let token = loop {
+        if let Ok(t) = std::fs::read_to_string(&token_file) {
+            break t;
+        }
+        assert!(tokio::time::Instant::now() < deadline, "no token file");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    };
+    let socket = srv.socket.clone();
+    let sdk = tokio::task::spawn_blocking(move || {
+        let mut p = termos_plugin::Plugin::connect(&socket, &token, "rusty")?;
+        let w = p.open_window("rust", &[termos_plugin::Line::from("Hello from Rust")])?;
+        p.set_status(vec![termos_plugin::Span::new("rs:ok").fg("green")])?;
+        p.register_command("go", "Go somewhere")?;
+        loop {
+            match p.next_event()? {
+                Some(termos_plugin::Event::Command { name, session }) => {
+                    p.close_window(w)?;
+                    return Ok::<_, termos_plugin::Error>((name, session));
+                }
+                Some(_) => {}
+                None => return Err(termos_plugin::Error::Closed),
+            }
+        }
+    });
+    s.until("the Rust window and widget", |t| {
+        t.contains("Hello from Rust") && t.contains("rs:ok")
+    })
+    .await;
+    // A second hello with the same token is refused. (The SDK blocks, and
+    // this test's runtime thread also runs the server.)
+    let (socket, again) = (srv.socket.clone(), token_file.clone());
+    let err = tokio::task::spawn_blocking(move || {
+        let token = std::fs::read_to_string(again).expect("token");
+        termos_plugin::Plugin::connect(&socket, &token, "again")
+    })
+    .await
+    .expect("thread")
+    .expect_err("one connection per plugin");
+    assert!(err.to_string().contains("already connected"), "{err}");
+    call(&srv.socket, "rusty.go", json!({})).await;
+    let (name, session) = sdk.await.expect("sdk thread").expect("sdk calls");
+    assert_eq!((name.as_str(), session.as_deref()), ("go", Some("main")));
+    s.until("the Rust window closed", |t| !t.contains("Hello from Rust"))
+        .await;
+
+    // Closing a window tells its plugin.
+    let window = call(&srv.socket, "plugin.list", json!({})).await;
+    let window = window
+        .as_array()
+        .and_then(|l| l.iter().find(|p| p["name"] == "hello"))
+        .and_then(|p| p["windows"][0].as_u64())
+        .expect("hello has a window");
+    call(&srv.socket, "pane.kill", json!({"pane": window})).await;
+    s.until("the closed notice", |t| {
+        t.contains(&format!("hello: window {window} closed"))
+    })
+    .await;
+
+    // The startup problem with the missing plugin is in the notification
+    // center.
+    s.key(KeyEvent::ctrl('b'));
+    s.key(KeyEvent::ch('N'));
+    s.until("the missing plugin reported", |t| {
+        t.contains("plugin missing not started")
+    })
+    .await;
+    s.key(KeyEvent::ch('q'));
+
+    // Disabling plugins (config reload) stops them and removes their UI.
+    std::fs::write(&config_file, BASE_CONFIG).expect("config");
+    call(&srv.socket, "config.reload", json!({})).await;
+    s.until("the widgets gone", |t| !t.contains("py:hello"))
+        .await;
+    let list = call(&srv.socket, "plugin.list", json!({})).await;
+    assert_eq!(list, json!([]));
+}

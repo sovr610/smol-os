@@ -33,6 +33,8 @@ pub struct StatusInfo<'a> {
     pub copy_mode: bool,
     pub message: Option<(&'a str, Level)>,
     pub clock: Option<String>,
+    /// Plugin widgets (styled runs; default colours mean the status line's).
+    pub widgets: &'a [Vec<(String, termos_render::cell::Style)>],
     /// An open prompt: (label, input). Replaces the whole line, like tmux.
     pub prompt: Option<(&'a str, &'a str)>,
 }
@@ -105,6 +107,20 @@ pub fn draw(
             Level::Warn | Level::Error => theme.status_prefix,
         };
         right.push((format!(" {} ", truncate(msg, cols / 2)), style));
+    }
+    for widget in info.widgets {
+        right.push((" ".into(), theme.status));
+        for (text, style) in widget {
+            let mut st = *style;
+            if st.fg == termos_render::color::Color::Default {
+                st.fg = theme.status.fg;
+            }
+            if st.bg == termos_render::color::Color::Default {
+                st.bg = theme.status.bg;
+            }
+            right.push((text.clone(), st));
+        }
+        right.push((" ".into(), theme.status));
     }
     if let Some(clock) = &info.clock {
         right.push((format!(" {clock} "), theme.status));
@@ -211,6 +227,27 @@ mod tests {
         assert_eq!(regions.tab_at(20, 0), Some(1));
         assert_eq!(regions.minimized_at(30, 0), Some(PaneId(4)));
         assert_eq!(regions.tab_at(9, 1), None);
+    }
+
+    #[test]
+    fn plugin_widgets_sit_before_the_clock() {
+        let mut g = Grid::new(40, 1);
+        let widgets = vec![vec![
+            ("cpu ".to_owned(), termos_render::cell::Style::new()),
+            ("3%".to_owned(), termos_render::cell::Style::new().bold()),
+        ]];
+        let info = StatusInfo {
+            session: "main",
+            clock: Some("12:34".into()),
+            widgets: &widgets,
+            ..StatusInfo::default()
+        };
+        draw(&mut g, 0, &Theme::default(), &info);
+        assert!(
+            g.row_text(0).trim_end().ends_with("cpu 3%  12:34"),
+            "{:?}",
+            g.row_text(0)
+        );
     }
 
     #[test]
