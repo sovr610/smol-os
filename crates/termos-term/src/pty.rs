@@ -11,6 +11,7 @@
 use std::io::{self, Read, Write};
 use std::path::PathBuf;
 use std::sync::mpsc as std_mpsc;
+use std::sync::{Arc, Mutex};
 use std::thread;
 
 use portable_pty::{ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
@@ -54,10 +55,14 @@ impl SpawnSpec {
 /// Output chunks are at most this large.
 const READ_CHUNK: usize = 64 * 1024;
 
+/// The PTY master, shared with the Windows waiter thread, which closes it
+/// once the child exits.
+type SharedMaster = Arc<Mutex<Option<Box<dyn MasterPty + Send>>>>;
+
 /// A running child on a PTY.
 pub struct PtyPane {
     id: PaneId,
-    master: Box<dyn MasterPty + Send>,
+    master: SharedMaster,
     input: std_mpsc::Sender<Vec<u8>>,
     killer: Box<dyn ChildKiller + Send + Sync>,
     pid: Option<u32>,
@@ -104,6 +109,30 @@ impl PtyPane {
         let killer = child.clone_killer();
         let mut reader = pair.master.try_clone_reader().map_err(io_err)?;
         let mut writer = pair.master.take_writer().map_err(io_err)?;
+        let master: SharedMaster = Arc::new(Mutex::new(Some(pair.master)));
+
+        // How the reader learns the exit code once output ends. On Unix
+        // output ends when the child (and everything holding the terminal)
+        // exits, then the reader waits for the child. A ConPTY keeps its
+        // output open until the pseudo-console is closed: a waiter thread
+        // waits for the child, then closes it, which ends the output.
+        #[cfg(windows)]
+        let exit_code = {
+            let (tx, rx) = std_mpsc::channel::<Option<u32>>();
+            let master = Arc::clone(&master);
+            thread::Builder::new()
+                .name(format!("pty-wait-{}", id.0))
+                .spawn(move || {
+                    let code = child.wait().ok().map(|s| s.exit_code());
+                    let _ = tx.send(code);
+                    if let Ok(mut m) = master.lock() {
+                        m.take();
+                    }
+                })?;
+            move || rx.recv().ok().flatten()
+        };
+        #[cfg(not(windows))]
+        let mut exit_code = move || child.wait().ok().map(|s| s.exit_code());
 
         thread::Builder::new()
             .name(format!("pty-read-{}", id.0))
@@ -123,8 +152,7 @@ impl PtyPane {
                         }
                     }
                 }
-                let code = child.wait().ok().map(|s| s.exit_code());
-                let _ = events.blocking_send(PtyEvent::Exited(id, code));
+                let _ = events.blocking_send(PtyEvent::Exited(id, exit_code()));
             })?;
 
         let (input, input_rx) = std_mpsc::channel::<Vec<u8>>();
@@ -144,7 +172,7 @@ impl PtyPane {
 
         Ok(Self {
             id,
-            master: pair.master,
+            master,
             input,
             killer,
             pid,
@@ -168,16 +196,24 @@ impl PtyPane {
         }
     }
 
-    /// Resizes the PTY (the child receives SIGWINCH).
+    /// Resizes the PTY (the child receives SIGWINCH). A pane whose child
+    /// has exited has nothing left to resize.
     pub fn resize(&self, cols: u16, rows: u16) -> io::Result<()> {
-        self.master
-            .resize(PtySize {
-                rows: rows.max(1),
-                cols: cols.max(1),
-                pixel_width: 0,
-                pixel_height: 0,
-            })
-            .map_err(io_err)
+        let master = self
+            .master
+            .lock()
+            .map_err(|_| io_err("pty lock poisoned"))?;
+        match master.as_ref() {
+            Some(m) => m
+                .resize(PtySize {
+                    rows: rows.max(1),
+                    cols: cols.max(1),
+                    pixel_width: 0,
+                    pixel_height: 0,
+                })
+                .map_err(io_err),
+            None => Ok(()),
+        }
     }
 
     /// Terminates the child.
@@ -192,7 +228,9 @@ impl PtyPane {
         #[cfg(unix)]
         let leader = self
             .master
-            .process_group_leader()
+            .lock()
+            .ok()
+            .and_then(|m| m.as_ref()?.process_group_leader())
             .and_then(|p| u32::try_from(p).ok());
         #[cfg(not(unix))]
         let leader = None;
@@ -297,6 +335,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn runs_a_program_and_reports_exit() {
         let (tx, mut rx) = mpsc::channel(16);
@@ -314,6 +353,7 @@ mod tests {
         assert_eq!(code, Some(3));
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn input_reaches_the_child_and_size_is_applied() {
         let (tx, mut rx) = mpsc::channel(16);
@@ -355,5 +395,42 @@ mod tests {
             );
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn conpty_runs_a_program_and_reports_exit() {
+        let (tx, mut rx) = mpsc::channel(64);
+        let spec = SpawnSpec {
+            args: vec!["/c".into(), "echo hi %TERMOS_TEST%& exit 3".into()],
+            env: vec![("TERMOS_TEST".into(), "there".into())],
+            ..SpawnSpec::shell("cmd.exe", 40, 5)
+        };
+        let _pane = PtyPane::spawn(PaneId(11), &spec, tx).expect("spawn");
+        let (out, code) = collect(&mut rx).await;
+        assert!(String::from_utf8_lossy(&out).contains("hi there"));
+        assert_eq!(code, Some(3));
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn conpty_input_reaches_the_child() {
+        let (tx, mut rx) = mpsc::channel(64);
+        let spec = SpawnSpec {
+            args: vec![
+                "/v:on".into(),
+                "/c".into(),
+                "set /p line=& echo got:!line!".into(),
+            ],
+            ..SpawnSpec::shell("cmd.exe", 50, 7)
+        };
+        let pane = PtyPane::spawn(PaneId(12), &spec, tx).expect("spawn");
+        pane.write(b"hello\r".to_vec());
+        let (out, code) = collect(&mut rx).await;
+        let text = String::from_utf8_lossy(&out);
+        assert!(text.contains("got:hello"), "{text:?}");
+        assert_eq!(code, Some(0));
+        pane.resize(60, 10)
+            .expect("resizing after exit is harmless");
     }
 }
