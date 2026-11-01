@@ -159,6 +159,9 @@ fn resolve_target(cli: &Cli, paths: &Paths) -> anyhow::Result<Target> {
     let inside = inside_termos();
     let name_of = |p: &Path| server_name(p).unwrap_or_else(|| DEFAULT_SERVER.to_owned());
     let (socket, name) = if let Some(path) = &cli.socket_path {
+        if cfg!(windows) && !path.to_string_lossy().starts_with(r"\\.\pipe\") {
+            bail!(r"on Windows -S takes a pipe name, like \\.\pipe\termos-work");
+        }
         (path.clone(), name_of(path))
     } else if let Some(name) = &cli.socket_name {
         if name.is_empty() || name.contains(['/', '\\']) {
@@ -326,17 +329,16 @@ fn ensure_server(t: &Target, config_path: &Path) -> anyhow::Result<bool> {
         return Ok(false);
     }
     let exe = std::env::current_exe().context("cannot find the termos executable")?;
-    let mut child = std::process::Command::new(exe)
-        .arg("server")
+    let mut cmd = std::process::Command::new(exe);
+    cmd.arg("server")
         .arg("-S")
         .arg(&t.socket)
         .arg("--config")
         .arg(config_path)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .context("cannot start the server")?;
+        .stderr(std::process::Stdio::null());
+    let mut child = spawn_daemon(&mut cmd).context("cannot start the server")?;
     // Startup takes milliseconds; this loop only runs until then.
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
@@ -356,6 +358,37 @@ fn ensure_server(t: &Target, config_path: &Path) -> anyhow::Result<bool> {
             bail!("the server did not start within 10 seconds");
         }
         std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+/// Starts the server so it outlives this terminal. On Unix the server
+/// calls `setsid` itself.
+#[cfg(not(windows))]
+fn spawn_daemon(cmd: &mut std::process::Command) -> std::io::Result<std::process::Child> {
+    cmd.spawn()
+}
+
+/// Starts the server so it outlives this terminal: with a hidden console
+/// of its own (no window pops up, and its plugins inherit the hidden
+/// console), in its own process group (Ctrl+C here never reaches it), and
+/// outside our job object if allowed (SSH and some IDE terminals kill
+/// their job's processes when the session ends).
+#[cfg(windows)]
+fn spawn_daemon(cmd: &mut std::process::Command) -> std::io::Result<std::process::Child> {
+    use std::os::windows::process::CommandExt as _;
+    const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+    const CREATE_BREAKAWAY_FROM_JOB: u32 = 0x0100_0000;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    let flags = CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP;
+    match cmd
+        .creation_flags(flags | CREATE_BREAKAWAY_FROM_JOB)
+        .spawn()
+    {
+        // The job does not allow breaking away: start inside it.
+        Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
+            cmd.creation_flags(flags).spawn()
+        }
+        other => other,
     }
 }
 
@@ -379,6 +412,14 @@ fn attach_checks(cli: &Cli) -> anyhow::Result<()> {
     }
     if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
         bail!("stdin and stdout must be a terminal (run `termos --help` for other commands)");
+    }
+    // The client writes escape sequences directly; this also turns on VT
+    // processing for the console.
+    #[cfg(windows)]
+    if !crossterm::ansi_support::supports_ansi() {
+        bail!(
+            "this console does not understand terminal escape sequences; use Windows Terminal (Windows 10 1809 or later)"
+        );
     }
     Ok(())
 }

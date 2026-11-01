@@ -77,6 +77,10 @@ impl Caps {
             ColorDepth::Truecolor
         } else if lower_term.contains("256color") {
             ColorDepth::Ansi256
+        } else if cfg!(windows) && lower_term.is_empty() {
+            // Windows consoles set no TERM; every console that runs TermOS
+            // (VT processing, Windows 10 1809+) shows 24-bit colour.
+            ColorDepth::Truecolor
         } else if lower_term.is_empty()
             || lower_term == "dumb"
             || lower_term == "linux"
@@ -136,7 +140,12 @@ mod tests {
             ColorDepth::Ansi256
         );
         assert_eq!(detect(&[("TERM", "linux")]).color, ColorDepth::Ansi16);
-        assert_eq!(detect(&[]).color, ColorDepth::Ansi16);
+        let no_term = if cfg!(windows) {
+            ColorDepth::Truecolor
+        } else {
+            ColorDepth::Ansi16
+        };
+        assert_eq!(detect(&[]).color, no_term);
     }
 
     #[test]

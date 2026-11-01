@@ -28,13 +28,14 @@ impl TerminalGuard {
     pub(crate) fn enter(out: &mut impl Write) -> io::Result<Self> {
         terminal::enable_raw_mode()?;
         let kitty_keyboard = matches!(terminal::supports_keyboard_enhancement(), Ok(true));
-        crossterm::execute!(
-            out,
-            EnterAlternateScreen,
-            EnableMouseCapture,
-            EnableBracketedPaste,
-            EnableFocusChange
-        )?;
+        crossterm::execute!(out, EnterAlternateScreen, EnableMouseCapture)?;
+        // The Windows console delivers input as key events, so pastes
+        // arrive as typed keys there.
+        // TODO(M9): VT input mode on Windows, for bracketed paste and the Kitty keyboard protocol.
+        if cfg!(not(windows)) {
+            crossterm::execute!(out, EnableBracketedPaste)?;
+        }
+        crossterm::execute!(out, EnableFocusChange)?;
         if kitty_keyboard {
             crossterm::execute!(
                 out,
@@ -55,10 +56,12 @@ pub(crate) fn restore_terminal(kitty_keyboard: bool) {
     if kitty_keyboard {
         let _ = crossterm::execute!(out, PopKeyboardEnhancementFlags);
     }
+    if cfg!(not(windows)) {
+        let _ = crossterm::execute!(out, DisableBracketedPaste);
+    }
     let _ = crossterm::execute!(
         out,
         DisableFocusChange,
-        DisableBracketedPaste,
         DisableMouseCapture,
         LeaveAlternateScreen
     );
@@ -127,7 +130,19 @@ pub(crate) fn convert(event: Event) -> Option<ClientMsg> {
                 ct::KeyCode::F(n) => KeyCode::F(n),
                 _ => return None,
             };
-            Some(ClientMsg::Key(KeyEvent::new(code, mods(k.modifiers))))
+            let mut mods = mods(k.modifiers);
+            // Windows reports AltGr as Ctrl+Alt along with the character it
+            // produced ('@', '{', '€' on many layouts): that is a plain
+            // character, not a shortcut.
+            if cfg!(windows)
+                && let KeyCode::Char(c) = code
+                && mods.contains(Mods::CTRL | Mods::ALT)
+                && !c.is_ascii_alphanumeric()
+                && !c.is_control()
+            {
+                mods.remove(Mods::CTRL | Mods::ALT);
+            }
+            Some(ClientMsg::Key(KeyEvent::new(code, mods)))
         }
         Event::Mouse(m) => {
             let kind = match m.kind {
