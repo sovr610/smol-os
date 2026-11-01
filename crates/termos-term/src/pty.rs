@@ -205,6 +205,19 @@ impl PtyPane {
         let pid = self.foreground_pid()?;
         proc_cwd(pid)
     }
+
+    /// The command line of the foreground program when it is not the
+    /// pane's own program, e.g. `vim notes.md` started from the shell
+    /// (Linux; `None` elsewhere and at the shell prompt).
+    pub fn foreground_command(&self) -> Option<Vec<String>> {
+        let pid = self.foreground_pid()?;
+        if Some(pid) == self.pid {
+            return None;
+        }
+        // Between fork and exec it is not the user's program yet.
+        proc_comm(pid)?;
+        proc_cmdline(pid)
+    }
 }
 
 impl Drop for PtyPane {
@@ -232,6 +245,22 @@ fn proc_comm(pid: u32) -> Option<String> {
 
 #[cfg(not(target_os = "linux"))]
 fn proc_comm(_pid: u32) -> Option<String> {
+    None
+}
+
+#[cfg(target_os = "linux")]
+fn proc_cmdline(pid: u32) -> Option<Vec<String>> {
+    let raw = std::fs::read(format!("/proc/{pid}/cmdline")).ok()?;
+    let argv: Vec<String> = raw
+        .split(|b| *b == 0)
+        .filter(|a| !a.is_empty())
+        .map(|a| String::from_utf8_lossy(a).into_owned())
+        .collect();
+    (!argv.is_empty()).then_some(argv)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn proc_cmdline(_pid: u32) -> Option<Vec<String>> {
     None
 }
 
@@ -297,5 +326,29 @@ mod tests {
         assert!(text.contains("7 50"), "{text:?}");
         assert!(text.contains("got:hello"), "{text:?}");
         assert_eq!(code, Some(0));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn reports_the_foreground_command() {
+        let (tx, mut rx) = mpsc::channel(64);
+        let spec = SpawnSpec::shell("/bin/sh", 40, 5);
+        let pane = PtyPane::spawn(PaneId(3), &spec, tx).expect("spawn");
+        // Keep the channel drained so the reader never blocks.
+        tokio::spawn(async move { while rx.recv().await.is_some() {} });
+        assert_eq!(pane.foreground_command(), None, "the shell itself");
+        pane.write(b"sleep 30\r".to_vec());
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            if let Some(argv) = pane.foreground_command() {
+                assert_eq!(argv, ["sleep", "30"]);
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "sleep never became the foreground program"
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
     }
 }

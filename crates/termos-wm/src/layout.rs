@@ -238,6 +238,42 @@ impl Node {
 }
 
 impl Node {
+    fn map_panes(&mut self, f: &mut impl FnMut(PaneId) -> PaneId) {
+        match self {
+            Node::Leaf(p) => *p = f(*p),
+            Node::Split { children, .. } => {
+                for (c, _) in children {
+                    c.map_panes(f);
+                }
+            }
+        }
+    }
+
+    /// Repairs a tree read from a file: weights must be finite and
+    /// positive, and splits need at least two children.
+    fn sanitized(self) -> Option<Node> {
+        match self {
+            Node::Leaf(p) => Some(Node::Leaf(p)),
+            Node::Split { dir, children } => {
+                let mut kids: Vec<(Node, f64)> = children
+                    .into_iter()
+                    .filter_map(|(n, w)| {
+                        let w = if w.is_finite() && w > 0.0 { w } else { 1.0 };
+                        n.sanitized().map(|n| (n, w))
+                    })
+                    .collect();
+                match kids.len() {
+                    0 => None,
+                    1 => kids.pop().map(|(n, _)| n),
+                    _ => Some(Node::Split {
+                        dir,
+                        children: kids,
+                    }),
+                }
+            }
+        }
+    }
+
     fn panes_into(&self, out: &mut Vec<PaneId>) {
         match self {
             Node::Leaf(p) => out.push(*p),
@@ -396,6 +432,20 @@ impl Layout {
 
     pub fn contains(&self, pane: PaneId) -> bool {
         self.root.as_ref().is_some_and(|r| r.contains(pane))
+    }
+
+    /// Renames every pane at once (`f` must be injective).
+    pub fn map_panes(&mut self, mut f: impl FnMut(PaneId) -> PaneId) {
+        if let Some(r) = &mut self.root {
+            r.map_panes(&mut f);
+        }
+    }
+
+    /// Repairs a layout read from a file (see [`Session::sanitize`]).
+    ///
+    /// [`Session::sanitize`]: crate::workspace::Session::sanitize
+    pub fn sanitize(&mut self) {
+        self.root = self.root.take().and_then(Node::sanitized);
     }
 
     pub fn geometry(&self, area: Rect) -> Geometry {

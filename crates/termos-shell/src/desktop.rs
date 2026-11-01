@@ -37,6 +37,7 @@ use crate::keys::KeyTables;
 use crate::notify::{Level, Notifications};
 use crate::palette::{Palette, PaletteAction, PaletteItem};
 use crate::prompt::{Confirmed, Prompt, PromptAction, PromptKind};
+use crate::snapshot::{self, PaneSnapshot, Relaunch, SNAPSHOT_VERSION, SavedKind, SessionSnapshot};
 use crate::status::{self, StatusInfo, StatusRegions, TabInfo};
 use crate::whichkey;
 
@@ -201,6 +202,11 @@ pub enum SessionRequest {
     New { client: ClientId },
     /// Rename a session (the server keeps names unique).
     Rename { from: String, to: String },
+    /// Restore saved sessions; `from_question` when answering the startup
+    /// question (the asking session is then replaced by its saved state).
+    RestoreSaved { from_question: bool },
+    /// The startup restore question was answered "no".
+    RestoreDeclined,
 }
 
 /// All state of one session: its workspaces and panes, plus the UI state of
@@ -258,15 +264,14 @@ fn next_minute(now: Instant) -> Instant {
 }
 
 impl Desktop {
-    /// Creates the desktop with one workspace running the shell. Shows the
-    /// tutorial on first run.
-    pub fn new(
+    /// A desktop without panes yet (the caller adds them).
+    fn blank(
         opts: DesktopOptions,
         config: Config,
         pty_tx: mpsc::Sender<PtyEvent>,
         cols: u16,
         rows: u16,
-    ) -> io::Result<Self> {
+    ) -> Self {
         let theme = Theme::from_colors(config.theme.clone());
         let (keys, key_errors) = KeyTables::from_config(&config);
         let placeholder = Session::new(
@@ -299,15 +304,28 @@ impl Desktop {
             output_since_render: 0,
             config,
         };
-        let area = d.layout_area();
-        let first = d.spawn_term(None, (area.w, area.h))?;
-        d.session = Session::new(d.opts.session_name.clone(), Workspace::new("shell", first));
         if d.config.status.clock {
             d.clock_deadline = Some(next_minute(Instant::now()));
         }
         for e in key_errors {
             d.notify(Level::Warn, e);
         }
+        d
+    }
+
+    /// Creates the desktop with one workspace running the shell. Shows the
+    /// tutorial on first run.
+    pub fn new(
+        opts: DesktopOptions,
+        config: Config,
+        pty_tx: mpsc::Sender<PtyEvent>,
+        cols: u16,
+        rows: u16,
+    ) -> io::Result<Self> {
+        let mut d = Self::blank(opts, config, pty_tx, cols, rows);
+        let area = d.layout_area();
+        let first = d.spawn_term(None, (area.w, area.h))?;
+        d.session = Session::new(d.opts.session_name.clone(), Workspace::new("shell", first));
         let marker = d.opts.paths.tutorial_marker();
         if d.config.tutorial.show_on_first_run && !marker.exists() {
             d.open_app(Box::new(Tutorial::new(&d.keys.prefix_key.to_string())));
@@ -318,6 +336,132 @@ impl Desktop {
             }
         }
         Ok(d)
+    }
+
+    /// Rebuilds a saved session (D-033): the layout, a shell in each saved
+    /// directory, and the allowlisted programs typed into their shells.
+    /// Built-in apps are not restored. Returns the desktop and the names of
+    /// programs that were running but not restarted.
+    pub fn from_snapshot(
+        opts: DesktopOptions,
+        config: Config,
+        pty_tx: mpsc::Sender<PtyEvent>,
+        snap: &SessionSnapshot,
+    ) -> io::Result<(Self, Vec<String>)> {
+        let mut d = Self::blank(opts, config, pty_tx, 80, 24);
+        let mut layout = snap.layout.clone();
+        if !layout.sanitize() {
+            return Err(io::Error::other("the snapshot has no panes"));
+        }
+        let allow = d.config.session.restore_programs.clone();
+        let area = d.layout_area();
+        let mut map = std::collections::HashMap::new();
+        let mut skipped = Vec::new();
+        for old in layout.all_panes() {
+            let Some(saved) = snap
+                .panes
+                .iter()
+                .find(|p| p.id == old.0 && p.kind == SavedKind::Terminal)
+            else {
+                continue;
+            };
+            let id = d.spawn_term(snapshot::restore_cwd(saved), (area.w, area.h))?;
+            map.insert(old, id);
+            let Some(pane) = d.panes.get_mut(&id) else {
+                continue;
+            };
+            pane.title.clone_from(&saved.title);
+            let PaneKind::Term { vt, pty } = &mut pane.kind else {
+                continue;
+            };
+            if let Some(lines) = &saved.scrollback {
+                let mut text = String::new();
+                for l in lines {
+                    text.extend(l.chars().filter(|c| !c.is_control()));
+                    text.push_str("\r\n");
+                }
+                vt.advance(text.as_bytes());
+            }
+            match snapshot::relaunch(saved, &allow) {
+                Relaunch::Program(argv) => {
+                    pty.write(format!("{}\r", snapshot::shell_quote(&argv)).into_bytes());
+                }
+                Relaunch::Skipped(name) => skipped.push(name),
+                Relaunch::Shell => {}
+            }
+        }
+        if !layout.remap_panes(|old| map.get(&old).copied()) {
+            return Err(io::Error::other("the snapshot has no terminal panes"));
+        }
+        layout.name.clone_from(&d.opts.session_name);
+        d.session = layout;
+        d.layout_changed = true;
+        d.dirty = true;
+        Ok((d, skipped))
+    }
+
+    /// The session as it is now, for saving (D-033).
+    pub fn snapshot(&self) -> SessionSnapshot {
+        let cfg = &self.config.session;
+        let panes = self
+            .panes
+            .values()
+            .map(|p| match &p.kind {
+                PaneKind::Term { vt, pty } => {
+                    let argv = pty.foreground_command();
+                    let program = argv
+                        .as_ref()
+                        .and_then(|a| a.first())
+                        .map(|a| snapshot::program_name(a).to_owned());
+                    let scrollback = cfg.save_scrollback.then(|| {
+                        let history = vt.history_size().min(cfg.scrollback_lines);
+                        let first = -i32::try_from(history).unwrap_or(0);
+                        let mut lines: Vec<String> = (first..i32::from(vt.size().1))
+                            .map(|l| vt.line_text(l))
+                            .collect();
+                        while lines.last().is_some_and(String::is_empty) {
+                            lines.pop();
+                        }
+                        lines
+                    });
+                    PaneSnapshot {
+                        id: p.id.0,
+                        kind: SavedKind::Terminal,
+                        cwd: pty.foreground_cwd().or_else(|| p.cwd.clone()),
+                        program,
+                        argv: argv.filter(|a| snapshot::allowed(a, &cfg.restore_programs)),
+                        title: p.title.clone(),
+                        scrollback,
+                    }
+                }
+                PaneKind::App(_) => PaneSnapshot {
+                    id: p.id.0,
+                    kind: SavedKind::App,
+                    cwd: None,
+                    program: None,
+                    argv: None,
+                    title: String::new(),
+                    scrollback: None,
+                },
+            })
+            .collect();
+        SessionSnapshot {
+            version: SNAPSHOT_VERSION,
+            name: self.session.name.clone(),
+            saved_at: snapshot::now_secs(),
+            layout: self.session.clone(),
+            panes,
+        }
+    }
+
+    /// Asks `client` whether to restore saved sessions (`restore = "ask"`).
+    pub fn ask_restore(&mut self, client: ClientId, question: &str) {
+        if self.enter(client) {
+            self.ui.palette = None;
+            self.ui.prompt = Some(Prompt::confirm(Confirmed::Restore, question));
+            self.dirty = true;
+            self.leave();
+        }
     }
 
     // ----- accessors (also used by tests) ------------------------------
@@ -799,7 +943,12 @@ impl Desktop {
             self.dirty = true;
             match action {
                 PromptAction::None => {}
-                PromptAction::Cancel => self.ui.prompt = None,
+                PromptAction::Cancel => {
+                    let kind = self.ui.prompt.take().map(|p| p.kind);
+                    if kind == Some(PromptKind::Confirm(Confirmed::Restore)) {
+                        self.requests.push(SessionRequest::RestoreDeclined);
+                    }
+                }
                 PromptAction::Submit(text) => {
                     if let Some(p) = self.ui.prompt.take() {
                         self.finish_prompt(p.kind, text);
@@ -982,6 +1131,11 @@ impl Desktop {
                     }
                 }
                 self.quit = Some("quit".into());
+            }
+            PromptKind::Confirm(Confirmed::Restore) => {
+                self.requests.push(SessionRequest::RestoreSaved {
+                    from_question: true,
+                });
             }
         }
         self.dirty = true;
@@ -1284,6 +1438,11 @@ impl Desktop {
             Command::SessionRename => {
                 let name = self.session.name.clone();
                 self.ui.prompt = Some(Prompt::rename_session(&name));
+            }
+            Command::SessionRestore => {
+                self.requests.push(SessionRequest::RestoreSaved {
+                    from_question: false,
+                });
             }
             Command::Quit => {
                 self.ui.prompt = Some(Prompt::confirm(
@@ -1908,8 +2067,12 @@ impl Desktop {
             })
             .collect();
         for (ws, name) in self.session.workspaces.iter_mut().zip(names) {
-            if let Some(n) = name {
+            if let Some(n) = name
+                && ws.name != n
+            {
                 ws.name = n;
+                // A different program in front: worth a new snapshot.
+                self.layout_changed = true;
             }
         }
     }

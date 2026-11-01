@@ -162,6 +162,48 @@ impl Workspace {
         }
     }
 
+    /// Renames panes (all at once) and drops those `f` maps to `None`.
+    pub fn remap_panes(&mut self, f: &mut impl FnMut(PaneId) -> Option<PaneId>) {
+        let mut map = std::collections::HashMap::new();
+        for p in self.panes() {
+            match f(p) {
+                Some(n) => {
+                    map.insert(p, n);
+                }
+                None => {
+                    self.remove(p);
+                }
+            }
+        }
+        let g = |p: PaneId| map.get(&p).copied().unwrap_or(p);
+        self.layout.map_panes(g);
+        for fl in &mut self.floats {
+            fl.pane = g(fl.pane);
+        }
+        self.focus = self.focus.map(g);
+        self.last_focus = self.last_focus.map(g);
+        self.zoomed = self.zoomed.map(g);
+    }
+
+    /// Removes duplicate panes (keeping the first), repairs the tree and
+    /// makes focus and zoom point at panes that exist.
+    fn sanitize(&mut self, seen: &mut std::collections::HashSet<PaneId>) {
+        self.layout.sanitize();
+        let mut local = std::collections::HashSet::new();
+        for p in self.panes() {
+            if seen.contains(&p) || !local.insert(p) {
+                self.remove(p);
+            }
+        }
+        seen.extend(local);
+        self.zoomed = self.zoomed.filter(|z| self.layout.contains(*z));
+        self.last_focus = self.last_focus.filter(|p| self.contains(*p));
+        if !self.focus.is_some_and(|p| self.contains(p)) {
+            self.focus = None;
+            self.refocus();
+        }
+    }
+
     /// Focus after the focused pane went away.
     fn refocus(&mut self) {
         let candidate = self
@@ -633,6 +675,52 @@ impl Session {
     pub fn all_panes(&self) -> Vec<PaneId> {
         self.workspaces.iter().flat_map(Workspace::panes).collect()
     }
+
+    /// Repairs a session read from a file (snapshots may be old, edited or
+    /// damaged): duplicate panes, bad split weights, focus on missing
+    /// panes, empty workspaces, indices out of range. Returns `false` if
+    /// no pane is left.
+    pub fn sanitize(&mut self) -> bool {
+        let mut seen = std::collections::HashSet::new();
+        for ws in &mut self.workspaces {
+            ws.sanitize(&mut seen);
+        }
+        self.drop_empty()
+    }
+
+    /// Renames panes (all at once) and drops those `f` maps to `None`,
+    /// then removes workspaces left empty. Returns `false` if no pane is
+    /// left.
+    pub fn remap_panes(&mut self, mut f: impl FnMut(PaneId) -> Option<PaneId>) -> bool {
+        for ws in &mut self.workspaces {
+            ws.remap_panes(&mut f);
+        }
+        self.drop_empty()
+    }
+
+    fn drop_empty(&mut self) -> bool {
+        let keep: Vec<bool> = self.workspaces.iter().map(|w| !w.is_empty()).collect();
+        let new_index = |i: usize| keep[..i].iter().filter(|k| **k).count();
+        let active = self.active.min(self.workspaces.len().saturating_sub(1));
+        self.active = if keep.get(active) == Some(&true) {
+            new_index(active)
+        } else {
+            0
+        };
+        self.last = self
+            .last
+            .filter(|l| keep.get(*l) == Some(&true))
+            .map(new_index);
+        let mut i = 0;
+        self.workspaces.retain(|_| {
+            i += 1;
+            keep[i - 1]
+        });
+        if self.last == Some(self.active) {
+            self.last = None;
+        }
+        !self.workspaces.is_empty()
+    }
 }
 
 #[cfg(test)]
@@ -766,5 +854,52 @@ mod tests {
         assert!(s.remove(5).is_none());
         s.remove(0);
         assert!(s.remove(0).is_none(), "last workspace stays");
+    }
+
+    #[test]
+    fn remap_renames_panes_and_drops_unmapped_ones() {
+        let mut ws = Workspace::new("a", p(1));
+        ws.add_split(p(2), SplitHow::Right, AREA);
+        ws.add_float(p(3), AREA);
+        let mut s = Session::new("s", ws);
+        s.add(Workspace::new("b", p(4)));
+        s.select(1);
+        // 1 -> 2 and 2 -> 1 at once (no collisions), 3 and 4 dropped.
+        let ok = s.remap_panes(|old| match old.0 {
+            1 => Some(p(2)),
+            2 => Some(p(1)),
+            _ => None,
+        });
+        assert!(ok);
+        assert_eq!(s.workspaces.len(), 1, "the emptied workspace is gone");
+        assert_eq!(s.active_index(), 0);
+        assert_eq!(s.all_panes(), vec![p(2), p(1)]);
+        assert!(s.active().focus().is_some());
+        assert!(!s.remap_panes(|_| None), "nothing left");
+    }
+
+    #[test]
+    fn sanitize_repairs_damaged_sessions() {
+        let mut ws = Workspace::new("a", p(1));
+        ws.add_split(p(2), SplitHow::Right, AREA);
+        let mut s = Session::new("s", ws);
+        s.add(Workspace::new("dup", p(2)));
+        let mut json = serde_json::to_value(&s).expect("serialize");
+        json["active"] = serde_json::json!(7);
+        json["workspaces"][0]["focus"] = serde_json::json!(99);
+        let children = &mut json["workspaces"][0]["layout"]["root"]["Split"]["children"];
+        children[0][1] = serde_json::json!(-3.0);
+        let mut s: Session = serde_json::from_value(json).expect("deserialize");
+        assert!(s.sanitize());
+        assert_eq!(
+            s.workspaces.len(),
+            1,
+            "the duplicate-only workspace is gone"
+        );
+        assert_eq!(s.active_index(), 0);
+        assert_eq!(s.all_panes(), vec![p(1), p(2)]);
+        assert!(s.active().focus().is_some_and(|f| s.active().contains(f)));
+        let placement = s.active().placement(AREA);
+        assert!(placement.tiled.iter().all(|(_, r)| r.w > 0));
     }
 }

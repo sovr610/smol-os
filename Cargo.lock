@@ -2032,6 +2032,7 @@ dependencies = [
  "insta",
  "proptest",
  "serde",
+ "serde_json",
  "termos-core",
  "termos-render",
 ]

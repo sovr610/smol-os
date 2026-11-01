@@ -25,16 +25,21 @@ const BASE_CONFIG: &str =
 struct TestServer {
     socket: PathBuf,
     handle: JoinHandle<String>,
-    _dir: tempfile::TempDir,
+    _dir: Option<tempfile::TempDir>,
 }
 
-async fn start_with(extra_config: &str, tweak: impl FnOnce(&mut ServerOptions)) -> TestServer {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let paths = Paths {
-        config_dir: dir.path().join("config"),
-        state_dir: dir.path().join("state"),
-        runtime_dir: dir.path().join("run"),
-    };
+fn paths_in(dir: &Path) -> Paths {
+    Paths {
+        config_dir: dir.join("config"),
+        state_dir: dir.join("state"),
+        runtime_dir: dir.join("run"),
+    }
+}
+
+/// Starts a server whose state lives in `dir` (so a later server can find
+/// its snapshots).
+fn start_in(dir: &Path, extra_config: &str, tweak: impl FnOnce(&mut ServerOptions)) -> TestServer {
+    let paths = paths_in(dir);
     let config_path = paths.config_file();
     let config =
         Config::parse(&format!("{BASE_CONFIG}{extra_config}"), &config_path).expect("config");
@@ -48,8 +53,15 @@ async fn start_with(extra_config: &str, tweak: impl FnOnce(&mut ServerOptions)) 
     TestServer {
         socket,
         handle,
-        _dir: dir,
+        _dir: None,
     }
+}
+
+async fn start_with(extra_config: &str, tweak: impl FnOnce(&mut ServerOptions)) -> TestServer {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut srv = start_in(dir.path(), extra_config, tweak);
+    srv._dir = Some(dir);
+    srv
 }
 
 async fn start() -> TestServer {
@@ -474,4 +486,148 @@ async fn server_kill_and_resize() {
         .expect("server task");
     assert_eq!(reason, "killed by request");
     assert!(!srv.socket.exists());
+}
+
+/// Asks the server to stop and waits until it has.
+async fn kill(srv: TestServer) {
+    call(&srv.socket, "server.kill", json!({})).await;
+    tokio::time::timeout(Duration::from_secs(10), srv.handle)
+        .await
+        .expect("server stops")
+        .expect("server task");
+}
+
+/// Polls `pane.list` until `pred` holds for it.
+async fn until_panes(socket: &Path, what: &str, pred: impl Fn(&[Value]) -> bool) -> Vec<Value> {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    loop {
+        let panes = call(socket, "pane.list", json!({})).await;
+        let panes = panes.as_array().cloned().unwrap_or_default();
+        if pred(&panes) {
+            return panes;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "timed out waiting for {what}: {panes:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn sessions_survive_a_server_restart() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let work = dir.path().join("work dir");
+    std::fs::create_dir(&work).expect("mkdir");
+    std::fs::write(work.join("notes.txt"), "remembered line\n").expect("write");
+    let snapshots = paths_in(dir.path()).sessions_dir("test");
+    let config = |policy: &str| {
+        format!(
+            "[session]\nrestore = \"{policy}\"\nrestore-programs = [\"tail\"]\nsnapshot-delay-ms = 50\n"
+        )
+    };
+
+    // 1. A session with two panes: `tail` (allowlisted) in `work dir`, and
+    //    `sleep` (not allowlisted).
+    let srv = start_in(dir.path(), &config("always"), |_| {});
+    let mut s = Screen::attach(&srv.socket, frontend(None, true), 100, 30).await;
+    s.ready().await;
+    s.type_text(&format!("cd '{}' && tail -f notes.txt\r", work.display()));
+    s.until("tail", |t| t.contains("remembered line")).await;
+    call(
+        &srv.socket,
+        "command.run",
+        json!({"command": "pane.split-right"}),
+    )
+    .await;
+    s.ready().await;
+    s.type_text("sleep 1000\r");
+    until_panes(&srv.socket, "sleep in front", |p| {
+        p.iter().any(|p| p["name"] == "sleep")
+    })
+    .await;
+    kill(srv).await;
+    let saved = std::fs::read_to_string(snapshots.join("main.json")).expect("snapshot written");
+    assert!(
+        saved.contains("\"notes.txt\""),
+        "tail's command line is kept"
+    );
+    assert!(saved.contains("\"sleep\""), "sleep is named");
+    assert!(
+        !saved.contains("\"1000\""),
+        "but its command line is not kept"
+    );
+
+    // 2. restore = always: the next server brings it back by itself.
+    let srv = start_in(dir.path(), &config("always"), |_| {});
+    let mut s = Screen::attach(&srv.socket, frontend(None, true), 100, 30).await;
+    assert_eq!(s.session, "main");
+    s.until("tail re-run in the saved directory", |t| {
+        t.contains("remembered line")
+    })
+    .await;
+    s.until("the skipped program named", |t| {
+        t.contains("not restarted: sleep")
+    })
+    .await;
+    let panes = until_panes(&srv.socket, "two panes", |p| p.len() == 2).await;
+    assert!(
+        panes
+            .iter()
+            .any(|p| p["cwd"].as_str().is_some_and(|c| c.ends_with("work dir"))),
+        "{panes:?}"
+    );
+    kill(srv).await;
+
+    // 3. restore = ask, answered "y": the asking session becomes the saved
+    //    one.
+    let srv = start_in(dir.path(), &config("ask"), |_| {});
+    let mut s = Screen::attach(&srv.socket, frontend(None, true), 100, 30).await;
+    s.until("the question", |t| {
+        t.contains("Restore session main saved at")
+    })
+    .await;
+    s.key(KeyEvent::ch('y'));
+    s.until("the restored session", |t| t.contains("remembered line"))
+        .await;
+    until_panes(&srv.socket, "two panes", |p| p.len() == 2).await;
+    let list = call(&srv.socket, "session.list", json!({})).await;
+    assert_eq!(list.as_array().map(Vec::len), Some(1), "replaced in place");
+    kill(srv).await;
+
+    // 4. restore = ask, answered "n": kept for later, restored on demand
+    //    next to the running session.
+    let srv = start_in(dir.path(), &config("ask"), |_| {});
+    let mut s = Screen::attach(&srv.socket, frontend(None, true), 100, 30).await;
+    s.until("the question", |t| t.contains("Restore session main"))
+        .await;
+    s.key(KeyEvent::ch('n'));
+    s.until("the answer acknowledged", |t| {
+        t.contains("saved sessions kept")
+    })
+    .await;
+    let info = call(&srv.socket, "server.info", json!({})).await;
+    assert_eq!(info["restorable"], json!(["main"]));
+    let restored = call(&srv.socket, "session.restore", json!({})).await;
+    assert_eq!(restored["restored"], json!(["main-2"]));
+    let err = control_call(&srv.socket, "session.restore", Some(json!({})))
+        .await
+        .expect_err("nothing left to restore");
+    assert_eq!(rpc_code(err), codes::NOT_FOUND);
+
+    // 5. Ending sessions on purpose deletes their snapshots.
+    call(&srv.socket, "session.kill", json!({"session": "main-2"})).await;
+    call(&srv.socket, "session.kill", json!({"session": "main"})).await;
+    let reason = tokio::time::timeout(Duration::from_secs(10), srv.handle)
+        .await
+        .expect("server stops")
+        .expect("server task");
+    assert_eq!(reason, "no sessions are left");
+    let left: Vec<_> = std::fs::read_dir(&snapshots)
+        .expect("dir")
+        .flatten()
+        .map(|e| e.file_name())
+        .collect();
+    assert!(left.is_empty(), "snapshots left behind: {left:?}");
 }

@@ -56,6 +56,8 @@ pub enum Command {
     SessionPrev,
     SessionSwitch(String),
     SessionRename,
+    /// Restore saved sessions that are not running.
+    SessionRestore,
 }
 
 /// Static description of a command name.
@@ -167,6 +169,7 @@ pub const COMMANDS: &[CommandInfo] = &[
         arg: Some("main"),
     },
     info("session.rename", "Rename this session"),
+    info("session.restore", "Restore saved sessions"),
 ];
 
 /// Error for an unknown or malformed command.
@@ -305,6 +308,7 @@ impl FromStr for Command {
             "session.next" => no_arg(Command::SessionNext),
             "session.prev" => no_arg(Command::SessionPrev),
             "session.rename" => no_arg(Command::SessionRename),
+            "session.restore" => no_arg(Command::SessionRestore),
             "session.switch" => arg
                 .map(|a| Command::SessionSwitch(a.to_owned()))
                 .ok_or_else(|| CommandError("`session.switch` needs a session name".into())),
@@ -360,6 +364,7 @@ impl fmt::Display for Command {
             Command::SessionPrev => f.write_str("session.prev"),
             Command::SessionSwitch(name) => write!(f, "session.switch {name}"),
             Command::SessionRename => f.write_str("session.rename"),
+            Command::SessionRestore => f.write_str("session.restore"),
         }
     }
 }

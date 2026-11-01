@@ -530,3 +530,70 @@ async fn window_size_policies() {
         );
     }
 }
+
+#[tokio::test]
+async fn snapshots_keep_layout_and_scrollback() {
+    let mut h = Harness::new("[session]\nsave-scrollback = true\n");
+    h.type_text("echo hist''ory-line\r");
+    h.wait_for("the output", |s, _| {
+        s.lines()
+            .any(|l| l.trim_end().ends_with("history-line") && !l.contains("echo"))
+    })
+    .await;
+    h.desktop.run(termos_shell::commands::Command::Split(
+        termos_wm::workspace::SplitHow::Right,
+    ));
+    let snap = h.desktop.snapshot();
+    assert_eq!(snap.name, "test");
+    assert_eq!(snap.panes.len(), 2);
+    let first = snap
+        .panes
+        .iter()
+        .find(|p| {
+            p.scrollback.as_ref().is_some_and(|s| {
+                s.iter()
+                    .any(|l| l.ends_with("history-line") && !l.contains("echo"))
+            })
+        })
+        .unwrap_or_else(|| panic!("the first pane's text is saved: {:?}", snap.panes));
+    assert!(first.argv.is_none(), "the shell itself is not a program");
+
+    // Rebuilt from the snapshot: same layout, the old text above a new
+    // shell, new pane ids.
+    let (tx, _rx) = mpsc::channel(1024);
+    let opts = DesktopOptions {
+        session_name: "again".into(),
+        config_path: h.config_path(),
+        paths: Paths {
+            config_dir: h.dir.path().join("config"),
+            state_dir: h.dir.path().join("state"),
+            runtime_dir: h.dir.path().join("run"),
+        },
+        env_shell: None,
+        pane_ids: termos_core::ids::PaneIds::new(),
+        pane_env: Vec::new(),
+    };
+    let config = Config::load(&h.config_path()).expect("config");
+    let (mut restored, skipped) =
+        Desktop::from_snapshot(opts, config, tx, &snap).expect("restores");
+    assert!(skipped.is_empty());
+    assert_eq!(restored.name(), "again");
+    assert_eq!(restored.session().all_panes().len(), 2);
+    restored.handle_client(
+        C,
+        ClientMsg::Hello {
+            version: termos_core::proto::PROTOCOL_VERSION,
+            caps: Caps::default(),
+            cols: COLS,
+            rows: ROWS,
+        },
+    );
+    let mut grid = Grid::new(COLS, ROWS);
+    restored.render(C, &mut grid);
+    assert!(
+        grid.to_text().contains("history-line"),
+        "{}",
+        grid.to_text()
+    );
+    assert!(grid.to_text().contains('│'), "the split is back");
+}

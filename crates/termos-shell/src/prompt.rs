@@ -13,6 +13,8 @@ pub enum Confirmed {
     KillPane(PaneId),
     KillWorkspace(usize),
     Quit,
+    /// Restore the sessions saved by an earlier server.
+    Restore,
 }
 
 /// What a prompt is for.

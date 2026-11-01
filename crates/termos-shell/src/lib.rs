@@ -13,6 +13,7 @@
 //! - [`status`], [`palette`], [`whichkey`], [`prompt`]: the status line, the
 //!   command palette, key hints and status-line prompts.
 //! - [`copymode`]: scrollback navigation, selection, search and copy.
+//! - [`snapshot`]: saved sessions and how they are restored.
 //! - [`notify`] and [`apps`]: notifications, the notification center and
 //!   the first-run tutorial.
 
@@ -25,6 +26,7 @@ pub mod notify;
 pub mod palette;
 pub mod prompt;
 pub mod server;
+pub mod snapshot;
 pub mod status;
 pub mod ui;
 pub mod whichkey;

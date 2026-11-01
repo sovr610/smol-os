@@ -16,7 +16,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::Deserialize;
 use serde_json::{Value, json};
-use termos_core::config::Config;
+use termos_core::config::{Config, RestorePolicy};
 use termos_core::ids::{ClientId, PaneId, PaneIds};
 use termos_core::input::KeyEvent;
 use termos_core::paths::{Paths, current_uid, ensure_private_dir};
@@ -39,6 +39,7 @@ use tokio::sync::{mpsc, oneshot};
 use crate::commands::{Command, CommandError};
 use crate::desktop::{Desktop, DesktopOptions, SessionRequest};
 use crate::notify::Level;
+use crate::snapshot::{self, SessionSnapshot};
 
 /// Minimum time between frames during output floods (~120 fps cap).
 pub const FRAME_INTERVAL: Duration = Duration::from_millis(8);
@@ -150,6 +151,21 @@ struct SessionEntry {
     desktop: Desktop,
     created: SystemTime,
     last_used: Instant,
+    /// When the debounced snapshot is due (D-033).
+    snapshot_due: Option<Instant>,
+    /// The session name of the snapshot file last written.
+    saved_as: Option<String>,
+}
+
+/// The startup restore question (`restore = "ask"`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Ask {
+    /// Nothing to ask (or already answered).
+    No,
+    /// Ask the first client that attaches.
+    Pending,
+    /// Asked in this session; its own snapshot waits for the answer.
+    Asked(SessionKey),
 }
 
 fn stopping() -> RpcError {
@@ -255,6 +271,9 @@ pub struct Server {
     reload_rx: Option<mpsc::UnboundedReceiver<()>>,
     /// Notices for the next session created (startup problems).
     notices: Vec<(Level, String)>,
+    /// Saved sessions not restored (yet).
+    saved: Vec<SessionSnapshot>,
+    ask: Ask,
     shutdown: Option<String>,
     started: SystemTime,
     known_names: Vec<String>,
@@ -337,6 +356,8 @@ impl Server {
             events_rx,
             reload_rx: None,
             notices: Vec::new(),
+            saved: Vec::new(),
+            ask: Ask::No,
             shutdown: None,
             started: SystemTime::now(),
             known_names: Vec::new(),
@@ -449,7 +470,18 @@ impl Server {
             None => self.free_name(),
         };
         let key = self.next_session;
-        let opts = DesktopOptions {
+        let opts = self.desktop_options(key, name);
+        let desktop = Desktop::new(opts, self.config.clone(), self.pty_tx.clone(), 80, 24)
+            .map_err(|e| {
+                RpcError::new(codes::INTERNAL_ERROR, format!("cannot start a shell: {e}"))
+            })?;
+        self.next_session += 1;
+        self.insert_session(key, desktop);
+        Ok(key)
+    }
+
+    fn desktop_options(&self, key: SessionKey, name: String) -> DesktopOptions {
+        DesktopOptions {
             session_name: name,
             config_path: self.opts.config_path.clone(),
             paths: self.opts.paths.clone(),
@@ -465,12 +497,10 @@ impl Server {
                     std::process::id()
                 ),
             )],
-        };
-        let mut desktop = Desktop::new(opts, self.config.clone(), self.pty_tx.clone(), 80, 24)
-            .map_err(|e| {
-                RpcError::new(codes::INTERNAL_ERROR, format!("cannot start a shell: {e}"))
-            })?;
-        self.next_session += 1;
+        }
+    }
+
+    fn insert_session(&mut self, key: SessionKey, mut desktop: Desktop) {
         for (level, text) in self.notices.drain(..) {
             desktop.post(level, text);
         }
@@ -480,9 +510,210 @@ impl Server {
                 desktop,
                 created: SystemTime::now(),
                 last_used: Instant::now(),
+                snapshot_due: None,
+                saved_as: None,
             },
         );
-        Ok(key)
+    }
+
+    // ----- snapshots and restore (D-033) -------------------------------
+
+    fn snapshot_dir(&self) -> PathBuf {
+        self.opts.paths.sessions_dir(&self.opts.name)
+    }
+
+    /// Reads the snapshots an earlier server left and applies the restore
+    /// policy.
+    fn load_saved(&mut self) {
+        let (snaps, errors) = snapshot::load_all(&self.snapshot_dir());
+        for e in errors {
+            tracing::warn!("{e}");
+            self.notices.push((Level::Warn, e));
+        }
+        self.saved = snaps;
+        if self.saved.is_empty() {
+            return;
+        }
+        match self.config.session.restore {
+            RestorePolicy::Always => {
+                let (_, failed) = self.restore_saved(None, None);
+                self.report_failed(None, &failed);
+            }
+            RestorePolicy::Ask => self.ask = Ask::Pending,
+            RestorePolicy::Never => {}
+        }
+    }
+
+    /// "Restore session main saved at 14:02".
+    fn restore_question(&self) -> String {
+        let newest = self.saved.iter().map(|s| s.saved_at).max().unwrap_or(0);
+        let when = snapshot::describe_time(newest);
+        match self.saved.as_slice() {
+            [one] => format!("Restore session {} saved at {when}", one.name),
+            many => {
+                let names: Vec<&str> = many.iter().map(|s| s.name.as_str()).collect();
+                format!(
+                    "Restore {} saved sessions ({}) from {when}",
+                    many.len(),
+                    names.join(", ")
+                )
+            }
+        }
+    }
+
+    /// A name for a restored session: its own if free, else `name-2`, ….
+    fn restored_name(&self, name: &str) -> String {
+        if valid_session_name(name).is_err() {
+            return self.free_name();
+        }
+        if self.find_session(name).is_none() {
+            return name.to_owned();
+        }
+        (2..=u32::MAX)
+            .map(|n| format!("{name}-{n}"))
+            .find(|n| self.find_session(n).is_none())
+            .unwrap_or_else(|| self.free_name())
+    }
+
+    /// Restores the saved sessions (all, or those in `names`). A snapshot
+    /// named like the `in_place` session replaces it (the session that
+    /// asked the startup question); other name clashes get a new name.
+    /// Returns the restored names and the failures.
+    fn restore_saved(
+        &mut self,
+        in_place: Option<SessionKey>,
+        names: Option<&[String]>,
+    ) -> (Vec<String>, Vec<String>) {
+        let (todo, keep): (Vec<SessionSnapshot>, Vec<SessionSnapshot>) =
+            std::mem::take(&mut self.saved)
+                .into_iter()
+                .partition(|s| names.is_none_or(|n| n.contains(&s.name)));
+        self.saved = keep;
+        let mut restored = Vec::new();
+        let mut failed = Vec::new();
+        for snap in todo {
+            let replace = in_place.filter(|k| {
+                self.sessions
+                    .get(k)
+                    .is_some_and(|e| e.desktop.name() == snap.name)
+            });
+            let (key, name) = match replace {
+                Some(k) => (k, snap.name.clone()),
+                None => (self.next_session, self.restored_name(&snap.name)),
+            };
+            let opts = self.desktop_options(key, name.clone());
+            match Desktop::from_snapshot(opts, self.config.clone(), self.pty_tx.clone(), &snap) {
+                Ok((mut desktop, skipped)) => {
+                    desktop.post(
+                        Level::Info,
+                        format!(
+                            "restored session {name} (saved at {})",
+                            snapshot::describe_time(snap.saved_at)
+                        ),
+                    );
+                    if !skipped.is_empty() {
+                        desktop.post(
+                            Level::Warn,
+                            format!("not restarted: {}", skipped.join(", ")),
+                        );
+                    }
+                    match replace {
+                        Some(k) => self.replace_session(k, desktop),
+                        None => {
+                            self.next_session += 1;
+                            self.insert_session(key, desktop);
+                        }
+                    }
+                    tracing::info!("restored session {name}");
+                    restored.push(name);
+                }
+                Err(e) => {
+                    tracing::warn!("cannot restore session {}: {e}", snap.name);
+                    failed.push(format!("{}: {e}", snap.name));
+                }
+            }
+        }
+        (restored, failed)
+    }
+
+    fn report_failed(&mut self, key: Option<SessionKey>, failed: &[String]) {
+        if failed.is_empty() {
+            return;
+        }
+        let text = format!("could not restore {}", failed.join("; "));
+        match key.and_then(|k| self.sessions.get_mut(&k)) {
+            Some(e) => e.desktop.post(Level::Error, text),
+            None => self.notices.push((Level::Error, text)),
+        }
+    }
+
+    /// Swaps a session's desktop for `desktop`; attached clients stay and
+    /// see the new one.
+    fn replace_session(&mut self, key: SessionKey, desktop: Desktop) {
+        let mut hellos = Vec::new();
+        for (id, conn) in self.clients.iter_mut().filter(|(_, c)| c.session == key) {
+            conn.redraw();
+            if conn.ready {
+                hellos.push((
+                    *id,
+                    ClientMsg::Hello {
+                        version: PROTOCOL_VERSION,
+                        caps: conn.caps.clone(),
+                        cols: conn.cols,
+                        rows: conn.rows,
+                    },
+                ));
+            }
+        }
+        if let Some(e) = self.sessions.get_mut(&key) {
+            let mut old = std::mem::replace(&mut e.desktop, desktop);
+            old.end("replaced by its saved state");
+            e.last_used = Instant::now();
+            for (id, hello) in hellos {
+                e.desktop.handle_client(id, hello);
+            }
+        }
+    }
+
+    /// Writes a session's snapshot now.
+    fn save_snapshot(&mut self, key: SessionKey) {
+        let dir = self.snapshot_dir();
+        let Some(e) = self.sessions.get_mut(&key) else {
+            return;
+        };
+        e.snapshot_due = None;
+        let snap = e.desktop.snapshot();
+        if let Some(old) = e.saved_as.as_ref().filter(|o| **o != snap.name)
+            && let Err(err) = snapshot::remove(&dir, old)
+        {
+            tracing::warn!("cannot remove the old snapshot of {old}: {err}");
+        }
+        match snapshot::save(&dir, &snap) {
+            Ok(_) => e.saved_as = Some(snap.name),
+            Err(err) => tracing::warn!("cannot save session {}: {err}", snap.name),
+        }
+    }
+
+    /// Debounces snapshots after structural changes and writes those due.
+    fn snapshots(&mut self) {
+        let now = Instant::now();
+        let delay = Duration::from_millis(self.config.session.snapshot_delay_ms);
+        for e in self.sessions.values_mut() {
+            if e.desktop.take_layout_changed() {
+                e.snapshot_due.get_or_insert(now + delay);
+            }
+        }
+        let due: Vec<SessionKey> = self
+            .sessions
+            .iter()
+            .filter(|(k, e)| {
+                self.ask != Ask::Asked(**k) && e.snapshot_due.is_some_and(|d| d <= now)
+            })
+            .map(|(k, _)| *k)
+            .collect();
+        for k in due {
+            self.save_snapshot(k);
+        }
     }
 
     fn resolve_frontend(&mut self, hello: &Hello) -> Result<SessionKey, RpcError> {
@@ -530,10 +761,16 @@ impl Server {
     }
 
     fn remove_client(&mut self, client: ClientId) {
-        if let Some(conn) = self.clients.remove(&client)
-            && let Some(e) = self.sessions.get_mut(&conn.session)
-        {
+        let Some(conn) = self.clients.remove(&client) else {
+            return;
+        };
+        if let Some(e) = self.sessions.get_mut(&conn.session) {
             e.desktop.detach_client(client);
+        }
+        // The restore question left with its last viewer: ask the next
+        // client instead, and let the session be saved meanwhile.
+        if self.ask == Ask::Asked(conn.session) && self.clients_of(conn.session).is_empty() {
+            self.ask = Ask::Pending;
         }
     }
 
@@ -582,6 +819,7 @@ impl Server {
                 }
             })
         });
+        self.load_saved();
         let mut signals = if self.opts.handle_signals {
             Signals::new()
         } else {
@@ -619,6 +857,14 @@ impl Server {
             }
         };
         tracing::info!("server stopping: {reason}");
+        // Sessions still running survive in their snapshots, except one
+        // whose restore question is unanswered: its old snapshot stays.
+        let keys: Vec<SessionKey> = self.sessions.keys().copied().collect();
+        for k in keys {
+            if self.ask != Ask::Asked(k) {
+                self.save_snapshot(k);
+            }
+        }
         let ids: Vec<ClientId> = self.clients.keys().copied().collect();
         for c in ids {
             self.send(
@@ -661,7 +907,12 @@ impl Server {
             .values()
             .filter(|c| c.ready && !c.busy)
             .filter_map(|c| c.frame_due);
-        desktops.chain(frames).min()
+        let snapshots = self
+            .sessions
+            .iter()
+            .filter(|(k, _)| self.ask != Ask::Asked(**k))
+            .filter_map(|(_, e)| e.snapshot_due);
+        desktops.chain(frames).chain(snapshots).min()
     }
 
     fn on_pty(&mut self, ev: PtyEvent) {
@@ -704,9 +955,16 @@ impl Server {
                     _ => {}
                 }
                 let key = conn.session;
+                let hello = matches!(msg, ClientMsg::Hello { .. });
+                let question = (hello && self.ask == Ask::Pending && !self.saved.is_empty())
+                    .then(|| self.restore_question());
                 if let Some(e) = self.sessions.get_mut(&key) {
                     e.last_used = Instant::now();
                     e.desktop.handle_client(client, msg);
+                    if let Some(q) = question {
+                        e.desktop.ask_restore(client, &q);
+                        self.ask = Ask::Asked(key);
+                    }
                 }
             }
             Event::FrameWritten { client } => {
@@ -786,6 +1044,7 @@ impl Server {
             }
             self.known_names = names;
         }
+        self.snapshots();
         self.schedule_frames();
         self.draw_due_frames();
     }
@@ -800,7 +1059,7 @@ impl Server {
             for (to, msg) in entry.desktop.take_outbox() {
                 outgoing.push((*key, to, msg));
             }
-            requests.extend(entry.desktop.take_requests());
+            requests.extend(entry.desktop.take_requests().into_iter().map(|r| (*key, r)));
             if let Some(r) = entry.desktop.quit_reason() {
                 ended.push((*key, r.to_owned()));
             }
@@ -816,8 +1075,8 @@ impl Server {
                 }
             }
         }
-        for req in requests {
-            self.on_request(req);
+        for (key, req) in requests {
+            self.on_request(key, req);
         }
         for (key, reason) in ended {
             self.end_session(key, &reason);
@@ -847,7 +1106,7 @@ impl Server {
         }
     }
 
-    fn on_request(&mut self, req: SessionRequest) {
+    fn on_request(&mut self, origin: SessionKey, req: SessionRequest) {
         match req {
             SessionRequest::Switch { client, to } => match self.find_session(&to) {
                 Some(k) => self.move_client(client, k),
@@ -891,6 +1150,32 @@ impl Server {
                     }
                 }
             }
+            SessionRequest::RestoreSaved { from_question } => {
+                let in_place = (from_question && self.ask == Ask::Asked(origin)).then_some(origin);
+                if self.ask == Ask::Asked(origin) {
+                    self.ask = Ask::No;
+                }
+                let (restored, failed) = self.restore_saved(in_place, None);
+                self.report_failed(Some(origin), &failed);
+                if restored.is_empty()
+                    && failed.is_empty()
+                    && let Some(e) = self.sessions.get_mut(&origin)
+                {
+                    e.desktop
+                        .post(Level::Info, "there are no saved sessions to restore");
+                }
+            }
+            SessionRequest::RestoreDeclined => {
+                if self.ask == Ask::Asked(origin) {
+                    self.ask = Ask::No;
+                    if let Some(e) = self.sessions.get_mut(&origin) {
+                        e.desktop.post(
+                            Level::Info,
+                            "saved sessions kept: restore them with the session.restore command or `termos restore`",
+                        );
+                    }
+                }
+            }
         }
     }
 
@@ -909,8 +1194,19 @@ impl Server {
             return;
         };
         let name = entry.desktop.name().to_owned();
+        let saved_as = entry.saved_as.clone();
         drop(entry);
         tracing::info!("session {name} ended: {reason}");
+        // Ended on purpose: its snapshot goes too (D-033).
+        let dir = self.snapshot_dir();
+        for n in saved_as.iter().chain(std::iter::once(&name)) {
+            if let Err(e) = snapshot::remove(&dir, n) {
+                tracing::warn!("cannot remove the snapshot of {n}: {e}");
+            }
+        }
+        if self.ask == Ask::Asked(key) {
+            self.ask = Ask::No;
+        }
         if self.sessions.is_empty() && self.opts.exit_when_empty && self.shutdown.is_none() {
             self.shutdown = Some("no sessions are left".into());
         }
@@ -1004,7 +1300,42 @@ impl Server {
                 "sessions": self.sessions.len(),
                 "clients": self.clients.len(),
                 "started": unix_secs(self.started),
+                "restorable": self.saved.iter().map(|s| s.name.clone()).collect::<Vec<_>>(),
             })),
+            "session.saved" => Ok(Value::Array(
+                self.saved
+                    .iter()
+                    .map(|s| {
+                        json!({
+                            "name": s.name,
+                            "saved_at": s.saved_at,
+                            "workspaces": s.layout.workspaces.len(),
+                            "panes": s.panes.len(),
+                        })
+                    })
+                    .collect(),
+            )),
+            "session.restore" => {
+                #[derive(Deserialize)]
+                struct P {
+                    #[serde(default)]
+                    names: Option<Vec<String>>,
+                }
+                let p: P = req.params_as()?;
+                if self.saved.is_empty() {
+                    return Err(RpcError::not_found(
+                        "there are no saved sessions to restore",
+                    ));
+                }
+                if self.ask != Ask::No {
+                    self.ask = Ask::No;
+                }
+                let (restored, failed) = self.restore_saved(None, p.names.as_deref());
+                if restored.is_empty() && failed.is_empty() {
+                    return Err(RpcError::not_found("no saved session has that name"));
+                }
+                Ok(json!({ "restored": restored, "failed": failed }))
+            }
             "server.kill" => {
                 self.shutdown = Some("killed by request".into());
                 Ok(json!({ "stopping": true }))
