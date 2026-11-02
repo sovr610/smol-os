@@ -23,6 +23,10 @@ pub struct Paths {
     /// `$TMPDIR/termos-<uid>` (default `/tmp`) without a runtime dir. On
     /// Windows it is never created: it only names the server's pipes.
     pub runtime_dir: PathBuf,
+    /// Tools TermOS fetches for itself (a pinned mise, D-053):
+    /// `$XDG_DATA_HOME/termos` (default `~/.local/share/termos`; Windows
+    /// `%LOCALAPPDATA%\termos\data`).
+    pub data_dir: PathBuf,
 }
 
 /// The current user's uid.
@@ -37,6 +41,8 @@ struct Defaults {
     state: PathBuf,
     /// Complete (already ends in a TermOS-specific component).
     runtime: PathBuf,
+    /// Complete, like `runtime`.
+    data: PathBuf,
 }
 
 #[cfg(unix)]
@@ -52,6 +58,7 @@ fn defaults(get: &dyn Fn(&str) -> Option<String>) -> Defaults {
         config: home.join(".config"),
         state: home.join(".local").join("state"),
         runtime: tmp.join(format!("termos-{}", current_uid())),
+        data: home.join(".local").join("share").join("termos"),
     }
 }
 
@@ -64,6 +71,7 @@ fn defaults(get: &dyn Fn(&str) -> Option<String>) -> Defaults {
     Defaults {
         config: roaming,
         runtime: local.join("termos").join("run"),
+        data: local.join("termos").join("data"),
         state: local,
     }
 }
@@ -82,6 +90,7 @@ impl Paths {
                 .unwrap_or(defaults.state)
                 .join("termos"),
             runtime_dir: abs("XDG_RUNTIME_DIR").map_or(defaults.runtime, |p| p.join("termos")),
+            data_dir: abs("XDG_DATA_HOME").map_or(defaults.data, |p| p.join("termos")),
         }
     }
 

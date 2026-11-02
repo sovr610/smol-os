@@ -103,6 +103,7 @@ const MACOS_TARGET: &str = "aarch64-apple-darwin";
 /// for Windows): the native CI jobs check them.
 const CROSS_TEST_CRATES: &[&str] = &[
     "termos-core",
+    "termos-devkit",
     "termos-hw",
     "termos-term",
     "termos-wm",

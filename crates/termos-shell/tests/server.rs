@@ -41,6 +41,7 @@ fn paths_in(dir: &Path) -> Paths {
         config_dir: dir.join("config"),
         state_dir: dir.join("state"),
         runtime_dir: dir.join("run"),
+        data_dir: dir.join("data"),
     }
 }
 
@@ -496,6 +497,7 @@ async fn server_kill_and_resize() {
             config_dir: dir.join("c"),
             state_dir: dir.join("s"),
             runtime_dir: dir.clone(),
+            data_dir: dir.clone(),
         };
         let mut o = ServerOptions::new("test", paths, dir.join("c.toml"));
         o.socket_path = srv.socket.clone();

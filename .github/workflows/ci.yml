@@ -47,7 +47,7 @@ jobs:
         run: |
           rustup target add x86_64-pc-windows-msvc
           cargo clippy --workspace --lib --bins --no-default-features --locked --target x86_64-pc-windows-msvc -- -D warnings
-          cargo clippy -p termos-core -p termos-hw -p termos-term -p termos-wm -p termos-plugin -p termos-apps -p termos-shell -p termos-cli --all-targets --no-default-features --locked --target x86_64-pc-windows-msvc -- -D warnings
+          cargo clippy -p termos-core -p termos-devkit -p termos-hw -p termos-term -p termos-wm -p termos-plugin -p termos-apps -p termos-shell -p termos-cli --all-targets --no-default-features --locked --target x86_64-pc-windows-msvc -- -D warnings
 
   test:
     name: Clippy + test (${{ matrix.name }})

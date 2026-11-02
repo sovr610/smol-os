@@ -565,6 +565,15 @@ rewrite history.
   - **Panels:** the palette and which-key take the floats' border style and drop shadow (`[floats] border`, `shadow`).
 - **Alternatives:** apps with timers of their own (they would run while hidden); reading the operating system's clipboard (D-050); a settings app that writes a fresh file (comments lost); syntax highlighting in the markdown viewer (syntect is large; later if wanted).
 
+## D-053: M5 is split; lazygit for Git; mise found or fetched; the language matrix runs nightly
+- **Status:** Accepted (owner) · 2026-11-02
+- **Decision:**
+  - **Split (owner):** M5 becomes **M5a, languages and editors** (`termos lang` over mise, the managed Neovim and Helix configs with language servers and debuggers, project templates, build/run/test panels, the Git UI, the language CI matrix, `docs/languages.md`) and **M5b, dev rootfs and packages** (the Debian dev rootfs through bubblewrap, Podman, the package manager app). Both stay under milestone number 5 for work markers.
+  - **Git UI (owner, resolves O-3):** lazygit, embedded in a TermOS window and installed with mise when missing. Deeper integration can follow later.
+  - **mise (owner):** TermOS uses the `mise` on `PATH` when it is recent enough; otherwise it downloads one pinned mise release from GitHub on first use, checks it against SHA-256 sums compiled into TermOS, and keeps it in TermOS's own data folder. Nothing else on the system changes.
+  - **Language CI (owner):** the full matrix (every listed language on x86_64 and aarch64: install with mise, build and run a hello-world, a headless Neovim language-server handshake) runs nightly and on pushes that change the developer environment; other pushes run a quick subset (Rust, Python, Go).
+- **Alternatives:** gitui, or our own Git panel on gitoxide; one M5; requiring mise to be installed, or bundling it in every download; the full matrix on every push, or nightly only.
+
 ---
 
 ## Open questions (the owner will be asked before the milestone that needs each one)
@@ -573,7 +582,7 @@ rewrite history.
 | --- | --- | --- | --- |
 | O-1 | Default WM keybinding scheme: a tmux-style leader key, or modifier chords (Alt/Super)? | M2 | **Resolved by D-023:** tmux prefix `C-b`. |
 | O-2 | PTY layer: `portable-pty`, `pty-process` or direct `rustix` openpty with tokio `AsyncFd`? | M1 | **Resolved by D-025:** `portable-pty`. |
-| O-3 | Git UI: embed lazygit/gitui in a window, or build our own panel? | M5 | Embed first, integrate later. |
+| O-3 | Git UI: embed lazygit/gitui in a window, or build our own panel? | M5 | **Resolved by D-053:** embed lazygit. |
 | O-4 | LLM clients: provider SDK crates (async-openai, others) or our own thin reqwest clients behind `Provider`? | M6 | Own thin clients plus shared SSE parsing, so the model-listing and tool-calling shapes stay uniform. |
 | O-5 | Secret store on bare metal, where there's no Secret Service: an age-encrypted file unlocked by passphrase, a TPM-sealed key, or something else? | M6 | age file with a passphrase; TPM later. |
 | O-6 | llama.cpp integration: a managed `llama-server` subprocess or FFI (`llama-cpp-2`)? | M7 | Subprocess: crash isolation, a ready-made OpenAI API, easy CUDA/ROCm/Vulkan build swaps. |

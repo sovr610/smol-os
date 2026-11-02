@@ -2850,6 +2850,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "termos-core",
+ "termos-devkit",
  "termos-hw",
  "termos-render",
  "termos-shell",
@@ -2887,6 +2888,12 @@ dependencies = [
 [[package]]
 name = "termos-devkit"
 version = "0.0.0"
+dependencies = [
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror 2.0.21",
+]
 
 [[package]]
 name = "termos-hw"

@@ -119,11 +119,46 @@ enum Cmd {
         #[command(subcommand)]
         action: ConfigCmd,
     },
+    /// Programming languages, through mise: runtimes, language servers,
+    /// debuggers.
+    Lang {
+        #[command(subcommand)]
+        action: LangCmd,
+    },
     /// Diagnostics.
     #[command(hide = true)]
     Debug {
         #[command(subcommand)]
         what: DebugCmd,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum LangCmd {
+    /// Show every language and what is installed.
+    #[command(alias = "ls")]
+    List,
+    /// Install languages (`go`, `python@3.12`, …) with their language
+    /// servers and debuggers; the runtime becomes your default.
+    Install {
+        #[arg(required = true, value_name = "LANG[@VERSION]")]
+        langs: Vec<String>,
+    },
+    /// Pin a language version for the project in a folder (writes
+    /// `mise.toml`).
+    Use {
+        #[arg(value_name = "LANG[@VERSION]")]
+        lang: String,
+        /// The project folder (default: the current one).
+        #[arg(long)]
+        dir: Option<PathBuf>,
+    },
+    /// Uninstall a version, or (without one) the language with its
+    /// servers and debugger.
+    #[command(alias = "rm")]
+    Remove {
+        #[arg(value_name = "LANG[@VERSION]")]
+        lang: String,
     },
 }
 
@@ -207,6 +242,7 @@ fn main() -> ExitCode {
     let config_path = cli.config.clone().unwrap_or_else(|| paths.config_file());
     let result = match &cli.command {
         Some(Cmd::Config { action }) => config_command(action, &config_path),
+        Some(Cmd::Lang { action }) => lang_command(action, &paths),
         Some(Cmd::Debug {
             what: DebugCmd::Caps { raw },
         }) => debug_caps(*raw),
@@ -319,7 +355,7 @@ fn run(cli: &Cli, paths: &Paths, config_path: &Path, t: &Target) -> anyhow::Resu
             }
         }
         Some(Cmd::Server) => run_server(paths, config_path, t),
-        Some(Cmd::Config { .. } | Cmd::Debug { .. }) => Ok(ExitCode::SUCCESS),
+        Some(Cmd::Config { .. } | Cmd::Debug { .. } | Cmd::Lang { .. }) => Ok(ExitCode::SUCCESS),
     }
 }
 
@@ -351,6 +387,104 @@ fn debug_caps(raw: bool) -> anyhow::Result<ExitCode> {
         println!("raw replies: {:?}", String::from_utf8_lossy(&bytes));
     }
     Ok(ExitCode::SUCCESS)
+}
+
+/// `PATH` for programs in panes: mise's shims and the fetched mise first
+/// (D-053), so languages installed with `termos lang` run there.
+fn pane_path(paths: &Paths) -> Option<(String, String)> {
+    let get = |k: &str| std::env::var(k).ok();
+    // Windows spells it `Path`; use the name the environment has.
+    let key = std::env::vars_os()
+        .map(|(k, _)| k.to_string_lossy().into_owned())
+        .find(|k| k.eq_ignore_ascii_case("PATH"))
+        .unwrap_or_else(|| "PATH".to_owned());
+    let path = std::env::var_os(&key);
+    let value = termos_devkit::mise::pane_path(&get, &paths.data_dir, path.as_ref())?;
+    Some((key, value.to_string_lossy().into_owned()))
+}
+
+/// `termos lang …`.
+fn lang_command(action: &LangCmd, paths: &Paths) -> anyhow::Result<ExitCode> {
+    use termos_devkit::lang::{self, MiseRunner};
+    use termos_devkit::langs;
+    let find = |arg: &str| {
+        let (name, version) = langs::split_version(arg);
+        let names: Vec<&str> = langs::LANGUAGES.iter().map(|l| l.name).collect();
+        langs::find(name)
+            .map(|l| (l, version.map(str::to_owned)))
+            .with_context(|| format!("no language {name:?}; TermOS knows {}", names.join(", ")))
+    };
+    let mise = termos_devkit::mise::ensure(&paths.data_dir, &mut |m| println!("{m}"))?;
+    if mise.fetched {
+        println!(
+            "termos: using mise {} ({})",
+            mise.version,
+            mise.path.display()
+        );
+    }
+    let mut runner = MiseRunner { mise };
+    match action {
+        LangCmd::List => {
+            let installed = lang::installed(&mut runner)?;
+            for row in lang::rows(&installed, &langs::platform()) {
+                let versions = if row.versions.is_empty() {
+                    "-".to_owned()
+                } else {
+                    row.versions.join(" ")
+                };
+                let tools: Vec<String> = row
+                    .tools
+                    .iter()
+                    .map(|(n, ok)| format!("{n}{}", if *ok { "" } else { " (not installed)" }))
+                    .collect();
+                println!(
+                    "{:<8} {:<34} {:<18} {}",
+                    row.name,
+                    row.title,
+                    versions,
+                    tools.join(", ")
+                );
+                if let Some(limit) = row.limit {
+                    println!("{:<8} note: {limit}", "");
+                }
+            }
+            Ok(ExitCode::SUCCESS)
+        }
+        LangCmd::Install { langs: wanted } => {
+            let mut ok = true;
+            for arg in wanted {
+                let (l, version) = find(arg)?;
+                println!("termos: installing {}", l.title);
+                let report = lang::install(l, version.as_deref(), &mut runner)?;
+                println!("termos: {}: installed {}", l.name, report.done.join(", "));
+                for (spec, what) in &report.failed {
+                    ok = false;
+                    eprintln!("termos: {}: {what} ({spec}) did not install", l.name);
+                }
+            }
+            Ok(if ok {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::FAILURE
+            })
+        }
+        LangCmd::Use { lang: arg, dir } => {
+            let (l, version) = find(arg)?;
+            let dir = match dir {
+                Some(d) => d.clone(),
+                None => std::env::current_dir()?,
+            };
+            let at = lang::use_in(l, version.as_deref(), &dir, &mut runner)?;
+            println!("termos: {} uses {at}", dir.display());
+            Ok(ExitCode::SUCCESS)
+        }
+        LangCmd::Remove { lang: arg } => {
+            let (l, version) = find(arg)?;
+            let removed = lang::remove(l, version.as_deref(), &mut runner)?;
+            println!("termos: removed {}", removed.join(", "));
+            Ok(ExitCode::SUCCESS)
+        }
+    }
 }
 
 /// `termos debug hw`: the machine as `termos-hw` reads it, and one sample
@@ -646,6 +780,7 @@ fn run_server(paths: &Paths, config_path: &Path, t: &Target) -> anyhow::Result<E
     let mut opts = ServerOptions::new(&t.name, paths.clone(), config_path.to_owned());
     opts.socket_path.clone_from(&t.socket);
     opts.handle_signals = true;
+    opts.pane_env.extend(pane_path(paths));
     let mut server = Server::new(opts, config);
     if let Some(e) = config_error {
         server.notice(Level::Error, format!("using default settings: {e}"));
@@ -747,6 +882,7 @@ mod tests {
             config_dir: "/c".into(),
             state_dir: "/s".into(),
             runtime_dir: "/r".into(),
+            data_dir: "/d".into(),
         };
         let t =
             resolve_target(&Cli::parse_from(["termos", "-L", "x", "ls"]), &paths).expect("target");

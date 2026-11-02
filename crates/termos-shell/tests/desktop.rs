@@ -52,6 +52,7 @@ impl Harness {
             config_dir: dir.path().join("config"),
             state_dir: dir.path().join("state"),
             runtime_dir: dir.path().join("run"),
+            data_dir: dir.path().join("data"),
         };
         std::fs::create_dir_all(&paths.config_dir).expect("mkdir");
         // Animations off: screens are read at arbitrary moments.
@@ -965,6 +966,7 @@ async fn snapshots_keep_layout_and_scrollback() {
             config_dir: h.dir.path().join("config"),
             state_dir: h.dir.path().join("state"),
             runtime_dir: h.dir.path().join("run"),
+            data_dir: h.dir.path().join("data"),
         },
         env_shell: None,
         pane_ids: termos_core::ids::PaneIds::new(),

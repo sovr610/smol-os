@@ -172,6 +172,7 @@ mod tests {
             config_dir: dir.path().join("c"),
             state_dir: dir.path().join("s"),
             runtime_dir: dir.path().join("run"),
+            data_dir: dir.path().join("data"),
         }
         .socket_path("t");
         assert!(!probe(&endpoint));

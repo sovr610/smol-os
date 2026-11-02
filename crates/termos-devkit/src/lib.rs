@@ -1,17 +1,15 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! # termos-devkit
 //!
-//! Developer environment integration.
-//!
-//! **Status:** not started. Scheduled for M5 (see `ROADMAP.md`).
-//!
-//! Planned modules (see `ARCHITECTURE.md`, "Developer environment"):
-//! - `lang` — `termos lang install <lang>` and per-project versions, wrapping
-//!   mise rather than reimplementing it.
-//! - `editor` — the preconfigured Neovim default (Helix selectable) with LSP
-//!   servers for every supported language and debugging via DAP.
-//! - `devroot` — the Debian-based dev rootfs used on bare metal for compilers
-//!   and system packages.
-//! - `panels` — Git UI, project templates, build/run/test panels, Podman.
+//! The developer environment (ARCHITECTURE.md §10, D-053):
+//! - [`mise`]: finding mise, or fetching a pinned, checksummed one;
+//! - [`langs`]: the languages TermOS sets up, with their language servers
+//!   and debuggers;
+//! - [`lang`]: `termos lang install|use|list|remove` over mise.
 
-// TODO(M5): mise-backed toolchain manager, Neovim + LSP/DAP setup, dev rootfs, Git/build panels.
+pub mod lang;
+pub mod langs;
+pub mod mise;
+
+// TODO(M5): managed Neovim and Helix configs, project templates, build/run/test panels, Git UI.
+// TODO(M5): dev rootfs, Podman and the package manager UI (M5b).

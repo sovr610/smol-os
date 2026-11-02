@@ -20,7 +20,8 @@ questions (DECISIONS.md, "Open questions").
 | M3.5 | Native Windows and CI test builds (D-035 to D-041) | 🔍 |
 | M4a | Graphics and themes: capability probe, images, themes, animations, Kitty keyboard (D-042 to D-049) | 🔍 |
 | M4b | Apps, `termos-hw`, WASM widgets (D-042, D-050 to D-052) | 🔍 |
-| M5 | Developer environment | ⏳ |
+| M5a | Languages and editors: `termos lang` (mise), managed Neovim/Helix with LSP and DAP, templates, task panels, Git UI (D-053) | 🚧 |
+| M5b | Dev rootfs, Podman, package manager app (D-053) | ⏳ |
 | M6 | AI agents | ⏳ |
 | M7 | Local models | ⏳ |
 | M8 | Bare-metal images | ⏳ |
@@ -432,7 +433,7 @@ The demo found two things, both fixed with tests: Linux lists every thread as a 
 - wasmtime compiles C for Windows, which the Linux lint job cannot do; cross-target clippy now runs without default features, and the native jobs check the widgets.
 - On the aarch64 Linux runner, the widget test waited 60 s for exactly `🍅 0:59` and never saw it, although the countdown ran (it ended at `done!`). The cause is not understood yet. The test now accepts any value in the first ten seconds and, if it fails again, lists every drawing it saw with timestamps.
 
-For the WASM widgets commit, 13 of the 14 CI jobs passed, including the Windows and macOS tests and the new widget-sample job (run 41375317379); the aarch64 widget test above failed and is changed in the docs commit.
+For the WASM widgets commit, 13 of the 14 CI jobs passed, including the Windows and macOS tests and the new widget-sample job (run 41375317379); the aarch64 widget test above failed and was changed in the docs commit, which then passed all 14 jobs (run 41377022077).
 
 **Not in this milestone:**
 - GPU temperature and power on macOS, and for non-NVIDIA GPUs on Windows (`TODO(M9)`);
@@ -443,22 +444,32 @@ For the WASM widgets commit, 13 of the 14 CI jobs passed, including the Windows 
 
 ---
 
-## M5 — Developer environment
-**Status:** ⏳ · **Ask first:** O-3 (Git UI).
+## M5a — Languages and editors
+**Status:** 🚧 · Owner answers: M5 is split (D-053); O-3 → lazygit, embedded (D-053); TermOS uses the mise on `PATH` or fetches a pinned, checksummed one (D-053); the full language matrix runs nightly and on developer-environment changes (D-053).
 
 **Deliverables**
-- **Toolchains:** `termos lang install|use|list|remove` wrapping mise, with per-project versions.
-- **Editor:** a managed Neovim config (D-012) with LSP for every listed language (ARCHITECTURE.md §10) and DAP; a Helix `languages.toml`; LSP/DAP installers.
-- **Dev rootfs:** `termos devroot create|enter|update`, used on bare metal and testable hosted on Linux.
-- **Panels:** the Git UI, `termos new <template>`, and build/run/test panels.
-- **Podman:** integration where the hardware allows.
-- **Package manager UI:** an app over mise, the dev rootfs (apt) and the host package manager.
-- **Docs:** `docs/languages.md` listing which languages and tools are unavailable on which architecture.
+- **Toolchains:** `termos lang install|use|list|remove <lang>[@version]` over mise, with per-project versions (`mise.toml`, `.tool-versions`); TermOS panes find the installed tools.
+- **Editor:** a managed Neovim config (D-012) with LSP for every listed language (ARCHITECTURE.md §10) and DAP; a Helix `languages.toml`; servers and debuggers installed with each language.
+- **Panels:** the Git UI (lazygit), `termos new <template>`, and build/run/test panels from project detection and `[tasks]` in a project `termos.toml`.
+- **Docs:** `docs/languages.md`, listing which languages and tools are unavailable on which architecture.
 
-**Acceptance:** for each language on x86_64 and aarch64 (where supported), CI installs it with mise, builds and runs a hello-world, and completes a headless `nvim` LSP initialize handshake.
+**Acceptance:** for each language on x86_64 and aarch64 (where supported), CI installs it with mise, builds and runs a hello-world, and completes a headless `nvim` LSP initialize handshake (nightly and on developer-environment changes; a quick subset on every push).
 
 **Demo:** `termos lang install go`, `termos new go-cli demo`, then edit in Neovim with diagnostics and a breakpoint.
 
+---
+
+## M5b — Dev rootfs and packages
+**Status:** ⏳ · Owner answers: split from M5 (D-053).
+
+**Deliverables**
+- **Dev rootfs:** `termos devroot create|enter|update`, used on bare metal and testable hosted on Linux.
+- **Podman:** integration where the hardware allows.
+- **Package manager UI:** an app over mise, the dev rootfs (apt) and the host package manager.
+
+**Acceptance:** a dev rootfs is created, entered and updated in CI on x86_64 and aarch64 Linux; the package manager app lists and installs a mise tool and an apt package there (snapshot-tested).
+
+**Demo:** `termos devroot create`, install a package with apt inside it, and manage it from the package manager app.
 ---
 
 ## M6 — AI agents
@@ -564,7 +575,8 @@ Generated from the `TODO(M<n>)` markers in the code. Don't edit by hand; run `ca
 | Milestone | Where | What |
 | --- | --- | --- |
 | M5 | `crates/termos-apps/src/lib.rs` | package manager UI over mise, the dev rootfs and the host package manager. |
-| M5 | `crates/termos-devkit/src/lib.rs` | mise-backed toolchain manager, Neovim + LSP/DAP setup, dev rootfs, Git/build panels. |
+| M5 | `crates/termos-devkit/src/lib.rs` | managed Neovim and Helix configs, project templates, build/run/test panels, Git UI. |
+| M5 | `crates/termos-devkit/src/lib.rs` | dev rootfs, Podman and the package manager UI (M5b). |
 | M6 | `crates/termos-ai/src/lib.rs` | providers, streaming agent windows, sandboxed tools, permission engine, audit log, MCP, secrets. |
 | M6 | `crates/termos-shell/src/plugins.rs` | run launched plugins under the agent sandbox (bwrap + landlock). |
 | M7 | `crates/termos-models/src/lib.rs` | HF adapter, hardware-aware recommendations, llama.cpp backend, OpenAI-compatible router. |

@@ -101,3 +101,64 @@ fn unknown_argument_is_rejected() {
     let out = termos(&["--definitely-not-a-flag"]);
     assert_eq!(out.status.code(), Some(2));
 }
+
+/// `termos lang` drives mise: here a stand-in script that logs its
+/// arguments and answers like mise (TERMOS_MISE points at it).
+#[cfg(unix)]
+#[test]
+fn lang_commands_drive_mise() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let log = dir.path().join("calls.log");
+    let fake = dir.path().join("mise");
+    std::fs::write(
+        &fake,
+        format!(
+            "#!/bin/sh\n\
+             case \"$1\" in\n\
+             --version) echo '2026.10.14 linux-x64 (2026-10-18)';;\n\
+             ls) echo '{{\"go\": [{{\"version\": \"1.23.2\", \"install_path\": \"/m/go\", \"active\": true}}]}}';;\n\
+             *) echo \"$*\" >> '{}';;\n\
+             esac\n",
+            log.display()
+        ),
+    )
+    .expect("write");
+    std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+    let run = |args: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_termos"))
+            .args(args)
+            .env("TERMOS_MISE", &fake)
+            .env("XDG_DATA_HOME", dir.path().join("data"))
+            .output()
+            .expect("runs")
+    };
+    let out = run(&["lang", "install", "go@1.23"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let calls = std::fs::read_to_string(&log).expect("mise was called");
+    assert_eq!(
+        calls.lines().collect::<Vec<_>>(),
+        [
+            "use --global go@1.23",
+            "install go:golang.org/x/tools/gopls@latest",
+            "install go:github.com/go-delve/delve/cmd/dlv@latest",
+        ]
+    );
+    let out = run(&["lang", "list"]);
+    let text = String::from_utf8_lossy(&out.stdout);
+    let go = text
+        .lines()
+        .find(|l| l.starts_with("go "))
+        .expect("a go row");
+    assert!(
+        go.contains("1.23.2*") && go.contains("gopls (not installed)"),
+        "{go}"
+    );
+    let out = run(&["lang", "install", "cobol"]);
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("no language \"cobol\""));
+}
