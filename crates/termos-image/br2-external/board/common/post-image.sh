@@ -45,10 +45,15 @@ rpi*)
 	;;
 esac
 
+# genimage fills file systems that name no files (the data partition)
+# from --rootpath: an empty folder, so the data partition starts empty
+# (the root file system is Buildroot's rootfs.squashfs).
 GENIMAGE_TMP="$BUILD_DIR/genimage.tmp"
-rm -rf "$GENIMAGE_TMP"
+EMPTY="$BUILD_DIR/genimage.empty"
+rm -rf "$GENIMAGE_TMP" "$EMPTY"
+mkdir -p "$EMPTY"
 genimage \
-	--rootpath "$TARGET_DIR" \
+	--rootpath "$EMPTY" \
 	--tmppath "$GENIMAGE_TMP" \
 	--inputpath "$BINARIES_DIR" \
 	--outputpath "$BINARIES_DIR" \
