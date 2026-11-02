@@ -3,7 +3,9 @@
 # skip this. `opt/termos/boottest` is how many seconds to let the desktop
 # settle before reporting the memory in use and the data partition's size;
 # `opt/termos/boottest-update`, if given, is a bundle's URL for
-# `termos update`, installed as the desktop's user, which then restarts.
+# `termos update`, installed as the desktop's user, which then restarts;
+# `opt/termos/boottest-install`, on the live ISO, is a disk for
+# `termos install`, after which the machine turns off.
 
 [ "$1" = start ] || exit 0
 cfg=/sys/firmware/qemu_fw_cfg/by_name/opt/termos
@@ -17,5 +19,13 @@ cfg=/sys/firmware/qemu_fw_cfg/by_name/opt/termos
 		url=$(cat "$cfg/boottest-update/raw")
 		su -s /bin/sh -c "termos update install --yes --restart '$url'" termos >/dev/console 2>&1 ||
 			echo "TERMOS-UPDATE failed" >/dev/console
+	fi
+	if [ -r "$cfg/boottest-install/raw" ]; then
+		disk=$(cat "$cfg/boottest-install/raw")
+		if su -s /bin/sh -c "termos install --erase '$disk'" termos >/dev/console 2>&1; then
+			poweroff
+		else
+			echo "TERMOS-INSTALL failed" >/dev/console
+		fi
 	fi
 ) &

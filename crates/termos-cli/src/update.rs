@@ -64,6 +64,13 @@ pub(crate) enum SystemCmd {
     Restart,
     /// Turn the machine off.
     PowerOff,
+    /// From the live ISO: its disk image onto a disk (D-080).
+    InstallDisk { disk: PathBuf },
+    /// Save a Wi-Fi network for iwd; its passphrase (none for an open
+    /// network) is read from standard input (D-081).
+    WifiAdd { ssid: String },
+    /// Forget a saved Wi-Fi network.
+    WifiForget { ssid: String },
     /// RAUC's custom boot-loader backend on a Raspberry Pi (tryboot).
     RaucTryboot {
         /// get-primary, set-primary SLOT, get-state SLOT, set-state SLOT
@@ -408,6 +415,21 @@ pub(crate) fn system_command(cmd: &SystemCmd) -> anyhow::Result<ExitCode> {
                 run("reboot", &[])
             }
             SystemCmd::PowerOff => run("poweroff", &[]),
+            SystemCmd::InstallDisk { disk } => {
+                crate::install::install_disk(disk)?;
+                Ok(ExitCode::SUCCESS)
+            }
+            SystemCmd::WifiAdd { ssid } => {
+                let passphrase = crate::wifi::read_passphrase()?;
+                crate::wifi::add(Path::new(crate::wifi::IWD_DIR), ssid, passphrase.as_ref())?;
+                Ok(ExitCode::SUCCESS)
+            }
+            SystemCmd::WifiForget { ssid } => {
+                if !crate::wifi::forget(Path::new(crate::wifi::IWD_DIR), ssid)? {
+                    bail!("{ssid} was not saved");
+                }
+                Ok(ExitCode::SUCCESS)
+            }
             SystemCmd::RaucTryboot { args } => {
                 let arg = |i: usize| args.get(i).map(String::as_str).unwrap_or("");
                 let booted = Image::detect().ok().and_then(|i| i.slot);

@@ -80,6 +80,17 @@ pub fn update_installed(log: &str) -> Option<String> {
         .map(|s| s.trim().to_owned())
 }
 
+/// Whether `termos install` finished (`Some(true)`) or failed.
+pub fn install_done(log: &str) -> Option<bool> {
+    if log.contains("TERMOS-INSTALL done") {
+        Some(true)
+    } else if log.contains("TERMOS-INSTALL failed") {
+        Some(false)
+    } else {
+        None
+    }
+}
+
 /// The last `n` lines of a log, for a report: firmware and boot-loader
 /// escape sequences and other control characters left out.
 pub fn tail(log: &str, n: usize) -> String {
@@ -132,6 +143,12 @@ mod tests {
         assert_eq!(slot(bad).map(|s| s.good), Some(false));
         assert_eq!(data_kb("TERMOS-DATA size_kb=5\n"), None, "only after READY");
         assert_eq!(update_installed("TERMOS-UPDATE failed\n"), None);
+        assert_eq!(
+            install_done("x\nTERMOS-INSTALL done /dev/vda\n"),
+            Some(true)
+        );
+        assert_eq!(install_done("TERMOS-INSTALL failed\n"), Some(false));
+        assert_eq!(install_done("TERMOS-READY\n"), None);
     }
 
     #[test]

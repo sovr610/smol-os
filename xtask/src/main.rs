@@ -36,7 +36,7 @@ Commands:
                   target) and refresh its test fixture
   image build TARGET [--legal-info]
                   Build a bare-metal image with Buildroot (Linux)
-  image boot TARGET [--firmware uefi|bios|all] [--update]
+  image boot TARGET [--firmware uefi|bios|all] [--update] [--install]
   image bundle TARGET [--version V] [--broken]
                   Boot it in QEMU: ready marker, screenshot, memory
   image list      The image targets
@@ -412,6 +412,17 @@ fn image(args: &[String]) -> Result<()> {
                         }
                     }
                     Err(e) => failed.push(format!("{} ({}) update: {e}", t.name, f.name())),
+                }
+            }
+            // The live ISO and the installer (D-080).
+            if flag("--install") {
+                match boot::install_test(&paths.images(t), t, &dir) {
+                    Ok(steps) => {
+                        for s in steps {
+                            println!("xtask: {} install: {s}", t.name);
+                        }
+                    }
+                    Err(e) => failed.push(format!("{} install: {e}", t.name)),
                 }
             }
             println!("xtask: logs and screenshots in {}", dir.display());

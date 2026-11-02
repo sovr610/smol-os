@@ -1925,6 +1925,9 @@ impl Desktop {
             Command::MonitorOpen => {
                 self.open_app(Box::new(termos_apps::SystemMonitor::open()));
             }
+            Command::NetworkOpen => {
+                self.open_app(Box::new(termos_apps::NetworkPage::open()));
+            }
             Command::SettingsOpen => {
                 let path = self.opts.config_path.clone();
                 self.open_app(Box::new(termos_apps::Settings::open(path)));

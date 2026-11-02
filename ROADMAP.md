@@ -709,7 +709,6 @@ Generated from the `TODO(M<n>)` markers in the code. Don't edit by hand; run `ca
 | M5b | `crates/termos-devkit/src/lib.rs` | dev rootfs, Podman and the package manager UI. |
 | M9 | `crates/termos-image/src/lib.rs` | the live ISO and `termos install` (D-080). |
 | M9 | `crates/termos-image/src/lib.rs` | grow the data partition to the whole disk on first boot. |
-| M9 | `crates/termos-image/src/lib.rs` | the network settings page (iwd for Wi-Fi, dhcpcd), as D-072 decided. |
 | M9b | `crates/termos-ai/src/sandbox.rs` | a Windows sandbox for agent commands (an AppContainer or a restricted token); until then every command asks. |
 | M9b | `crates/termos-cli/src/client.rs` | VT input mode on Windows, for bracketed paste and the Kitty keyboard protocol. |
 | M9b | `crates/termos-cli/src/kms/mod.rs` | the console's own clipboard and visual bell; images drawn as pixels rather than as blocks. |

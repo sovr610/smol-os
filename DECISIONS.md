@@ -815,6 +815,16 @@ rewrite history.
 - **Tests:** in QEMU: the ISO boots with an empty 8 GB disk, installs onto it with `--erase`, and the disk then boots alone to `TERMOS-READY` with its data partition grown.
 - **Alternatives:** the live system from a squashfs on the ISO (a second, smaller initramfs to find and mount it); `dd` instructions instead of an installer.
 
+## D-081: The network page is a Network app over sysfs and iwd's D-Bus interface
+- **Status:** Accepted (lead; implements D-072's settings page) · 2026-11-02
+- **Decision:**
+  - **A Network app** (`network.open`, "Network" in the palette), next to Settings rather than inside it: Settings edits `config.toml`, the network is the system's.
+  - **Links:** every interface but loopback, from `termos_hw::net`: wired or Wi-Fi and up or not from sysfs, addresses and hardware addresses from `sysinfo` (so it also works hosted, without Wi-Fi).
+  - **Wi-Fi:** where iwd runs, its state, networks (strongest first) and scans through its D-Bus interface with zbus, already in the build for the keyring; the desktop's user is in `netdev`, which iwd's policy lets in. Joining a network writes iwd's file for it (`/var/lib/iwd/<name>.psk` or `.open`, root only, on the data partition) through `termos system wifi-add`, the passphrase on its standard input and in `secrecy` types throughout; iwd joins it whenever it is in range. Forgetting removes the file. Enterprise (802.1X) networks are listed but not joined from the page yet.
+  - **Idle cost:** it reads on open and every five seconds only while on screen (D-028).
+- **Tests:** a snapshot of the page over a fixed backend, passphrases masked and checked, saving and forgetting files in iwd's naming. QEMU has no Wi-Fi, so iwd itself is not exercised in CI.
+- **Alternatives:** `iwctl`'s text output; an iwd agent answering passphrase requests over D-Bus; a page inside Settings.
+
 ---
 
 ## Open questions (the owner will be asked before the milestone that needs each one)

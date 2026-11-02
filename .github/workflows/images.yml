@@ -12,6 +12,8 @@ on:
       - "crates/termos-image/**"
       - "crates/termos-cli/src/kms/**"
       - "crates/termos-cli/src/update.rs"
+      - "crates/termos-cli/src/install.rs"
+      - "crates/termos-cli/src/tryboot.rs"
       - "crates/termos-render/src/raster/**"
       - "xtask/**"
       - ".github/workflows/images.yml"
@@ -80,11 +82,12 @@ jobs:
         with:
           path: target/image/dl
           key: buildroot-dl-${{ matrix.target }}-${{ github.run_id }}-${{ github.run_attempt }}
-      # Every firmware boots the image; on x86_64 (KVM) the same disk then
-      # goes through an A/B update and a failed one (D-078).
+      # Every firmware boots the image. On x86_64 (KVM) the same disk then
+      # goes through an A/B update and a failed one (D-078), and the live
+      # ISO installs onto an empty disk, which then boots alone (D-080).
       - name: Boot in QEMU
         if: matrix.target == 'x86_64' || matrix.target == 'aarch64-virt'
-        run: cargo xtask image boot ${{ matrix.target }} --firmware all ${{ matrix.target == 'x86_64' && '--update' || '' }}
+        run: cargo xtask image boot ${{ matrix.target }} --firmware all ${{ matrix.target == 'x86_64' && '--update --install' || '' }}
       - name: Pack
         if: always()
         run: |
@@ -93,6 +96,7 @@ jobs:
           if [ -f target/image/${{ matrix.target }}/images/disk.img ]; then
             zstd -q -T0 -10 target/image/${{ matrix.target }}/images/disk.img -o dist/termos-${{ matrix.target }}.img.zst
           fi
+          cp target/image/${{ matrix.target }}/images/termos-${{ matrix.target }}.iso dist/ 2>/dev/null || true
           # The update bundle (signed with this run's development keys).
           cp target/image/${{ matrix.target }}/images/termos-${{ matrix.target }}-*.raucb dist/ 2>/dev/null || true
           rm -f dist/*-update-test.raucb dist/*-broken.raucb

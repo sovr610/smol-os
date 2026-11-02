@@ -70,12 +70,19 @@ pub fn firmware_file(q: &Qemu, f: Firmware) -> Result<Option<PathBuf>, String> {
         .ok_or_else(|| format!("no UEFI firmware for {}: install it or set {var}", q.system))
 }
 
-/// QEMU's command line. `disk` is a qcow2 overlay; `cfg` are the `fw_cfg`
-/// requests (`opt/termos/<name>`).
+/// A machine's disk (qcow2) and CD (the live ISO).
+#[derive(Debug, Clone, Copy)]
+pub struct Media<'a> {
+    pub disk: &'a Path,
+    pub cdrom: Option<&'a Path>,
+}
+
+/// QEMU's command line. `cfg` are the `fw_cfg` requests
+/// (`opt/termos/<name>`).
 pub fn qemu_args(
     q: &Qemu,
     firmware: Option<&Path>,
-    disk: &Path,
+    media: Media<'_>,
     serial_log: &Path,
     dir: &Path,
     cfg: &[(&str, String)],
@@ -99,7 +106,21 @@ pub fn qemu_args(
     }
     a.extend([
         "-drive".into(),
-        format!("file={},format=qcow2,if=virtio", disk.display()),
+        format!("file={},format=qcow2,if=virtio", media.disk.display()),
+    ]);
+    // The live ISO, started from first (the disk is empty).
+    if let Some(iso) = media.cdrom {
+        a.extend([
+            "-drive".into(),
+            format!(
+                "file={},media=cdrom,if=none,id=cd,readonly=on",
+                iso.display()
+            ),
+            "-device".into(),
+            "ide-cd,drive=cd,bootindex=0".into(),
+        ]);
+    }
+    a.extend([
         "-vga".into(),
         "none".into(),
         "-device".into(),
@@ -227,6 +248,7 @@ struct Machine<'a> {
     q: Qemu,
     firmware_file: Option<PathBuf>,
     disk: PathBuf,
+    cdrom: Option<PathBuf>,
     dir: &'a Path,
     kvm: bool,
 }
@@ -316,7 +338,20 @@ impl<'a> Machine<'a> {
             kvm: kvm_usable(&q),
             q,
             disk,
+            cdrom: None,
             dir,
+        })
+    }
+
+    /// Another firmware, the same disk.
+    fn with_firmware(&self, firmware: Firmware) -> Result<Self, String> {
+        Ok(Self {
+            firmware_file: firmware_file(&self.q, firmware)?,
+            kvm: self.kvm,
+            q: self.q,
+            disk: self.disk.clone(),
+            cdrom: self.cdrom.clone(),
+            dir: self.dir,
         })
     }
 
@@ -338,7 +373,10 @@ impl<'a> Machine<'a> {
         let args = qemu_args(
             &self.q,
             self.firmware_file.as_deref(),
-            &self.disk,
+            Media {
+                disk: &self.disk,
+                cdrom: self.cdrom.as_deref(),
+            },
             &log,
             self.dir,
             cfg,
@@ -584,6 +622,127 @@ pub fn update_test(
     Ok(steps)
 }
 
+/// How big the empty disk of the install test is.
+pub const INSTALL_DISK_GIB: u64 = 8;
+
+/// The install test (D-080): the live ISO boots (UEFI) with an empty disk
+/// and installs onto it; the ISO also boots with SeaBIOS; then the disk
+/// boots alone, with UEFI and with BIOS, to the desktop, its data partition
+/// grown to the disk and slot A marked good.
+pub fn install_test(images: &Path, t: &Target, dir: &Path) -> Result<Vec<String>, String> {
+    let iso = images.join(format!("termos-{}.iso", t.name));
+    if !iso.is_file() {
+        return Err(format!("no live ISO at {}", iso.display()));
+    }
+    let q = t
+        .qemu
+        .ok_or_else(|| format!("{} has no QEMU machine", t.name))?;
+    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    let disk = dir.join("disk-install.qcow2");
+    let _ = std::fs::remove_file(&disk);
+    let made = Command::new("qemu-img")
+        .args(["create", "-q", "-f", "qcow2"])
+        .arg(&disk)
+        .arg(format!("{INSTALL_DISK_GIB}G"))
+        .status()
+        .map_err(|e| format!("cannot run qemu-img (qemu-utils): {e}"))?;
+    if !made.success() {
+        return Err("qemu-img create failed".into());
+    }
+    let live = Machine {
+        firmware_file: firmware_file(&q, Firmware::Uefi)?,
+        kvm: kvm_usable(&q),
+        q,
+        disk: disk.clone(),
+        cdrom: Some(iso),
+        dir,
+    };
+    let (_, ready_timeout) = live.timing();
+    let mut steps = Vec::new();
+    // The ISO with SeaBIOS: the live desktop comes up.
+    if q.firmwares.contains(&Firmware::Bios) {
+        let bios = live.with_firmware(Firmware::Bios)?;
+        let mut run = bios.start("live-bios", &[])?;
+        run.wait(
+            "TERMOS-READY from the ISO with SeaBIOS",
+            ready_timeout,
+            serial::ready,
+        )
+        .map_err(|e| run.failed(dir, "live-bios", e))?;
+        screenshot(dir, "live-bios").map_err(|e| run.failed(dir, "live-bios", e))?;
+        run.quit(dir);
+        steps.push("the ISO booted to the live desktop with SeaBIOS".into());
+    }
+    // The ISO with UEFI installs onto the empty disk and turns off.
+    let mut run = live.start(
+        "live-install",
+        &[("boottest", "5".into()), ("boottest-install", "vda".into())],
+    )?;
+    run.wait("TERMOS-READY from the ISO", ready_timeout, serial::ready)
+        .map_err(|e| run.failed(dir, "live-install", e))?;
+    screenshot(dir, "live-uefi").map_err(|e| run.failed(dir, "live-install", e))?;
+    let done = run
+        .wait(
+            "TERMOS-INSTALL (termos install)",
+            Duration::from_secs(600),
+            serial::install_done,
+        )
+        .map_err(|e| run.failed(dir, "live-install", e))?;
+    if !done {
+        return Err(run.failed(dir, "live-install", "`termos install` failed".into()));
+    }
+    run.wait_exit("power-off after installing", Duration::from_secs(120))
+        .map_err(|e| run.failed(dir, "live-install", e))?;
+    steps.push(format!(
+        "the ISO installed TermOS onto an empty {INSTALL_DISK_GIB} GiB disk (UEFI)"
+    ));
+    // The disk alone, with each firmware.
+    let installed = Machine {
+        cdrom: None,
+        ..live
+    };
+    for f in q.firmwares {
+        let m = installed.with_firmware(*f)?;
+        let name = format!("installed-{}", f.name());
+        let mut run = m.start(&name, &[("boottest", "10".into())])?;
+        run.wait(
+            "TERMOS-READY from the installed disk",
+            ready_timeout,
+            serial::ready,
+        )
+        .map_err(|e| run.failed(dir, &name, e))?;
+        let slot = run
+            .wait("TERMOS-SLOT", Duration::from_secs(120), serial::slot)
+            .map_err(|e| run.failed(dir, &name, e))?;
+        let data = run
+            .wait("TERMOS-DATA", Duration::from_secs(120), serial::data_kb)
+            .map_err(|e| run.failed(dir, &name, e))?;
+        screenshot(dir, &name).map_err(|e| run.failed(dir, &name, e))?;
+        run.quit(dir);
+        if slot.slot != "A" || !slot.good {
+            return Err(format!(
+                "the installed disk ({}): {slot:?}, expected slot A marked good",
+                f.name()
+            ));
+        }
+        // The image's data partition is 512 MiB; the disk leaves it
+        // about INSTALL_DISK_GIB minus the system's 1.6 GiB.
+        if data < (INSTALL_DISK_GIB - 3) * 1024 * 1024 {
+            return Err(format!(
+                "the installed disk ({}): the data partition is {} MiB, not grown to the disk",
+                f.name(),
+                data / 1024
+            ));
+        }
+        steps.push(format!(
+            "the installed disk booted alone ({}): slot A good, data partition {} MiB",
+            f.name(),
+            data / 1024
+        ));
+    }
+    Ok(steps)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -595,7 +754,10 @@ mod tests {
         let a = qemu_args(
             &q,
             Some(Path::new("/fw/QEMU_EFI.fd")),
-            Path::new("/w/disk-uefi.qcow2"),
+            Media {
+                disk: Path::new("/w/disk-uefi.qcow2"),
+                cdrom: None,
+            },
             Path::new("/w/serial-uefi.log"),
             Path::new("/w"),
             &[
@@ -629,7 +791,10 @@ mod tests {
         let b = qemu_args(
             &x,
             None,
-            Path::new("/d"),
+            Media {
+                disk: Path::new("/d"),
+                cdrom: Some(Path::new("/i/termos.iso")),
+            },
             Path::new("/w/serial-bios.log"),
             Path::new("/w"),
             &[("boottest", "30".into())],
@@ -641,6 +806,10 @@ mod tests {
             "{bs}"
         );
         assert!(!b.iter().any(|a| a == "-bios"), "SeaBIOS is the default");
+        assert!(
+            bs.contains("file=/i/termos.iso,media=cdrom,if=none,id=cd,readonly=on -device ide-cd,drive=cd,bootindex=0"),
+            "{bs}"
+        );
         assert_eq!(firmware_file(&x, Firmware::Bios), Ok(None));
     }
 

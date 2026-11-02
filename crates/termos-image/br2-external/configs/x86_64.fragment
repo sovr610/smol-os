@@ -14,3 +14,8 @@ BR2_TARGET_GRUB2_BUILTIN_MODULES_EFI="boot linux ext2 fat squash4 part_msdos par
 # A/B updates (D-078): grub-editenv on the system, for RAUC's GRUB backend
 # (the rest of GRUB's tools are removed after the build).
 BR2_TARGET_GRUB2_INSTALL_TOOLS=y
+# The live ISO (D-080): the root file system again as an initramfs, and
+# xorriso to make the ISO after the disk image.
+BR2_TARGET_ROOTFS_CPIO=y
+BR2_TARGET_ROOTFS_CPIO_ZSTD=y
+BR2_PACKAGE_HOST_XORRISO=y

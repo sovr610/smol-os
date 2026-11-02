@@ -12,6 +12,7 @@ publish.workspace = true
 
 [dependencies]
 pulldown-cmark.workspace = true
+secrecy.workspace = true
 ratatui-core.workspace = true
 termos-core.workspace = true
 termos-hw.workspace = true
@@ -20,6 +21,9 @@ toml_edit.workspace = true
 trash.workspace = true
 tracing.workspace = true
 unicode-width.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+zbus.workspace = true
 
 [dev-dependencies]
 insta.workspace = true

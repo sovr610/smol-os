@@ -76,3 +76,36 @@ genimage \
 	--inputpath "$BINARIES_DIR" \
 	--outputpath "$BINARIES_DIR" \
 	--config "$BOARD_DIR/genimage.cfg"
+
+# The x86_64 live ISO (D-080): GRUB for BIOS (El Torito, and an MBR for USB
+# sticks) and UEFI, the kernel, the root file system as an initramfs, and
+# the disk image `termos install` writes. Buildroot's own ISO step runs
+# before this script, so before the disk image exists.
+if [ "$BOARD" = x86_64 ]; then
+	ISO="$BUILD_DIR/termos-iso"
+	rm -rf "$ISO"
+	mkdir -p "$ISO/boot/grub" "$ISO/termos"
+	cp "$BINARIES_DIR/bzImage" "$ISO/boot/bzImage"
+	cp "$BINARIES_DIR/rootfs.cpio.zst" "$ISO/boot/initrd.img"
+	cp "$BOARD_DIR/live-grub.cfg" "$ISO/boot/grub/grub.cfg"
+	zstd -q -f -T0 -10 "$BINARIES_DIR/disk.img" -o "$ISO/termos/disk.img.zst"
+	stat -c %s "$BINARIES_DIR/disk.img" >"$ISO/termos/disk.img.size"
+	cp "$TARGET_DIR/etc/termos/version" "$ISO/termos/version"
+	GRUB_PC=$(echo "$BUILD_DIR"/grub2-*/build-i386-pc/grub-core)
+	GRUB_EFI=$(echo "$BUILD_DIR"/grub2-*/build-x86_64-efi/grub-core)
+	"$HOST_DIR/bin/grub-mkimage" -d "$GRUB_PC" -O i386-pc-eltorito \
+		-o "$ISO/boot/grub/eltorito.img" -p /boot/grub -c "$BOARD_DIR/live-early.cfg" \
+		biosdisk iso9660 part_msdos normal linux search search_label configfile echo test
+	"$HOST_DIR/bin/grub-mkimage" -d "$GRUB_EFI" -O x86_64-efi \
+		-o "$BUILD_DIR/live-bootx64.efi" -p /boot/grub -c "$BOARD_DIR/live-early.cfg" \
+		iso9660 part_msdos part_gpt fat normal linux search search_label configfile echo test efi_gop
+	rm -f "$ISO/boot/efi.img"
+	mkdosfs -n TERMOSEFI -C "$ISO/boot/efi.img" 4096 >/dev/null
+	mmd -i "$ISO/boot/efi.img" ::/EFI ::/EFI/BOOT
+	mcopy -i "$ISO/boot/efi.img" "$BUILD_DIR/live-bootx64.efi" ::/EFI/BOOT/BOOTX64.EFI
+	"$HOST_DIR/bin/xorriso" -as mkisofs -quiet -r -J -V TERMOS_LIVE \
+		-b boot/grub/eltorito.img -no-emul-boot -boot-load-size 4 -boot-info-table \
+		--grub2-boot-info --grub2-mbr "$GRUB_PC/boot_hybrid.img" \
+		--efi-boot boot/efi.img -efi-boot-part --efi-boot-image --protective-msdos-label \
+		-o "$BINARIES_DIR/termos-x86_64.iso" "$ISO"
+fi

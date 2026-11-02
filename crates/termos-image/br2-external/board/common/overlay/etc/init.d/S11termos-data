@@ -26,6 +26,14 @@ grow() {
 
 start() {
 	udevadm settle 2>/dev/null
+	# The live ISO (D-080) keeps nothing and touches no disk, not even a
+	# TermOS one already in the machine.
+	if grep -q 'termos\.live' /proc/cmdline; then
+		echo "termos: running from the live ISO: nothing will be kept"
+		mount -t tmpfs -o mode=0755 data /data
+		data_binds
+		return
+	fi
 	mount -t vfat -o noatime,umask=0077 /dev/disk/by-partuuid/7e57c0de-01 /boot/esp 2>/dev/null ||
 		echo "termos: no boot partition on /boot/esp"
 	GROWN=
@@ -37,11 +45,15 @@ start() {
 		[ -z "$GROWN" ] || resize2fs "$GROWN" >/dev/null 2>&1 ||
 			echo "termos: could not grow the data file system"
 	else
-		# No data partition (the live ISO, a new disk layout, or a broken
+		# No data partition (a new disk layout, or a broken
 		# one): keep going in memory rather than formatting anything by guess.
 		echo "termos: no $DATA_LABEL partition: nothing will be kept"
 		mount -t tmpfs -o mode=0755 data /data
 	fi
+	data_binds
+}
+
+data_binds() {
 	mkdir -p /data/home/termos /data/iwd /data/dbus /data/dhcpcd /data/rauc \
 		/data/dev-rootfs /data/models /data/containers
 	chown termos:termos /data/home/termos

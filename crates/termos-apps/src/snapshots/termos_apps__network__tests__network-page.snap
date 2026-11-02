@@ -1,0 +1,18 @@
+---
+source: crates/termos-apps/src/network.rs
+expression: render(&mut page)
+---
+ Connections
+   eth0      wired   connected       10.0.2.15/24  fec0::5054:ff:fe12:
+   wlan0     Wi-Fi   not connected
+
+ Wi-Fi (wlan0: disconnected)
+   Home                      WPA     ▂▄▆█  saved
+   Library                   open    ▂▄▆
+   Neighbours                WPA     ▂
+
+
+
+
+
+ ↑↓ choose · Enter join · d forget · r scan · Esc close

@@ -21,6 +21,7 @@ pub mod files;
 pub mod image_viewer;
 pub mod markdown;
 pub mod monitor;
+pub mod network;
 pub mod settings;
 
 pub use clipboard::ClipboardManager;
@@ -28,6 +29,7 @@ pub use files::FileManager;
 pub use image_viewer::ImageViewer;
 pub use markdown::MarkdownViewer;
 pub use monitor::SystemMonitor;
+pub use network::NetworkPage;
 pub use settings::Settings;
 
 // TODO(M5b): package manager UI over mise, the dev rootfs and the host package manager.

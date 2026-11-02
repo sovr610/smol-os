@@ -19,9 +19,10 @@ define TERMOS_INSTALL_TARGET_CMDS
 endef
 
 # The console runs as `termos`; seatd lets the group `seat` have the
-# display and input devices.
+# display and input devices, and iwd's D-Bus policy lets `netdev` read
+# and scan Wi-Fi (the Network app, D-081).
 define TERMOS_USERS
-	termos -1 termos -1 ! /home/termos /bin/sh seat,video,input,audio TermOS
+	termos -1 termos -1 ! /home/termos /bin/sh seat,video,input,audio,netdev TermOS
 endef
 
 $(eval $(generic-package))

@@ -18,6 +18,7 @@ use std::time::{Duration, Instant};
 
 pub mod accel;
 mod gpu;
+pub mod net;
 #[cfg(any(target_os = "linux", windows))]
 mod nvidia;
 pub mod sysfs;

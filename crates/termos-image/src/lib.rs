@@ -36,4 +36,3 @@ pub mod qmp;
 
 // TODO(M9): the live ISO and `termos install` (D-080).
 // TODO(M9): grow the data partition to the whole disk on first boot.
-// TODO(M9): the network settings page (iwd for Wi-Fi, dhcpcd), as D-072 decided.

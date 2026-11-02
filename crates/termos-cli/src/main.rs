@@ -12,12 +12,14 @@
 mod agents;
 mod client;
 mod images;
+mod install;
 #[cfg(all(target_os = "linux", feature = "kms"))]
 mod kms;
 mod models;
 mod probe;
 mod tryboot;
 mod update;
+mod wifi;
 
 use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
@@ -190,6 +192,8 @@ enum Cmd {
         #[command(subcommand)]
         action: models::ModelsCmd,
     },
+    /// From the live ISO: install TermOS onto a whole disk (D-080).
+    Install(install::InstallArgs),
     /// Updates on a TermOS image: check GitHub Releases, install into the
     /// other root slot, restart (D-078).
     Update {
@@ -367,6 +371,7 @@ fn main() -> ExitCode {
         Some(Cmd::Sandbox { action }) => agents::sandbox_command(action, &paths),
         Some(Cmd::Model { action }) => models::model_command(action, &paths, &config_path),
         Some(Cmd::Models { action }) => models::models_command(action, &paths, &config_path),
+        Some(Cmd::Install(args)) => install::install_command(args),
         Some(Cmd::Update { action }) => update::update_command(action, &paths),
         Some(Cmd::System { action }) => update::system_command(action),
         Some(Cmd::Debug {
@@ -509,6 +514,7 @@ fn run(cli: &Cli, paths: &Paths, config_path: &Path, t: &Target) -> anyhow::Resu
             | Cmd::Sandbox { .. }
             | Cmd::Model { .. }
             | Cmd::Models { .. }
+            | Cmd::Install(_)
             | Cmd::Update { .. }
             | Cmd::System { .. },
         ) => Ok(ExitCode::SUCCESS),
