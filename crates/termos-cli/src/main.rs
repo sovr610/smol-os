@@ -170,6 +170,8 @@ enum LangCmd {
     /// Pin a language version for the project in a folder (writes
     /// `mise.toml`).
     Use {
+        /// The language (`termos lang list` shows them), with a version
+        /// for its runtime if you want one.
         #[arg(value_name = "LANG[@VERSION]")]
         lang: String,
         /// The project folder (default: the current one).
@@ -180,6 +182,8 @@ enum LangCmd {
     /// servers and debugger.
     #[command(alias = "rm")]
     Remove {
+        /// The language (`termos lang list` shows them), with a version
+        /// for its runtime if you want one.
         #[arg(value_name = "LANG[@VERSION]")]
         lang: String,
     },
@@ -188,6 +192,8 @@ enum LangCmd {
     /// servers in TermOS's Neovim and its debugger (what the language CI
     /// runs).
     Check {
+        /// The language (`termos lang list` shows them), with a version
+        /// for its runtime if you want one.
         #[arg(value_name = "LANG[@VERSION]")]
         lang: String,
         /// Where to create the project (new or empty). By default a

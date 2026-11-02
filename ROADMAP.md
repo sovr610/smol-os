@@ -20,7 +20,7 @@ questions (DECISIONS.md, "Open questions").
 | M3.5 | Native Windows and CI test builds (D-035 to D-041) | 🔍 |
 | M4a | Graphics and themes: capability probe, images, themes, animations, Kitty keyboard (D-042 to D-049) | 🔍 |
 | M4b | Apps, `termos-hw`, WASM widgets (D-042, D-050 to D-052) | 🔍 |
-| M5a | Languages and editors: `termos lang` (mise), managed Neovim/Helix with LSP and DAP, templates, task panels, Git UI (D-053) | 🚧 |
+| M5a | Languages and editors: `termos lang` (mise), managed Neovim/Helix with LSP and DAP, templates, task panels, Git UI (D-053 to D-057) | 🔍 |
 | M5b | Dev rootfs, Podman, package manager app (D-053) | ⏳ |
 | M6 | AI agents | ⏳ |
 | M7 | Local models | ⏳ |
@@ -445,17 +445,74 @@ For the WASM widgets commit, 13 of the 14 CI jobs passed, including the Windows 
 ---
 
 ## M5a — Languages and editors
-**Status:** 🚧 · Owner answers: M5 is split (D-053); O-3 → lazygit, embedded (D-053); TermOS uses the mise on `PATH` or fetches a pinned, checksummed one (D-053); the full language matrix runs nightly and on developer-environment changes (D-053).
+**Status:** 🔍 done, awaiting review · Owner answers: M5 is split (D-053); O-3 → lazygit, embedded (D-053); TermOS uses the mise on `PATH` or fetches a pinned, checksummed one (D-053); the full language matrix runs nightly and on developer-environment changes (D-053). Design: D-053 to D-057, ARCHITECTURE.md §10, §14, §16 and §17; user guide [languages.md](docs/languages.md).
 
 **Deliverables**
-- **Toolchains:** `termos lang install|use|list|remove <lang>[@version]` over mise, with per-project versions (`mise.toml`, `.tool-versions`); TermOS panes find the installed tools.
-- **Editor:** a managed Neovim config (D-012) with LSP for every listed language (ARCHITECTURE.md §10) and DAP; a Helix `languages.toml`; servers and debuggers installed with each language.
-- **Panels:** the Git UI (lazygit), `termos new <template>`, and build/run/test panels from project detection and `[tasks]` in a project `termos.toml`.
-- **Docs:** `docs/languages.md`, listing which languages and tools are unavailable on which architecture.
+- **mise** (D-053):
+  - [x] The `mise` on `PATH` when it is 2025.10.0 or newer (or `TERMOS_MISE`), else mise 2026.10.14 fetched from GitHub with the system's `curl` and checked against SHA-256 sums compiled into TermOS (Linux, macOS and Windows, x64 and arm64)
+  - [x] TermOS panes get mise's shims at the front of `PATH`
+- **Toolchains** (D-054):
+  - [x] `termos lang install|use|list|remove <lang>[@version]` for Rust, C, C++, Zig, Go, Python, Java, Kotlin, C#/.NET, Node, Bun, Deno, HTML/CSS, Lua and shell; servers and debuggers installed with each language; per-project versions in `mise.toml` (or `.tool-versions`)
+  - [x] Platform limits that name the tool: `termos lang install` leaves it out and says why (clangd on aarch64 Linux)
+- **Editor** (D-012, D-054):
+  - [x] TermOS's Neovim (0.12.6, `NVIM_APPNAME=termos-nvim`): every installed server through `vim.lsp`, started by `mise exec` with exact versions and the runtime line it was installed with; nvim-dap with nvim-dap-ui (pinned through `vim.pack`) for delve, codelldb, debugpy, js-debug and netcoredbg; `lua/user.lua` is the user's
+  - [x] Helix's `languages.toml` (or `languages.termos.toml` beside the user's own)
+  - [x] `termos edit` and `[dev] editor = auto | termos-nvim | helix | env`, also in Settings and the file manager
+- **Panels** (D-055):
+  - [x] `termos create <template> [dir]` (named so because `termos new` makes sessions): one template per language, with a `mise.toml` pinning the installed version
+  - [x] Build, run and test from project detection and `[tasks]` in a project `termos.toml`: `termos task`, and `task.build|run|test` / `task NAME` panels at the bottom of the screen
+  - [x] The Git UI: `git.open` (prefix `g`) opens lazygit, installed through mise, in a float
+- **Acceptance test and CI** (D-056):
+  - [x] `termos lang check <lang>`: install, create the template, build, run (output checked) and test it, TermOS's Neovim until every server for the main file completes LSP `initialize`, and the debugger's DAP `initialize`
+  - [x] `.github/workflows/languages.yml`: every language on ubuntu-24.04 and ubuntu-24.04-arm, nightly, on developer-environment changes and on demand; ci.yml runs Rust, Python and Go on every push
+- **Docs:**
+  - [x] [languages.md](docs/languages.md), with which tools are unavailable on which architecture
 
 **Acceptance:** for each language on x86_64 and aarch64 (where supported), CI installs it with mise, builds and runs a hello-world, and completes a headless `nvim` LSP initialize handshake (nightly and on developer-environment changes; a quick subset on every push).
 
-**Demo:** `termos lang install go`, `termos new go-cli demo`, then edit in Neovim with diagnostics and a breakpoint.
+**Acceptance results** (`termos lang check` in the language CI, `languages.yml`; each job fetches mise and checks it, installs the language, creates its template, builds, runs and tests it, then completes the LSP and DAP handshakes):
+
+| Language | Language servers (LSP `initialize`) | Debugger (DAP `initialize`) | Linux x86_64 | Linux aarch64 |
+| --- | --- | --- | --- | --- |
+| Rust | rust-analyzer | codelldb | ✓ | ✓ |
+| C, C++ | clangd | codelldb | ✓ | ✓, without clangd (no aarch64 build; reported as skipped) |
+| Zig | zls | codelldb | ✓ | ✓ |
+| Go | gopls | delve | ✓ | ✓ |
+| Python | basedpyright, ruff | debugpy | ✓ | ✓ |
+| Java | jdtls 1.63.0 | — | ✓ | ✓ |
+| Kotlin | kotlin-language-server (on Java 21) | — | ✓ | ✓ |
+| C# / .NET | csharp-ls | netcoredbg | ✓ | ✓ |
+| Node, Bun | vtsls | js-debug | ✓ | ✓ |
+| Deno | `deno lsp` | — | ✓ | ✓ |
+| HTML, CSS | vscode-html-language-server (for the template's `index.html`) | — | ✓ | ✓ (no build or run step: a page) |
+| Lua | lua-language-server | — | ✓ | ✓ |
+| Shell | bash-language-server | — | ✓ | ✓ |
+
+Rust, Python and Go also pass in ci.yml's quick subset on every push.
+
+**What CI found on the way** (each fixed before this review):
+- js-debug's releases have no per-platform asset: its spec now picks the DAP server tarball.
+- mise's `http:` backend cannot resolve `latest`: jdtls is pinned to a milestone.
+- jdtls 1.63.0 needs Java 25 although its launcher checks for 21: Java is now Temurin 25, and servers start with the runtime line they were installed with (D-057).
+- kotlin-language-server 1.3.13 cannot run on Java 25: Kotlin keeps Temurin 21, which no longer replaces a Java default the user already has (D-057).
+- A server that died before initializing kept the check waiting until its timeout: server exits now end the wait.
+- A WASM widget test assumed it would see exactly `🍅 0:59` (aarch64 runners can land the first tick late).
+
+**What the tests cover**
+- **Unit:** finding mise (version floor, the fetched copy, checksums); `termos lang` against a recording mise (global runtime and helpers, servers installed, failures reported, platform limits); `mise ls --json`; the generated Neovim and Helix configs (snapshot), exact versions, filetypes merged for shared servers, and the runtime line a server was installed with; templates (pins, `mise trust`, generators, not over a project); task detection for every project kind and `termos.toml` overrides; the check's build, run and test steps, skips and failures; DAP framing (events first, refusals, closed streams, oversized frames) and a DAP handshake over a socket.
+- **CLI, against a stand-in mise:** `termos lang install|list`, `termos edit` starting TermOS's Neovim, `termos create` and `termos task`, and `termos lang check` from start to finish, including a failure that keeps the project.
+- **Desktop:** task panels and the Git UI run the `termos` binary in panes.
+- **Not covered here:** interactive editing (completion, diagnostics, stepping through code) is not tested; the handshakes show the servers and debuggers start with TermOS's config. macOS and Windows run the unit and CLI tests but not the language matrix.
+
+**Demo:** `termos lang install go`, `termos create go-cli demo`, then edit in Neovim with diagnostics and a breakpoint.
+
+What was shown, and where:
+
+1. **Live, Linux, in an isolated `tmux -L termos-m5a` with its own TermOS home** (no mise on `PATH`, nothing downloaded):
+   - `termos create --list` shows the 15 templates; `termos create shell-script hello-sh` writes `main.sh`; in it, `termos task` lists `run` (`sh main.sh`) and `test` (`shellcheck main.sh`), and `termos task run` prints `Hello from hello-sh!` and `✓ run finished`.
+   - On the desktop, in a Cargo project: `termos msg task.build` opens "task: build" at the bottom of the screen with real `cargo build` output and `✓ build finished`, and waits for Enter; `task.test` and `task.run` (`Hello, world`) open their own panels; `task.run` again replaces its panel (the session still has five panes).
+2. **The Go part, by CI.** This sandbox refuses to run downloaded programs (mise, Neovim, lazygit), so `termos lang install go` and the editor were not run here. The `go` jobs of the language CI show the rest on both architectures: mise fetched and checked, Go, gopls and delve installed, `go-cli` created, built, run and tested, gopls initialized in TermOS's Neovim, delve answering DAP `initialize`.
+3. **Not shown:** diagnostics and a breakpoint in an interactive Neovim. The handshakes above are what the acceptance asks for; for the owner to try: `termos lang install go`, `termos create go-cli demo`, `termos edit demo/main.go`, break a line, then `F9` on another and `F5`.
 
 ---
 
