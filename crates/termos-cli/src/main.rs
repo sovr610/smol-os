@@ -16,6 +16,7 @@ mod images;
 mod kms;
 mod models;
 mod probe;
+mod update;
 
 use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
@@ -188,6 +189,18 @@ enum Cmd {
         #[command(subcommand)]
         action: models::ModelsCmd,
     },
+    /// Updates on a TermOS image: check GitHub Releases, install into the
+    /// other root slot, restart (D-078).
+    Update {
+        #[command(subcommand)]
+        action: update::UpdateCmd,
+    },
+    /// The root side of updates and installs, run through sudo (D-078).
+    #[command(hide = true)]
+    System {
+        #[command(subcommand)]
+        action: update::SystemCmd,
+    },
     /// Diagnostics.
     #[command(hide = true)]
     Debug {
@@ -353,6 +366,8 @@ fn main() -> ExitCode {
         Some(Cmd::Sandbox { action }) => agents::sandbox_command(action, &paths),
         Some(Cmd::Model { action }) => models::model_command(action, &paths, &config_path),
         Some(Cmd::Models { action }) => models::models_command(action, &paths, &config_path),
+        Some(Cmd::Update { action }) => update::update_command(action, &paths),
+        Some(Cmd::System { action }) => update::system_command(action),
         Some(Cmd::Debug {
             what: DebugCmd::Caps { raw },
         }) => debug_caps(*raw),
@@ -492,7 +507,9 @@ fn run(cli: &Cli, paths: &Paths, config_path: &Path, t: &Target) -> anyhow::Resu
             | Cmd::Audit { .. }
             | Cmd::Sandbox { .. }
             | Cmd::Model { .. }
-            | Cmd::Models { .. },
+            | Cmd::Models { .. }
+            | Cmd::Update { .. }
+            | Cmd::System { .. },
         ) => Ok(ExitCode::SUCCESS),
     }
 }

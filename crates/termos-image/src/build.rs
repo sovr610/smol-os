@@ -322,11 +322,44 @@ pub fn build(p: &Paths, t: &Target, legal_info: bool) -> Result<PathBuf, String>
         .map_err(|e| format!("LICENSE: {e}"))?;
     // A new binary each time: let the package pick it up again.
     run(make(p, t).arg("termos-dirclean"))?;
-    run(&mut make(p, t))?;
+    // The post-build script writes the version and the keyring into the
+    // image (D-078).
+    let keys = crate::keys::ensure(&p.work.join("keys"))?;
+    let version = version()?;
+    run(make(p, t)
+        .env("TERMOS_IMAGE_VERSION", &version)
+        .env("TERMOS_RAUC_KEYRING", &keys.keyring))?;
     if legal_info {
         run(make(p, t).arg("legal-info"))?;
     }
+    // Its update bundle, as releases carry it.
+    let bundle = crate::bundle::make(p, t, &keys, &crate::bundle::Variant::default())?;
+    println!("image: the update bundle is {}", bundle.display());
     Ok(p.images(t))
+}
+
+/// The version images are built as: `TERMOS_IMAGE_VERSION` (releases set
+/// it from their tag), else the workspace's.
+pub fn version() -> Result<String, String> {
+    let v = std::env::var("TERMOS_IMAGE_VERSION")
+        .ok()
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| env!("CARGO_PKG_VERSION").to_owned());
+    check_version(&v)?;
+    Ok(v)
+}
+
+/// A version goes into file names, manifests and boot scripts: digits,
+/// letters, `.`, `+` and `-` only, starting with a digit.
+pub fn check_version(v: &str) -> Result<(), String> {
+    let ok = v.starts_with(|c: char| c.is_ascii_digit())
+        && v.chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '+' | '-'));
+    if ok {
+        Ok(())
+    } else {
+        Err(format!("`{v}` is not a version (like 0.2.0 or 0.2.0-rc.1)"))
+    }
 }
 
 #[cfg(test)]
@@ -346,6 +379,16 @@ mod tests {
         );
         assert_eq!(parse_cross("TARGET_CROSS=\n"), None);
         assert_eq!(parse_cross(""), None);
+    }
+
+    #[test]
+    fn versions_are_plain() {
+        for good in ["0.2.0", "0.2.0-rc.1", "1.0.0+update-test"] {
+            assert!(check_version(good).is_ok(), "{good}");
+        }
+        for bad in ["", "v0.2.0", "0.2 0", "0.2;rm", "0.2/../x"] {
+            assert!(check_version(bad).is_err(), "{bad}");
+        }
     }
 
     #[test]

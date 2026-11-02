@@ -1,13 +1,21 @@
 #!/bin/sh
-# The QEMU boot test (D-076) asks, through fw_cfg, for the memory in use
-# once the desktop has settled (the value is how many seconds to wait).
-# Other boots skip this.
+# The QEMU boot tests (D-076, D-078, D-080) ask through fw_cfg; other boots
+# skip this. `opt/termos/boottest` is how many seconds to let the desktop
+# settle before reporting the memory in use and the data partition's size;
+# `opt/termos/boottest-update`, if given, is a bundle's URL for
+# `termos update`, installed as the desktop's user, which then restarts.
 
 [ "$1" = start ] || exit 0
-f=/sys/firmware/qemu_fw_cfg/by_name/opt/termos/boottest/raw
-[ -r "$f" ] || exit 0
+cfg=/sys/firmware/qemu_fw_cfg/by_name/opt/termos
+[ -r "$cfg/boottest/raw" ] || exit 0
 (
-	sleep "$(cat "$f")"
+	sleep "$(cat "$cfg/boottest/raw")"
 	awk '/^MemTotal:/ { t = $2 } /^MemAvailable:/ { a = $2 }
-		END { printf "TERMOS-MEM used_kb=%d total_kb=%d\n", t - a, t }' /proc/meminfo > /dev/console
+		END { printf "TERMOS-MEM used_kb=%d total_kb=%d\n", t - a, t }' /proc/meminfo >/dev/console
+	df -k /data | awk 'NR == 2 { printf "TERMOS-DATA size_kb=%d\n", $2 }' >/dev/console
+	if [ -r "$cfg/boottest-update/raw" ]; then
+		url=$(cat "$cfg/boottest-update/raw")
+		su -s /bin/sh -c "termos update install --yes --restart '$url'" termos >/dev/console 2>&1 ||
+			echo "TERMOS-UPDATE failed" >/dev/console
+	fi
 ) &

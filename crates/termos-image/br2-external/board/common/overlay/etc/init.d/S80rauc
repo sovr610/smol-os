@@ -1,0 +1,27 @@
+#!/bin/sh
+# RAUC's service (D-078): installs update bundles into the other root slot
+# and records which slots are good, for `termos system`. Not started when
+# the system runs from the live ISO, which has no slots.
+
+PIDFILE=/run/rauc.pid
+
+case "$1" in
+start)
+	grep -q 'rauc\.slot=' /proc/cmdline || exit 0
+	printf "Starting rauc: "
+	mkdir -p /data/rauc /run/rauc
+	start-stop-daemon -S -b -m -p "$PIDFILE" -x /usr/bin/rauc -- service && echo OK || echo FAIL
+	;;
+stop)
+	printf "Stopping rauc: "
+	start-stop-daemon -K -p "$PIDFILE" && echo OK || echo FAIL
+	;;
+restart)
+	"$0" stop
+	"$0" start
+	;;
+*)
+	echo "Usage: $0 {start|stop|restart}"
+	exit 1
+	;;
+esac

@@ -1,0 +1,26 @@
+#!/bin/sh
+# A/B updates (D-078): the booted slot is good once the console's first
+# frame is on the screen (the console leaves /run/termos/console-ready). If
+# that does not happen within five minutes, the slot is bad and the machine
+# restarts, and the boot loader takes the other slot.
+
+[ "$1" = start ] || exit 0
+slot=$(sed -n 's/.*rauc\.slot=\([A-Z]\).*/\1/p' /proc/cmdline)
+[ -n "$slot" ] || exit 0
+version=$(cat /etc/termos/version)
+ready=/run/termos/console-ready
+
+(
+	i=0
+	while [ ! -e "$ready" ] && [ "$i" -lt 300 ]; do
+		sleep 1
+		i=$((i + 1))
+	done
+	if [ -e "$ready" ] && rauc status mark-good booted >/dev/null; then
+		echo "TERMOS-SLOT slot=$slot version=$version good" >/dev/console
+	else
+		echo "TERMOS-SLOT slot=$slot version=$version bad: the console did not start; restarting" >/dev/console
+		rauc status mark-bad booted >/dev/null
+		reboot
+	fi
+) &

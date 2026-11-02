@@ -6,7 +6,16 @@ BOARD=$2
 BOARD_DIR="$BR2_EXTERNAL_TERMOS_PATH/board/$BOARD"
 case "$BOARD" in rpi*) BOARD_DIR="$BR2_EXTERNAL_TERMOS_PATH/board/rpi" ;; esac
 
-# The boot partition's files, gathered in one folder.
+# GRUB's environment block (D-078): 1024 bytes, padded with '#'. The first
+# boot takes slot A, which is good; slot B is empty until an update.
+write_grubenv() {
+	printf '# GRUB Environment Block\nORDER=A B\nA_OK=1\nA_TRY=0\nB_OK=0\nB_TRY=0\n' >"$1"
+	head -c $((1024 - $(wc -c <"$1"))) /dev/zero | tr '\0' '#' >>"$1"
+}
+
+# The boot partition's files, gathered in one folder. On a PC or a UEFI
+# machine that is GRUB, its configuration and its environment; the kernels
+# are inside the root slots.
 ESP="$BINARIES_DIR/esp"
 rm -rf "$ESP"
 mkdir -p "$ESP"
@@ -16,7 +25,7 @@ x86_64)
 	cp "$BINARIES_DIR/efi-part/EFI/BOOT/bootx64.efi" "$ESP/EFI/BOOT/"
 	cp "$BOARD_DIR/grub.cfg" "$ESP/EFI/BOOT/grub.cfg"
 	cp "$BOARD_DIR/grub.cfg" "$ESP/boot/grub/grub.cfg"
-	cp "$BINARIES_DIR/bzImage" "$ESP/"
+	write_grubenv "$ESP/grubenv"
 	# GRUB's BIOS first stage, for the MBR; the package leaves it in its
 	# build folder (its core image, grub.img, is in the images already).
 	cp "$BUILD_DIR"/grub2-*/build-i386-pc/grub-core/boot.img "$BINARIES_DIR/boot.img"
@@ -25,7 +34,7 @@ aarch64-virt)
 	mkdir -p "$ESP/EFI/BOOT"
 	cp "$BINARIES_DIR/efi-part/EFI/BOOT/bootaa64.efi" "$ESP/EFI/BOOT/"
 	cp "$BOARD_DIR/grub.cfg" "$ESP/EFI/BOOT/grub.cfg"
-	cp "$BINARIES_DIR/Image" "$ESP/"
+	write_grubenv "$ESP/grubenv"
 	;;
 rpi*)
 	cp -r "$BINARIES_DIR"/rpi-firmware/* "$ESP/"

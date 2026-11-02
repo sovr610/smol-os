@@ -10,7 +10,7 @@
 //!   keystroke latency, idle CPU over `secs` (default 60), memory, floods.
 //! - `widgets`     — build the sample WASM widget and refresh the test
 //!   fixture `crates/termos-shell/tests/fixtures/pomodoro.wasm`.
-//! - `image build|boot <target>` — bare-metal images with Buildroot and
+//! - `image build|bundle|boot <target>` — bare-metal images with Buildroot and
 //!   their QEMU boot test (Linux; see termos-image, D-074 to D-076).
 
 mod markers;
@@ -36,7 +36,8 @@ Commands:
                   target) and refresh its test fixture
   image build TARGET [--legal-info]
                   Build a bare-metal image with Buildroot (Linux)
-  image boot TARGET [--firmware uefi|bios|all]
+  image boot TARGET [--firmware uefi|bios|all] [--update]
+  image bundle TARGET [--version V] [--broken]
                   Boot it in QEMU: ready marker, screenshot, memory
   image list      The image targets
   help            Show this message
@@ -300,7 +301,9 @@ fn image(args: &[String]) -> Result<()> {
     use termos_image::targets::{self, Firmware};
     use termos_image::{boot, build};
     let paths = build::Paths::new(&repo::root());
-    let (cmd, rest) = args.split_first().ok_or("image: build, boot or list")?;
+    let (cmd, rest) = args
+        .split_first()
+        .ok_or("image: build, bundle, boot or list")?;
     if cmd == "list" {
         for t in targets::TARGETS {
             let how = if t.qemu.is_some() {
@@ -328,6 +331,19 @@ fn image(args: &[String]) -> Result<()> {
             println!("xtask: the image is {}", images.join("disk.img").display());
             Ok(())
         }
+        "bundle" => {
+            let keys = termos_image::keys::ensure(&paths.work.join("keys"))?;
+            let variant = termos_image::bundle::Variant {
+                version: value("--version").cloned(),
+                broken: flag("--broken"),
+            };
+            if let Some(v) = &variant.version {
+                build::check_version(v)?;
+            }
+            let out = termos_image::bundle::make(&paths, t, &keys, &variant)?;
+            println!("xtask: the bundle is {}", out.display());
+            Ok(())
+        }
         "boot" => {
             let q = t
                 .qemu
@@ -352,20 +368,51 @@ fn image(args: &[String]) -> Result<()> {
                     }
                 };
                 println!(
-                    "xtask: {} ({}): ready after {:.1}s; screen: {} colours, status bar {:?}; {} MiB of {} MiB in use",
+                    "xtask: {} ({}): ready after {:.1}s; screen: {} colours, status bar {:?}; {} MiB of {} MiB in use; data partition {} MiB",
                     t.name,
                     f.name(),
                     r.ready_after.as_secs_f32(),
                     r.screen.colours,
                     r.screen.status_bar,
                     r.memory.used_kb / 1024,
-                    r.memory.total_kb / 1024
+                    r.memory.total_kb / 1024,
+                    r.data_kb / 1024
                 );
                 failed.extend(
                     r.problems()
                         .into_iter()
                         .map(|p| format!("{} ({}): {p}", t.name, f.name())),
                 );
+            }
+            // The A/B update test (D-078), on the first firmware.
+            if flag("--update") {
+                let f = q.firmwares[0];
+                let keys = termos_image::keys::ensure(&paths.work.join("keys"))?;
+                let new_version = format!(
+                    "{}-update-test",
+                    termos_image::bundle::image_version(&paths, t)?
+                );
+                let make = |version: Option<String>, broken: bool| {
+                    termos_image::bundle::make(
+                        &paths,
+                        t,
+                        &keys,
+                        &termos_image::bundle::Variant { version, broken },
+                    )
+                };
+                let bundles = boot::UpdateBundles {
+                    new: make(Some(new_version.clone()), false)?,
+                    new_version,
+                    broken: make(None, true)?,
+                };
+                match boot::update_test(&paths.images(t), t, f, &dir, &bundles) {
+                    Ok(steps) => {
+                        for s in steps {
+                            println!("xtask: {} ({}) update: {s}", t.name, f.name());
+                        }
+                    }
+                    Err(e) => failed.push(format!("{} ({}) update: {e}", t.name, f.name())),
+                }
             }
             println!("xtask: logs and screenshots in {}", dir.display());
             if failed.is_empty() {
@@ -374,7 +421,9 @@ fn image(args: &[String]) -> Result<()> {
                 Err(failed.join("\n").into())
             }
         }
-        other => Err(format!("unknown image command `{other}`: build, boot or list").into()),
+        other => {
+            Err(format!("unknown image command `{other}`: build, bundle, boot or list").into())
+        }
     }
 }
 

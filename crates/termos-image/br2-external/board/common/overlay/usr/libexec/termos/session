@@ -9,6 +9,13 @@ mkdir -p "$run"
 chown termos:termos "$run"
 chmod 0700 "$run"
 
+# The console leaves a file here after its first frame; S98termos-slot
+# then marks the booted slot good (D-078).
+mkdir -p /run/termos
+chown termos:termos /run/termos
+rm -f /run/termos/console-ready
+export TERMOS_READY_FILE=/run/termos/console-ready
+
 export HOME=/home/termos USER=termos LOGNAME=termos SHELL=/bin/sh
 export PATH=/usr/bin:/bin:/usr/sbin:/sbin
 export XDG_RUNTIME_DIR="$run"

@@ -333,6 +333,13 @@ impl Console {
             let mut out = io::stdout();
             let _ = writeln!(out, "{READY}");
             let _ = out.flush();
+            // On an image, the boot script marking the slot good waits
+            // for this file (D-078).
+            if let Some(file) = std::env::var_os("TERMOS_READY_FILE")
+                && let Err(e) = std::fs::write(&file, b"")
+            {
+                tracing::warn!("cannot write {}: {e}", Path::new(&file).display());
+            }
         }
         if self.display.behind() && self.active {
             self.display.present(&self.screen.pixels, None)?;

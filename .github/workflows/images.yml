@@ -11,6 +11,7 @@ on:
     paths:
       - "crates/termos-image/**"
       - "crates/termos-cli/src/kms/**"
+      - "crates/termos-cli/src/update.rs"
       - "crates/termos-render/src/raster/**"
       - "xtask/**"
       - ".github/workflows/images.yml"
@@ -57,7 +58,7 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq build-essential rsync bc cpio unzip file wget python3 \
-            qemu-system-x86 qemu-system-arm ovmf qemu-efi-aarch64
+            qemu-system-x86 qemu-system-arm qemu-utils ovmf qemu-efi-aarch64
           # QEMU may use KVM (x86_64 guests on this runner).
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm.rules
           sudo udevadm control --reload-rules
@@ -79,9 +80,11 @@ jobs:
         with:
           path: target/image/dl
           key: buildroot-dl-${{ matrix.target }}-${{ github.run_id }}-${{ github.run_attempt }}
+      # Every firmware boots the image; on x86_64 (KVM) the same disk then
+      # goes through an A/B update and a failed one (D-078).
       - name: Boot in QEMU
         if: matrix.target == 'x86_64' || matrix.target == 'aarch64-virt'
-        run: cargo xtask image boot ${{ matrix.target }} --firmware all
+        run: cargo xtask image boot ${{ matrix.target }} --firmware all ${{ matrix.target == 'x86_64' && '--update' || '' }}
       - name: Pack
         if: always()
         run: |
@@ -90,6 +93,9 @@ jobs:
           if [ -f target/image/${{ matrix.target }}/images/disk.img ]; then
             zstd -q -T0 -10 target/image/${{ matrix.target }}/images/disk.img -o dist/termos-${{ matrix.target }}.img.zst
           fi
+          # The update bundle (signed with this run's development keys).
+          cp target/image/${{ matrix.target }}/images/termos-${{ matrix.target }}-*.raucb dist/ 2>/dev/null || true
+          rm -f dist/*-update-test.raucb dist/*-broken.raucb
           # The license report (manifests and license texts) without the
           # source archives it gathers, about 1 GB: those are Buildroot's
           # downloads, kept in the cache above.

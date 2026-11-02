@@ -1,0 +1,3 @@
+# TermOS (D-078): the desktop's user reaches root only through
+# `termos system`, which does a fixed set of things with checked arguments.
+termos ALL=(root) NOPASSWD: /usr/bin/termos system *
