@@ -729,6 +729,55 @@ rewrite history.
 - **Decision:** TermOS installs `github:ggml-org/llama.cpp[asset_pattern=…]@<build>` with the build pinned in `termos_models::llama::VERSION` (`b11960`, v0.8.0's), which TermOS moves as it is tested, as for jdtls (D-057). `[models] llama-cpp-version` installs another build. CI prints the pinned build's assets.
 - **Alternatives:** resolving "the newest nightly with our asset" at run time (an untested llama.cpp on every machine, and a GitHub API call TermOS would make itself); reading `nightly-tag.txt` from the latest release (the same, one step removed).
 
+## D-072: Bare-metal choices for M8: swash, BusyBox init, iwd + dhcpcd, GRUB2
+- **Status:** Accepted (owner: O-9, O-10, O-11, O-14, the recommended answers) · 2026-11-02
+- **Decision:**
+  - **O-9, font rasterizer: swash.** Hinted outlines from TrueType/OpenType fonts, in pure Rust; bold from a bold face or by emboldening, italic by slanting. Box drawing, block elements and braille are drawn from geometry, so borders join exactly at cell edges. DejaVu Sans Mono (regular and bold, unmodified, Bitstream Vera license) is built into the KMS build so the console always has a font.
+  - **O-10, init: BusyBox init.** `/etc/inittab` starts the boot scripts, then respawns TermOS's console on tty1; seatd, eudev and the network are plain init scripts. Moving to s6 later stays possible.
+  - **O-11, networking: iwd + dhcpcd.** iwd (over D-Bus) for Wi-Fi, dhcpcd for addresses on wired and Wi-Fi links. A TermOS network settings page drives them.
+  - **O-14, aarch64 UEFI bootloader: GRUB2,** as on x86_64, so both share one boot configuration and, in M9, one A/B fallback scheme (the GRUB environment).
+
+## D-073: The bare-metal console is `termos --kms`, a client drawing with a CPU rasterizer
+- **Status:** Accepted (lead; implements ARCHITECTURE.md §5.9) · 2026-11-02
+- **Decision:**
+  - **A client, not part of the server.** `termos --kms` connects to the server like the terminal client (starting one if needed) and attaches to the session `main`. If it crashes, the session goes on, and the next one (init respawns it) picks it up.
+  - **Drawing:** `termos_render::raster` (feature `raster`) paints the cells a frame changed into a CPU framebuffer (`0x00RRGGBB`), with a glyph cache of cell-sized coverage masks. Two DRM dumb buffers take turns; each records the rows it missed, and only those are copied before a page flip. That works with every KMS driver (virtio-gpu, simpledrm, i915, amdgpu, vc4/v3d) and needs no GPU code. A full 1080p repaint takes about 7 ms on one x86 core; typing repaints one row. The mouse pointer uses the legacy hardware cursor ioctls where the driver has a cursor plane.
+  - **Devices:** libseat (seatd in the images, logind elsewhere) opens the DRM and input devices without root, takes them away on a VT switch (Ctrl+Alt+F<n>) and gives them back (a full repaint). libinput reads keyboards and mice (through udev); XKB turns keys into characters with `[kms] keyboard-layout`, `-variant` and `-options`; key repeat is ours (`repeat-delay`, `repeat-rate`), on a timer only while a key is held.
+  - **Fonts and size:** `[kms] font`, `bold-font` and `fallback-fonts`, else the built-in DejaVu Sans Mono (D-072). `font-size` is in pixels at 96 dpi, scaled in quarter steps for the monitor's density; Ctrl+= and Ctrl+- change it while running (Ctrl+0 resets), and the desktop is resized to fit.
+  - **Colours:** default foreground `#d0d0d0`, background `#14161b` (reported to the server as the background, so the `auto` theme is dark), the VGA palette.
+  - **Ready marker:** after its first frame is on the screen, the console prints `TERMOS-READY` on its standard output; the image's session script sends that to the system console, where the QEMU boot tests wait for it (D-076).
+  - **The feature:** termos-cli's `kms` feature (Linux only) links libinput, libudev, libxkbcommon and libseat, so it is off in the hosted builds and on in the images; CI installs the libraries so `--all-features` covers it. `--kms` in a build without it says so.
+  - **Not yet:** images are shown as blocks rather than pixels, there is no clipboard of the console's own and the bell is silent (`TODO(M9)`).
+- **Alternatives:** the server driving the display itself (a display bug would take every session down); OpenGL ES through EGL/GBM (a GPU stack in the image for drawing text, and no output on simpledrm); the kernel's fbdev (deprecated, no page flips); a pure-Rust evdev reader instead of libinput (no pointer acceleration, touchpads or quirks).
+
+## D-074: How images are built: Buildroot board defconfigs plus TermOS fragments, termos built outside Buildroot
+- **Status:** Accepted (lead; refines D-014, D-015 for images) · 2026-11-02
+- **Decision:**
+  - **Buildroot 2026.02.1** (the 2026.02 LTS line), downloaded by `cargo xtask image build` and checked against a pinned SHA-256; until the hash is pinned the build stops and prints the download's hash next to buildroot.org's signed list.
+  - **Each target is a Buildroot board defconfig plus TermOS fragments** (`crates/termos-image/br2-external/configs/`): `pc_x86_64_efi`, `aarch64_efi`, `raspberrypi5`, `raspberrypi4_64`, `raspberrypi3_64` and `raspberrypizero2w_64`. Buildroot keeps those boards building; the fragments add the Bootlin prebuilt glibc toolchain (D-014), BusyBox init, eudev, the packages, the overlay and the partition layout. Kconfig drops unknown or unmet settings silently, so after `olddefconfig` every fragment setting is checked and a dropped one stops the build by name.
+  - **`termos` is built by cargo, not by Buildroot:** Buildroot's Rust is older than the workspace's. After `make termos-depends` (the toolchain and libinput, libxkbcommon, libseat and libudev in the sysroot), cargo builds `termos-cli` with the `kms` feature in release, with Buildroot's GCC as linker and C compiler and its pkg-config for the sysroot. A small `termos` package installs that binary. This replaces cargo-zigbuild (D-015) for images only: the console links C libraries that only the image's sysroot has.
+  - **Tooling:** `crates/termos-image` is std-only (targets, the Buildroot driver, fragment checks, the QEMU harness), so `xtask` can depend on it and stay free of crates.io dependencies (D-020). `cargo xtask image list|build|boot`.
+  - **CI:** `.github/workflows/images.yml` builds and boots the x86_64 and aarch64 virt images when the image, the console or the workflow changes, weekly and on demand (the Pi images on demand), and keeps the images, screenshots, serial logs and `legal-info` as artifacts.
+- **Alternatives:** full TermOS defconfigs (copies of each board's settings to keep in step with Buildroot by hand); Buildroot's cargo package infrastructure (its Rust is too old); building with zigbuild against the sysroot (glibc symbol versions from two places).
+
+## D-075: The image's layout and boot: a read-only root in slot A, a data partition, BusyBox init into the console
+- **Status:** Accepted (lead; implements ARCHITECTURE.md §13 for M8) · 2026-11-02
+- **Decision:**
+  - **Partitions (MBR, disk signature `7e57c0de`):** 1. boot (the EFI system partition, FAT; on a Pi, the firmware's partition), 2. root slot A (squashfs, read-only), 3. root slot B (empty until M9's updates), 4. data (ext4, label `termos-data`). The kernel lives on the boot partition and mounts `root=PARTUUID=7e57c0de-02`.
+  - **x86_64 boots both ways from one disk:** GRUB's `boot.img` in the MBR and its core image in the gap before the first partition for BIOS; the EFI system partition (type 0xEF, which UEFI firmware accepts on MBR disks) for UEFI. One `grub.cfg` serves both. aarch64 uses GRUB's EFI build (D-072). A hybrid ISO comes with the M9 releases.
+  - **Boot:** BusyBox init runs the boot scripts (eudev, dbus, iwd, dhcpcd from their packages; TermOS's `S11termos-data` and `S70seatd`), then respawns `/usr/libexec/termos/session` on tty1: `termos --kms` as the user `termos` (groups `seat`, `video`, `input`), its output sent to the system console.
+  - **Data:** `S11termos-data` mounts the data partition on `/data` and binds `/data/home` on `/home` and `/data/iwd` on `/var/lib/iwd`; it creates `dev-rootfs`, `models` and `containers` for later milestones. Without the partition it runs from memory rather than formatting a disk by guess. Growing the data partition to the whole disk on first boot is M9 work.
+  - **Kernel:** a fragment on top of each board's configuration: KMS drivers (virtio-gpu, simpledrm, bochs; vc4/v3d on a Pi), virtio input, squashfs, ext4, FAT, `fw_cfg` in sysfs, user namespaces and Landlock, and the crypto iwd uses.
+- **Alternatives:** GPT (BIOS boot from GPT needs `grub-bios-setup` to patch sector numbers, which an image generator cannot do); the kernel inside the root slot (GRUB reading squashfs; postponed to the A/B work, where it pays off); systemd (D-072).
+
+## D-076: The QEMU boot test
+- **Status:** Accepted (lead; implements ARCHITECTURE.md §13's tests) · 2026-11-02
+- **Decision:** `cargo xtask image boot <target>` boots the image on a throwaway snapshot with virtio-gpu as the only display, a virtio keyboard and tablet, and the serial console in a log; x86_64 with OVMF and with SeaBIOS (KVM where available), aarch64 virt with AAVMF. It passes when:
+  1. the console prints `TERMOS-READY` once its first frame is on the screen;
+  2. a QMP `screendump` shows the desktop: not blank, with a status bar band at the bottom (kept as a PNG);
+  3. `MemTotal − MemAvailable`, reported by the image after it settles, is under 150 MB (D-019). QEMU asks for that report through `fw_cfg` (`opt/termos/boottest`, the seconds to wait), so test runs use the same image as everyone else.
+- **Not covered:** latency on a Pi 4 (measured on hardware by the owner); input in the image beyond the console starting.
+
 ---
 
 ## Open questions (the owner will be asked before the milestone that needs each one)
@@ -743,9 +792,9 @@ rewrite history.
 | O-6 | llama.cpp integration: a managed `llama-server` subprocess or FFI (`llama-cpp-2`)? | M7 | **Resolved by D-065:** `llama-server` subprocesses. |
 | O-7 | Rust-native inference: ONNX Runtime (`ort`), candle, or both? | M7 | **Resolved by D-065:** candle first (embedding models, D-067). |
 | O-8 | WASM engine for widgets: wasmtime (component model, JIT, larger) or wasmi (interpreter, small)? | M4 | **Resolved by D-042:** wasmtime. |
-| O-9 | KMS font rasterizer: swash or fontdue? | M8 | swash (shaping and hinting quality). |
-| O-10 | Init system: BusyBox init, s6, or systemd? | M8 | BusyBox init or s6, for size. |
-| O-11 | Network management: connman, NetworkManager, or iwd + a small DHCP client? | M8 | iwd + dhcpcd, with a TermOS settings UI. |
+| O-9 | KMS font rasterizer: swash or fontdue? | M8 | **Resolved by D-072:** swash. |
+| O-10 | Init system: BusyBox init, s6, or systemd? | M8 | **Resolved by D-072:** BusyBox init. |
+| O-11 | Network management: connman, NetworkManager, or iwd + a small DHCP client? | M8 | **Resolved by D-072:** iwd + dhcpcd, with a TermOS settings page. |
 | O-12 | A/B updates: RAUC or SWUpdate? | M9 | RAUC (Buildroot package, Pi tryboot support). |
 | O-13 | Hosted Linux binaries: glibc 2.31 floor only, or also static musl? | M9 | Both if musl doesn't hurt performance. |
-| O-14 | Bootloader for generic aarch64 UEFI: GRUB2 or systemd-boot? | M8 | GRUB2, shared with x86_64. |
+| O-14 | Bootloader for generic aarch64 UEFI: GRUB2 or systemd-boot? | M8 | **Resolved by D-072:** GRUB2, shared with x86_64. |

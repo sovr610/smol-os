@@ -15,6 +15,7 @@ termos-ai = { path = "../crates/termos-ai", default-features = false }
 termos-apps = { path = "../crates/termos-apps" }
 termos-core = { path = "../crates/termos-core" }
 termos-hw = { path = "../crates/termos-hw" }
+termos-image = { path = "../crates/termos-image" }
 termos-models = { path = "../crates/termos-models", default-features = false }
 termos-render = { path = "../crates/termos-render" }
 termos-term = { path = "../crates/termos-term" }
@@ -89,6 +90,13 @@ bench = false
 [[bin]]
 name = "gguf_parse"
 path = "fuzz_targets/gguf_parse.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "ppm_parse"
+path = "fuzz_targets/ppm_parse.rs"
 test = false
 doc = false
 bench = false

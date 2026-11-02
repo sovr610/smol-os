@@ -9,8 +9,10 @@ repository.workspace = true
 authors.workspace = true
 publish.workspace = true
 
-# Deliberately std-only so `cargo xtask` builds in seconds.
+# Deliberately std-only so `cargo xtask` builds in seconds: its only
+# dependency is termos-image, which is std-only too (D-020, D-074).
 [dependencies]
+termos-image = { path = "../crates/termos-image" }
 
 [lints]
 workspace = true

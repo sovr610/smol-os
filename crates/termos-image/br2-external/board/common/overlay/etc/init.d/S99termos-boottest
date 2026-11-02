@@ -1,0 +1,13 @@
+#!/bin/sh
+# The QEMU boot test (D-076) asks, through fw_cfg, for the memory in use
+# once the desktop has settled (the value is how many seconds to wait).
+# Other boots skip this.
+
+[ "$1" = start ] || exit 0
+f=/sys/firmware/qemu_fw_cfg/by_name/opt/termos/boottest/raw
+[ -r "$f" ] || exit 0
+(
+	sleep "$(cat "$f")"
+	awk '/^MemTotal:/ { t = $2 } /^MemAvailable:/ { a = $2 }
+		END { printf "TERMOS-MEM used_kb=%d total_kb=%d\n", t - a, t }' /proc/meminfo > /dev/console
+) &

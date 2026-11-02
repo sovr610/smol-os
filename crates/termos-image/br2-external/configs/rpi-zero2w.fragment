@@ -1,0 +1,2 @@
+# rpi-zero2w.
+BR2_ROOTFS_POST_SCRIPT_ARGS="rpi-zero2w"

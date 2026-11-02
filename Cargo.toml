@@ -85,6 +85,11 @@ tracing-appender = "0.2.5"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 unicode-segmentation = "1.13.3"
 unicode-width = "0.2.3"
+swash = "0.2.10"
+drm = "0.15.0"
+input = { version = "0.10.0", default-features = false, features = ["udev", "libinput_1_21"] }
+libseat = "0.2.4"
+xkbcommon = { version = "0.9.0", default-features = false }
 
 # Agents (M6, D-058 to D-064). HTTP clients are our own thin ones over
 # reqwest (O-4 -> D-058); TLS is rustls with ring, installed by termos-ai's

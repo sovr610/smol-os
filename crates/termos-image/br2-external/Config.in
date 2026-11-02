@@ -1,0 +1,1 @@
+source "$BR2_EXTERNAL_TERMOS_PATH/package/termos/Config.in"

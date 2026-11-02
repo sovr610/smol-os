@@ -1,0 +1,24 @@
+config BR2_PACKAGE_TERMOS
+	bool "termos"
+	depends on BR2_ROOTFS_DEVICE_CREATION_DYNAMIC_EUDEV # libinput
+	select BR2_PACKAGE_LIBINPUT
+	select BR2_PACKAGE_LIBXKBCOMMON
+	select BR2_PACKAGE_XKEYBOARD_CONFIG
+	select BR2_PACKAGE_SEATD
+	help
+	  TermOS, a terminal-first desktop. The image boots into its
+	  console (`termos --kms`) on tty1, as the user `termos`.
+
+	  The binary is built outside Buildroot by `cargo xtask image
+	  build`, with TermOS's Rust and this toolchain's sysroot.
+
+	  https://github.com/sovr610/smol-os
+
+if BR2_PACKAGE_TERMOS
+
+config BR2_PACKAGE_TERMOS_PREBUILT_DIR
+	string "folder holding the termos binary"
+	help
+	  Where `cargo xtask image build` put `termos` (and LICENSE).
+
+endif

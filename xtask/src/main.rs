@@ -10,6 +10,8 @@
 //!   keystroke latency, idle CPU over `secs` (default 60), memory, floods.
 //! - `widgets`     — build the sample WASM widget and refresh the test
 //!   fixture `crates/termos-shell/tests/fixtures/pomodoro.wasm`.
+//! - `image build|boot <target>` — bare-metal images with Buildroot and
+//!   their QEMU boot test (Linux; see termos-image, D-074 to D-076).
 
 mod markers;
 mod repo;
@@ -32,6 +34,11 @@ Commands:
                   idle CPU is measured over SECS seconds (default 60)
   widgets         Build the sample WASM widget (needs the wasm32-wasip2
                   target) and refresh its test fixture
+  image build TARGET [--legal-info]
+                  Build a bare-metal image with Buildroot (Linux)
+  image boot TARGET [--firmware uefi|bios|all]
+                  Boot it in QEMU: ready marker, screenshot, memory
+  image list      The image targets
   help            Show this message
 ";
 
@@ -43,6 +50,7 @@ fn main() -> ExitCode {
         Some("todos") => todos(&args[1..]),
         Some("perf") => perf(args.get(1).map(String::as_str)),
         Some("widgets") => widgets(),
+        Some("image") => image(&args[1..]),
         Some("help" | "-h" | "--help") | None => {
             print!("{HELP}");
             Ok(())
@@ -284,6 +292,88 @@ fn perf(idle_secs: Option<&str>) -> Result<()> {
     } else {
         Err(format!("performance budgets not met ({status})").into())
     }
+}
+
+/// `cargo xtask image …`.
+#[cfg(unix)]
+fn image(args: &[String]) -> Result<()> {
+    use termos_image::targets::{self, Firmware};
+    use termos_image::{boot, build};
+    let paths = build::Paths::new(&repo::root());
+    let (cmd, rest) = args.split_first().ok_or("image: build, boot or list")?;
+    if cmd == "list" {
+        for t in targets::TARGETS {
+            let how = if t.qemu.is_some() {
+                "built and booted in CI"
+            } else {
+                "a real board"
+            };
+            println!("{:<12} from Buildroot's {} ({how})", t.name, t.base);
+        }
+        return Ok(());
+    }
+    let name = rest
+        .first()
+        .ok_or("image: which target? (`cargo xtask image list`)")?;
+    let t = targets::find(name)?;
+    let flag = |f: &str| rest.iter().any(|a| a == f);
+    let value = |f: &str| {
+        rest.iter()
+            .position(|a| a == f)
+            .and_then(|i| rest.get(i + 1))
+    };
+    match cmd.as_str() {
+        "build" => {
+            let images = build::build(&paths, t, flag("--legal-info"))?;
+            println!("xtask: the image is {}", images.join("disk.img").display());
+            Ok(())
+        }
+        "boot" => {
+            let q = t
+                .qemu
+                .ok_or_else(|| format!("{} is a real board: no QEMU boot", t.name))?;
+            let firmwares: Vec<Firmware> = match value("--firmware").map(String::as_str) {
+                None | Some("all") => q.firmwares.to_vec(),
+                Some("uefi") => vec![Firmware::Uefi],
+                Some("bios") => vec![Firmware::Bios],
+                Some(other) => {
+                    return Err(format!("no firmware `{other}`: uefi, bios or all").into());
+                }
+            };
+            let dir = paths.work.join(format!("{}-boot", t.name));
+            let mut failed = Vec::new();
+            for f in firmwares {
+                let r = boot::boot(&paths.images(t), t, f, &dir)?;
+                println!(
+                    "xtask: {} ({}): ready after {:.1}s; screen: {} colours, status bar {:?}; {} MiB of {} MiB in use",
+                    t.name,
+                    f.name(),
+                    r.ready_after.as_secs_f32(),
+                    r.screen.colours,
+                    r.screen.status_bar,
+                    r.memory.used_kb / 1024,
+                    r.memory.total_kb / 1024
+                );
+                failed.extend(
+                    r.problems()
+                        .into_iter()
+                        .map(|p| format!("{} ({}): {p}", t.name, f.name())),
+                );
+            }
+            println!("xtask: logs and screenshots in {}", dir.display());
+            if failed.is_empty() {
+                Ok(())
+            } else {
+                Err(failed.join("\n").into())
+            }
+        }
+        other => Err(format!("unknown image command `{other}`: build, boot or list").into()),
+    }
+}
+
+#[cfg(not(unix))]
+fn image(_: &[String]) -> Result<()> {
+    Err("images are built and booted on Linux (Buildroot and QEMU)".into())
 }
 
 fn cargo() -> String {

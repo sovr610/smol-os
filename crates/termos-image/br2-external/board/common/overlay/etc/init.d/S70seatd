@@ -1,0 +1,24 @@
+#!/bin/sh
+# seatd gives the console (user termos, group seat) the display and the
+# input devices, and takes them back on a VT switch.
+
+PIDFILE=/run/seatd.pid
+
+case "$1" in
+start)
+	printf "Starting seatd: "
+	start-stop-daemon -S -b -m -p "$PIDFILE" -x /usr/bin/seatd -- -g seat && echo OK || echo FAIL
+	;;
+stop)
+	printf "Stopping seatd: "
+	start-stop-daemon -K -p "$PIDFILE" && echo OK || echo FAIL
+	;;
+restart)
+	"$0" stop
+	"$0" start
+	;;
+*)
+	echo "Usage: $0 {start|stop|restart}"
+	exit 1
+	;;
+esac

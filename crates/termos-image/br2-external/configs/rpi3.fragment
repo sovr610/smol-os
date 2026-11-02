@@ -1,0 +1,2 @@
+# rpi3.
+BR2_ROOTFS_POST_SCRIPT_ARGS="rpi3"

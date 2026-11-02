@@ -15,9 +15,11 @@ use termos_render::theme::ThemeConfig;
 use crate::input::KeyEvent;
 
 pub mod agents;
+pub mod kms;
 pub mod models;
 
 pub use agents::{AgentsConfig, SecretsConfig};
+pub use kms::KmsConfig;
 pub use models::ModelsConfig;
 
 /// The whole configuration. Every field has a default, so an empty or
@@ -57,6 +59,8 @@ pub struct Config {
     pub secrets: SecretsConfig,
     /// Local models (M7, D-065).
     pub models: ModelsConfig,
+    /// The bare-metal console (M8, D-073).
+    pub kms: KmsConfig,
 }
 
 impl Default for Config {
@@ -83,6 +87,7 @@ impl Default for Config {
             agents: AgentsConfig::default(),
             secrets: SecretsConfig::default(),
             models: ModelsConfig::default(),
+            kms: KmsConfig::default(),
         }
     }
 }
@@ -612,6 +617,18 @@ port = 0                 # the router's port; 0 picks a free one
 # token = "keyring:huggingface"        # gated or private models (or HF_TOKEN)
 # llama-server = "/opt/llama.cpp/build/bin/llama-server"   # your own build
 # memory-budget = "24G"  # loaded models at most (default: 90% of RAM + VRAM)
+
+[kms]
+# The bare-metal console (`termos --kms`, see docs/bare-metal.md).
+font-size = 16.0         # pixels at 96 dpi; Ctrl+= / Ctrl+- / Ctrl+0 while running
+keyboard-layout = "us"   # XKB layout, as for setxkbmap
+keyboard-variant = ""
+keyboard-options = ""    # e.g. "ctrl:nocaps,compose:ralt"
+repeat-delay = 400       # ms before a held key repeats
+repeat-rate = 25         # repeats per second
+# font = "/usr/share/fonts/myfont.ttf"   # default: built-in DejaVu Sans Mono
+# bold-font = "/usr/share/fonts/myfont-bold.ttf"
+# fallback-fonts = ["/usr/share/fonts/noto/NotoSansCJK-Regular.ttc"]
 
 # WASM status-line widgets (see docs/widgets.md). Each runs sandboxed: no
 # network, no files except the folders in `dirs` (read-only).

@@ -11,6 +11,8 @@
 //! - [`caps`], [`probe`]: terminal capability detection, from the
 //!   environment and from the terminal's replies to queries.
 //! - [`color`], [`theme`]: colours, palettes and the desktop's styles.
+//! - `raster` (feature `raster`): the software rasterizer the KMS client
+//!   draws cells with.
 //!
 //! See `ARCHITECTURE.md` §5 for how these fit into the rendering pipeline.
 
@@ -22,6 +24,8 @@ pub mod encode;
 pub mod graphics;
 pub mod grid;
 pub mod probe;
+#[cfg(feature = "raster")]
+pub mod raster;
 pub mod theme;
 
 pub use caps::{Caps, Graphics, ImageProtocol, PxSize};
@@ -31,5 +35,3 @@ pub use diff::Span;
 pub use encode::{CursorShape, CursorState, Encoder};
 pub use grid::{BorderKind, Grid, Rect};
 pub use theme::{Theme, ThemeBase, ThemeColors, ThemeConfig};
-
-// TODO(M8): DRM/KMS backend with font rasterizer and adjustable font size.

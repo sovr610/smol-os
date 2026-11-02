@@ -25,6 +25,10 @@ tls = ["termos-ai/tls", "termos-models/tls"]
 # Embedding models in-process (D-067). Like the others, left out by the
 # clippy check for Windows run from Linux, which builds no default features.
 candle = ["termos-models/candle"]
+# The bare-metal console (D-073): `termos --kms` draws on a DRM display and
+# reads input through libinput. Linux only; links libinput, libudev,
+# libxkbcommon and libseat, so it is on only in the images.
+kms = ["termos-render/raster", "dep:drm", "dep:input", "dep:libseat", "dep:xkbcommon"]
 
 [dependencies]
 anyhow.workspace = true
@@ -40,11 +44,17 @@ termos-hw.workspace = true
 termos-models.workspace = true
 termos-render.workspace = true
 termos-shell.workspace = true
-tokio = { workspace = true, features = ["rt", "macros", "sync", "time"] }
+tokio = { workspace = true, features = ["rt", "macros", "sync", "time", "net"] }
 tracing.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 rustix.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+drm = { workspace = true, optional = true }
+input = { workspace = true, optional = true }
+libseat = { workspace = true, optional = true }
+xkbcommon = { workspace = true, optional = true }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { workspace = true, features = ["Win32_Foundation", "Win32_System_Console"] }

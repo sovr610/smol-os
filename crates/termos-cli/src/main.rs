@@ -12,6 +12,8 @@
 mod agents;
 mod client;
 mod images;
+#[cfg(all(target_os = "linux", feature = "kms"))]
+mod kms;
 mod models;
 mod probe;
 
@@ -66,6 +68,10 @@ struct Cli {
     /// Attach even inside another TermOS pane (nesting).
     #[arg(long, global = true)]
     force: bool,
+    /// Draw on the screen directly (DRM/KMS) instead of in a terminal: the
+    /// bare-metal console. Needs a build with the `kms` feature (Linux).
+    #[arg(long)]
+    kms: bool,
     #[command(subcommand)]
     command: Option<Cmd>,
 }
@@ -380,6 +386,7 @@ fn run(cli: &Cli, paths: &Paths, config_path: &Path, t: &Target) -> anyhow::Resu
         .ok()
         .map(|d| d.display().to_string());
     match &cli.command {
+        None if cli.kms => attach_kms(paths, config_path, t),
         None => {
             let mut hello = Hello::new(ConnKind::Frontend);
             hello.session = Some("main".into());
@@ -1148,6 +1155,46 @@ fn attach(
         }
     }
     Ok(ExitCode::SUCCESS)
+}
+
+/// `termos --kms`: the bare-metal console on the session "main".
+#[cfg(all(target_os = "linux", feature = "kms"))]
+fn attach_kms(paths: &Paths, config_path: &Path, t: &Target) -> anyhow::Result<ExitCode> {
+    ensure_server(paths, t, config_path)?;
+    if let Err(e) = termos_core::log::init_file_logging(&paths.log_dir(), "kms") {
+        eprintln!("termos: logging disabled: {e}");
+    }
+    let config = match Config::load(config_path) {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!("using the default console settings: {e}");
+            Config::default()
+        }
+    };
+    let mut hello = Hello::new(ConnKind::Frontend);
+    hello.session = Some("main".into());
+    hello.create = true;
+    hello.cwd = std::env::var_os("HOME").map(|h| PathBuf::from(h).display().to_string());
+    let runtime = runtime()?;
+    let (_, end) = runtime
+        .block_on(connect_frontend(&t.socket, &hello))
+        .map_err(|e| explain(t, e))?;
+    let ended = runtime
+        .block_on(kms::run(end, &config.kms))
+        .inspect_err(|e| tracing::error!("the console stopped: {e:#}"))?;
+    match ended {
+        client::Ended::Detached(session) => println!("[detached (from session {session})]"),
+        client::Ended::Exited(reason) => println!("[exited: {reason}]"),
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+#[cfg(not(all(target_os = "linux", feature = "kms")))]
+fn attach_kms(_: &Paths, _: &Path, _: &Target) -> anyhow::Result<ExitCode> {
+    bail!(
+        "this build of TermOS has no console of its own: `--kms` is for the bare-metal images \
+         (Linux, built with the `kms` feature)"
+    )
 }
 
 /// `termos ls`.

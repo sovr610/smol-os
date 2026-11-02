@@ -34,8 +34,9 @@ Dependency direction is fixed in ARCHITECTURE.md §4. Never add an edge that poi
 - `cargo run -p termos-cli -- <args>`: run `termos`. With no arguments it starts the desktop, which needs a real terminal.
 - `cargo xtask perf [SECS]`: performance budgets on a release build (Linux), with SECS seconds of idle measurement (default 60).
 - `termos lang check <lang>`: one language from install to the DAP handshake (D-056). It downloads mise and the language's tools, so CI runs it (`.github/workflows/languages.yml`, run on demand with workflow_dispatch); local tests use a stand-in mise through `TERMOS_MISE`.
+- `cargo xtask image list|build <target>|boot <target>`: bare-metal images with Buildroot and their QEMU boot test (Linux; docs/bare-metal.md). Builds take about an hour, so the `images` workflow runs them in CI; `build` needs Buildroot's host tools and the Rust target for the board.
 - `cargo xtask widgets`: rebuild the sample WASM widget and refresh `crates/termos-shell/tests/fixtures/pomodoro.wasm` (needs `rustup target add wasm32-wasip2`). Commit the fixture with the source change; CI rebuilds it and tests the fresh build.
-- `cd fuzz && cargo +nightly fuzz run <target> -- -max_total_time=60`: fuzz a parser. The targets are `vt_advance`, `config_parse`, `keyspec_parse`, `proto_decode`, `caps_reply`, `sixel_decode`, `apc_dcs_intercept`, `markdown_layout`, `sse_parse` and `gguf_parse`.
+- `cd fuzz && cargo +nightly fuzz run <target> -- -max_total_time=60`: fuzz a parser. The targets are `vt_advance`, `config_parse`, `keyspec_parse`, `proto_decode`, `caps_reply`, `sixel_decode`, `apc_dcs_intercept`, `markdown_layout`, `sse_parse`, `gguf_parse` and `ppm_parse`.
 - `INSTA_UPDATE=always cargo test -p <crate>`: write new snapshots; review the `.snap` files before committing.
 - `cargo zigbuild --release -p termos-cli --target aarch64-unknown-linux-gnu.2.31`: cross-build. Needs zig and cargo-zigbuild.
 - `cargo deny check`: licenses, advisories, sources.

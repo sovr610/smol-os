@@ -1,0 +1,3 @@
+# Raspberry Pi (64-bit): Buildroot's board support, TermOS's partitions.
+BR2_TOOLCHAIN_EXTERNAL_BOOTLIN_AARCH64_GLIBC_STABLE=y
+BR2_LINUX_KERNEL_CONFIG_FRAGMENT_FILES="$(BR2_EXTERNAL_TERMOS_PATH)/board/common/linux.fragment $(BR2_EXTERNAL_TERMOS_PATH)/board/rpi/linux.fragment"

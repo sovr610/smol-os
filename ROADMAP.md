@@ -24,7 +24,7 @@ questions (DECISIONS.md, "Open questions").
 | M5b | Dev rootfs, Podman, package manager app (D-053) | ⏳ |
 | M6 | AI agents: providers, agent windows, permissions, sandbox, audit, MCP, external agents, secrets (D-058 to D-064) | 🔍 |
 | M7 | Local models: Hugging Face downloads, fit estimates, llama.cpp, candle embeddings, the router, agents' local provider (D-065 to D-068) | 🔍 |
-| M8 | Bare-metal images | ⏳ |
+| M8 | Bare-metal images | 🚧 |
 | M9 | Polish and release | ⏳ |
 
 Unfinished work in code is always a `TODO(M<n>)` marker (D-018). The
@@ -621,20 +621,29 @@ What was shown, and where (Linux, in an isolated `tmux -L termos-m7` with its ow
 ---
 
 ## M8 — Bare-metal images
-**Status:** ⏳ · **Ask first:** O-9 (font rasterizer), O-10 (init), O-11 (networking), O-14 (aarch64 bootloader).
+**Status:** 🚧 · Owner answers: O-9 → swash; O-10 → BusyBox init; O-11 → iwd + dhcpcd; O-14 → GRUB2 (D-072). Design: D-073 to D-076, ARCHITECTURE.md §5.9 and §13; user guide [bare-metal.md](docs/bare-metal.md).
 
 **Deliverables**
-- **Buildroot:** the external tree in `termos-image` with defconfigs for x86_64 (UEFI + BIOS ISO), aarch64 UEFI, Pi 5, Pi 4, and Pi 3 / Zero 2 W (best effort).
-- **Display:** the DRM/KMS backend with our font rasterizer, adjustable font size and a glyph atlas.
-- **Input and boot:** libinput/xkbcommon input through libseat, and booting straight into TermOS.
-- **Provisioning:** the dev rootfs and the data partition layout.
-- **QEMU boot tests:** x86_64 (OVMF and SeaBIOS) and aarch64 virt in CI, with the serial marker, a screendump check and RAM measurement.
-- **Legal:** a `legal-info` license report.
+- **Buildroot** (D-074): [x] the external tree in `termos-image`: the `termos` package, BusyBox init scripts, the session on tty1, GRUB configs, partition layouts, a kernel fragment; [x] targets for x86_64 (BIOS + UEFI disk image), aarch64 UEFI, Pi 5, Pi 4, and Pi 3 / Zero 2 W (best effort), each Buildroot's board defconfig plus TermOS fragments, checked setting by setting; [ ] the x86_64 ISO (with the M9 releases)
+- **Display** (D-073): [x] the software rasterizer (swash, the built-in DejaVu Sans Mono, a glyph cache, box drawing and blocks from geometry, adjustable and density-scaled size); [x] the DRM/KMS console with double-buffered dumb buffers, page flips and damage-only copies
+- **Input and boot:** [x] libinput + XKB through libseat (layouts, repeat, VT switching, the mouse with a hardware cursor) (D-073); [x] booting straight into the console on tty1 (D-075)
+- **Provisioning** (D-075): [x] the data partition layout (homes and Wi-Fi state on `termos-data`; folders for the dev rootfs, models, containers); [ ] the dev rootfs itself (M5b)
+- **QEMU boot tests** (D-076): [x] `cargo xtask image boot` (x86_64 OVMF and SeaBIOS, aarch64 virt) with the serial marker, a screendump check and RAM measurement; [x] the `images` CI workflow
+- **Legal:** [x] `cargo xtask image build --legal-info`, kept by CI
 
 **Acceptance**
 - CI builds the x86_64 and aarch64 virt images and boots both to `TERMOS-READY`.
 - Idle RAM < 150 MB, measured in QEMU.
 - Pi 4 latency measured on hardware and recorded.
+
+**Acceptance results so far**
+- **The console, booted for real:** the KMS client ran in QEMU here (Ubuntu's kernel and a small initramfs with seatd and udev, not yet a Buildroot image): seatd gave it the seat, it printed `TERMOS-READY` after its first page flip, and the screenshot showed the desktop at 1280×800 with the tutorial. Keys typed through QEMU's virtio keyboard reached a shell, and Ctrl+= twice made the text bigger while the desktop was resized to fit.
+- **The images:** built and booted only by the `images` workflow (this sandbox cannot reach Buildroot's or the kernel's download sites). Its first run pins Buildroot's checksum.
+- **Pi 4 latency:** to be measured by the owner on hardware.
+
+**What the tests cover**
+- **Unit:** the rasterizer (metrics, glyphs, bold, italic, missing glyphs, box drawing that joins across cells, attributes, the cursor, clipping, wide characters); the console's screen (damage, the cursor, resizes), keys through real XKB keymaps (US, German), the mouse, font loading, density scaling; the boot harness (PPM, screenshot checks, PNG, serial markers, QMP against a fake QEMU), fragment checks, targets, QEMU command lines, the cargo environment for cross builds.
+- **Benchmarks:** `raster/full-1080p` (about 7 ms on one x86 core) and `raster/one-row`.
 
 **Demo:** `cargo xtask image build x86_64 && cargo xtask image boot x86_64`
 
@@ -674,12 +683,13 @@ Generated from the `TODO(M<n>)` markers in the code. Don't edit by hand; run `ca
 | --- | --- | --- |
 | M5 | `crates/termos-apps/src/lib.rs` | package manager UI over mise, the dev rootfs and the host package manager. |
 | M5 | `crates/termos-devkit/src/lib.rs` | dev rootfs, Podman and the package manager UI (M5b). |
-| M8 | `crates/termos-image/src/lib.rs` | Buildroot external tree, image build driver, QEMU boot tests for x86_64 and aarch64 virt. |
-| M8 | `crates/termos-render/src/lib.rs` | DRM/KMS backend with font rasterizer and adjustable font size. |
 | M9 | `crates/termos-ai/src/sandbox.rs` | a Windows sandbox for agent commands (an AppContainer or a restricted token); until then every command asks. |
 | M9 | `crates/termos-cli/src/client.rs` | VT input mode on Windows, for bracketed paste and the Kitty keyboard protocol. |
+| M9 | `crates/termos-cli/src/kms/mod.rs` | the console's own clipboard and visual bell; images drawn as pixels rather than as blocks. |
 | M9 | `crates/termos-hw/src/lib.rs` | GPU temperature and power on macOS (SMC), and for non-NVIDIA GPUs on Windows. |
 | M9 | `crates/termos-image/src/lib.rs` | installer and atomic A/B updates. |
+| M9 | `crates/termos-image/src/lib.rs` | grow the data partition to the whole disk on first boot. |
+| M9 | `crates/termos-image/src/lib.rs` | the network settings page (iwd for Wi-Fi, dhcpcd), as D-072 decided. |
 | M9 | `crates/termos-shell/src/desktop.rs` | save and restore app windows (the folder, file or view an app shows) with the session. |
 | M9 | `crates/termos-shell/src/server.rs` | a hidden window for WM_ENDSESSION, so logoff and shutdown always save. |
 | M9 | `crates/termos-term/src/intercept.rs` | images from programs in panes on Windows, where ConPTY can filter APC and DCS sequences out. |

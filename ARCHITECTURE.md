@@ -88,7 +88,7 @@ agents and models. A frontend is only a *client* of the server (D-007).
 
 | Crate | Responsibility | First milestone |
 | --- | --- | --- |
-| `termos-render` | `Grid`/`Cell`/colour, frame diffing, themes, capability detection, backends (terminal, headless, KMS) | M1 |
+| `termos-render` | `Grid`/`Cell`/colour, frame diffing, themes, capability detection, the terminal encoder, the software rasterizer (feature `raster`) | M1 |
 | `termos-core` | tokio event loop and frame scheduler, in-process bus, `Transport`, protocol, config, paths | M1 |
 | `termos-term` | PTY spawning/resizing, `VtBackend` over alacritty_terminal, blitting VT cells into the grid | M1 |
 | `termos-wm` | Window tree, floating + tiling layouts, workspaces, z-order, hit testing, composition of window chrome | M1 |
@@ -97,7 +97,7 @@ agents and models. A frontend is only a *client* of the server (D-007).
 | `termos-devkit` | mise-backed toolchains, Neovim/Helix + LSP/DAP, dev rootfs, Git/build panels | M5 |
 | `termos-ai` | Providers, agent loop, tools, permission engine, sandbox, audit, MCP, secrets | M6 |
 | `termos-models` | HF adapter, fit estimation, inference backends, OpenAI-compatible router | M7 |
-| `termos-image` | Buildroot external tree, image build driver, QEMU boot tests | M8 |
+| `termos-image` | Buildroot external tree, image build driver, QEMU boot tests (std-only, used by `xtask`) | M8 |
 | `termos-cli` | The `termos` binary: server, clients, every subcommand | M0 |
 | `termos-plugin` | Plugin protocol types and a blocking Rust SDK (D-034); WIT definitions for widgets later (M4) | M3 |
 | `termos-hw` | CPU, GPU, memory, temperature, disk, network and process readings (sysinfo plus sysfs and NVML probes, D-050), shared by the system monitor and models | M4 |
@@ -218,10 +218,11 @@ text). For each client and image the desktop decides how to show it:
 - The server uploads each image once per client and size; the client encodes and draws pixel images after the cells. A Sixel or iTerm2 image that moves is painted over by poisoning the client's previous grid, so the next diff redraws those cells.
 - The KMS backend draws images natively (M8).
 
-### 5.9 KMS backend (planned, M8)
-- **Input and buffers:** it consumes the same `Grid` and rasterizes cells into DRM dumb buffers on the CPU (no GPU needed), double-buffered with page flips.
-- **Glyphs:** a glyph atlas cache, a configurable font, and adjustable size for accessibility.
-- **Damage:** only the rectangles of changed cells are re-rasterized.
+### 5.9 KMS console (M8, D-073)
+- **A client:** `termos --kms` (termos-cli's `kms` feature, Linux) attaches to the server like the terminal client and draws its frames itself. It consumes the same `Grid` spans and rasterizes the changed cells on the CPU (`termos_render::raster`) into a framebuffer; two DRM dumb buffers take turns, each copied only the rows it missed, and are shown with page flips. No GPU code: any KMS driver works.
+- **Glyphs:** swash from the configured font (built in: DejaVu Sans Mono), a cache of cell-sized coverage masks, box drawing, blocks and braille drawn from geometry; the size is adjustable (Ctrl+= / Ctrl+-) and scaled for the screen's density.
+- **Devices:** libseat for the display and input devices (VT switches give them up and take them back), libinput and XKB for the keyboard and mouse; the hardware cursor for the pointer.
+- **Damage:** only changed cells are repainted, and only their rows are copied out.
 
 ---
 
@@ -431,26 +432,26 @@ termos-ai holds all of it; the CLI hands the server a launcher for its windows (
 
 ---
 
-## 13. Bare-metal image (M8–M9)
+## 13. Bare-metal image (M8–M9; D-072, D-074–D-076)
 
-- **Build:** Buildroot (a pinned release) as a `BR2_EXTERNAL` tree in `crates/termos-image/br2-external/`, with a glibc toolchain (D-014). TermOS binaries are cross-built with cargo-zigbuild (D-015) and installed by a Buildroot package.
+- **Build (D-074):** Buildroot 2026.02.1 (pinned, checksum-checked) with the `BR2_EXTERNAL` tree in `crates/termos-image/br2-external/`. Each target is one of Buildroot's board defconfigs plus TermOS fragments (the Bootlin glibc toolchain, D-014; packages; overlay; layout); every fragment setting is checked after `olddefconfig`. `termos` (with `kms`) is built by cargo with the pinned Rust, linked by Buildroot's GCC against the image's sysroot, and installed by a small package. `cargo xtask image list|build|boot`.
 - **Targets:**
-  - x86_64: a hybrid UEFI + BIOS ISO (GRUB2) plus a disk image;
-  - generic aarch64 UEFI (O-14);
+  - x86_64: one disk image for BIOS and UEFI (GRUB2);
+  - generic aarch64 UEFI and QEMU `virt` (GRUB2, D-072);
   - Raspberry Pi 5 and 4;
   - Raspberry Pi 3 and Zero 2 W, best effort (all aarch64).
-- **Boot flow:**
-  1. firmware → bootloader → kernel (KMS drivers: i915, amdgpu, virtio-gpu, simpledrm, vc4/v3d);
-  2. init (O-10);
-  3. mounts: a read-only rootfs (squashfs or erofs) plus a read-write data partition;
-  4. eudev, then seatd;
-  5. `termos server --kms` on tty1;
-  6. first-run setup.
-- **Partitions:** boot, rootfs A, rootfs B, data. The data partition holds home, the dev rootfs, models and containers. Updates are atomic A/B (O-12), with signed bundles and bootloader fallback (GRUB environment, Pi tryboot).
-- **QEMU boot tests:** x86_64 (OVMF and SeaBIOS) and aarch64 virt (AAVMF) with virtio-gpu.
+- **Boot flow (D-075):**
+  1. firmware → GRUB2 (a Pi: its firmware) → the kernel on the boot partition (KMS drivers: virtio-gpu, simpledrm, bochs, vc4/v3d; i915 and amdgpu as the board configs have them);
+  2. BusyBox init (D-072);
+  3. mounts: the read-only squashfs root in slot A, the data partition on `/data` (`/home` and iwd's state bound from it);
+  4. eudev, D-Bus, iwd, dhcpcd, seatd;
+  5. `termos --kms` on tty1 as the user `termos`, respawned if it stops;
+  6. first-run setup (the tutorial).
+- **Partitions (MBR):** boot, rootfs A, rootfs B, data (label `termos-data`). The data partition holds home, Wi-Fi networks, and later the dev rootfs, models and containers. Updates (M9) are atomic A/B (O-12), with signed bundles and bootloader fallback (GRUB environment, Pi tryboot).
+- **QEMU boot tests (D-076):** x86_64 (OVMF and SeaBIOS) and aarch64 virt (AAVMF) with virtio-gpu as the only display.
   - TermOS prints `TERMOS-READY` on the serial console after its first frame.
   - The harness takes a QMP `screendump` and checks the desktop's structure: not blank, and the status bar row present.
-  - Idle RAM is measured in the same run (D-019).
+  - Idle RAM is reported by the image after it settles, asked for through `fw_cfg`, and must stay under 150 MB (D-019).
 
 ---
 
@@ -503,10 +504,12 @@ termos-ai holds all of it; the CLI hands the server a launcher for its windows (
   - capability replies (`caps_reply`), Sixel decoding (`sixel_decode`) and the image interceptor (`apc_dcs_intercept`);
   - markdown layout (`markdown_layout`);
   - provider event streams (`sse_parse`);
-  - GGUF headers (`gguf_parse`), with the fit estimate over whatever they claim.
+  - GGUF headers (`gguf_parse`), with the fit estimate over whatever they claim;
+  - QEMU screenshots for the boot tests (`ppm_parse`).
   
   CI runs a timed smoke pass on every push and longer scheduled runs.
-- **QEMU boot tests** (M8).
+- **The KMS console (M8):** the rasterizer against the bundled font (metrics, glyphs, bold and italic, missing glyphs, box drawing joining across cells, attributes, the cursor, clipping, wide characters), a sample screen to look at (`TERMOS_RASTER_PNG`); the console's screen state (damage, the cursor, resizes), keys through real XKB keymaps (US, German), the mouse. A criterion benchmark for full and one-row repaints.
+- **QEMU boot tests** (M8, D-076): `cargo xtask image boot`; the harness's own parts (PPM and screenshot checks, PNG, serial markers, QMP against a fake QEMU, fragment checks) have unit tests.
 - **Gates:** fmt, clippy `-D warnings` on every platform, cargo-deny, and `xtask check-todos`.
 
 ---
@@ -519,11 +522,11 @@ termos-ai holds all of it; the CLI hands the server a launcher for its windows (
   - clippy, tests and a daemon smoke test (`new -d`, `ls`, `msg`, `kill-server`) on x86_64 Linux, aarch64 Linux, macOS arm64 and Windows x86_64; the Linux runners install bubblewrap and require the agent sandbox (D-061);
   - zigbuild cross-builds; a fuzz smoke pass; the performance budgets;
   - the sample WASM widget built from source for `wasm32-wasip2`, with the widget tests run against it;
+  - images (`images.yml`, D-074–D-076): the x86_64 and aarch64 virt images built with Buildroot and booted in QEMU, on changes to the image, the console or the workflow, weekly and on demand (the Pi images on demand), with the images, screenshots, serial logs and the `legal-info` report kept;
   - local models (`models`, D-065–D-068): real pulls from the Hugging Face Hub (a 260K-parameter GGUF and all-MiniLM-L6-v2), llama.cpp's release installed through mise, chat (plain and streamed) and embeddings (semantic similarity checked) through the router, the agents' `local` provider starting it, then stop, `rm` and `gc`;
   - the language CI (D-053, D-056, `languages.yml`): `termos lang check` for every language on ubuntu-24.04 and ubuntu-24.04-arm, nightly, on developer-environment changes and on demand; Rust, Python and Go on x86_64 on every push.
 - **Test builds** on every push (D-041): Linux x86_64/aarch64 (glibc 2.31) and macOS arm64 `.tar.gz`, Windows x86_64 `.zip` (static C runtime), each with a `BUILDINFO.txt`, kept 14 days. The Linux builds are downloaded and smoke-run on matching runners.
 - **Later CI jobs:**
-  - QEMU boots (M8);
   - releases (M9): hosted binaries for x86_64/aarch64 Linux and macOS, an x86_64 ISO, an aarch64 UEFI image, Raspberry Pi `.img` files, checksums and signatures.
 
 ---

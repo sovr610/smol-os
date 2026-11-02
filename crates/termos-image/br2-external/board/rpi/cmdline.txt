@@ -1,0 +1,1 @@
+root=PARTUUID=7e57c0de-02 rootfstype=squashfs ro rootwait quiet loglevel=3 console=tty1 console=serial0,115200

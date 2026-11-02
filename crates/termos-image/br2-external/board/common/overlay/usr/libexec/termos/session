@@ -1,0 +1,16 @@
+#!/bin/sh
+# tty1: TermOS's console, as the user `termos` (D-073, D-075). What it
+# prints (its ready marker, errors) goes to the system console, which is
+# the serial port in the QEMU boot tests.
+
+uid=$(id -u termos)
+run=/run/user/$uid
+mkdir -p "$run"
+chown termos:termos "$run"
+chmod 0700 "$run"
+
+export HOME=/home/termos USER=termos LOGNAME=termos SHELL=/bin/sh
+export PATH=/usr/bin:/bin:/usr/sbin:/sbin
+export XDG_RUNTIME_DIR="$run"
+cd "$HOME" || exit 1
+exec su -p -s /bin/sh -c 'exec /usr/bin/termos --kms' termos > /dev/console 2>&1

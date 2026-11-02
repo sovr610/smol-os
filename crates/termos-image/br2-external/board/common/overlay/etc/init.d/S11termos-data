@@ -1,0 +1,29 @@
+#!/bin/sh
+# The data partition (D-075): homes, iwd's networks, and later the dev
+# rootfs, models and containers. The root file system is read-only.
+
+DATA_LABEL=termos-data
+
+start() {
+	udevadm settle 2>/dev/null
+	dev="/dev/disk/by-label/$DATA_LABEL"
+	if [ -e "$dev" ] && mount -t ext4 -o noatime "$dev" /data; then
+		echo "termos: data on $(readlink -f "$dev")"
+	else
+		# No data partition (a new disk layout, or a broken one): keep
+		# going in memory rather than formatting anything by guess.
+		echo "termos: no $DATA_LABEL partition: nothing will be kept"
+		mount -t tmpfs -o mode=0755 data /data
+	fi
+	mkdir -p /data/home/termos /data/iwd /data/dev-rootfs /data/models /data/containers
+	chown termos:termos /data/home/termos
+	chmod 0700 /data/home/termos
+	mount --bind /data/home /home
+	mount --bind /data/iwd /var/lib/iwd
+}
+
+case "$1" in
+start) start ;;
+stop) ;;
+*) echo "Usage: $0 {start|stop}"; exit 1 ;;
+esac
