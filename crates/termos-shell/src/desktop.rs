@@ -230,6 +230,8 @@ pub enum SessionRequest {
     RestoreDeclined,
     /// Run a plugin's command (`<plugin>.<name>`).
     PluginCommand { name: String },
+    /// A WASM status-line widget was clicked, at this column within it.
+    WidgetClick { name: String, column: u16 },
 }
 
 /// All state of one session: its workspaces and panes, plus the UI state of
@@ -271,6 +273,10 @@ pub struct Desktop {
     /// Status-line widgets and palette commands of plugins (D-034).
     plugin_status: Vec<Cells>,
     plugin_commands: Vec<PluginCommand>,
+    /// WASM widgets' drawings, by name (D-051), after the plugin widgets.
+    wasm_widgets: Vec<(String, Cells)>,
+    /// Both, as the status line draws them.
+    status_widgets: Vec<Cells>,
     dirty: bool,
     /// The workspace/pane structure changed since the last snapshot.
     layout_changed: bool,
@@ -369,6 +375,8 @@ impl Desktop {
             known_sessions: Vec::new(),
             plugin_status: Vec::new(),
             plugin_commands: Vec::new(),
+            wasm_widgets: Vec::new(),
+            status_widgets: Vec::new(),
             dirty: true,
             layout_changed: true,
             quit: None,
@@ -719,9 +727,27 @@ impl Desktop {
     pub fn set_plugin_ui(&mut self, status: Vec<Cells>, commands: Vec<PluginCommand>) {
         if status != self.plugin_status {
             self.plugin_status = status;
-            self.dirty = true;
+            self.rebuild_status_widgets();
         }
         self.plugin_commands = commands;
+    }
+
+    fn rebuild_status_widgets(&mut self) {
+        self.status_widgets = self
+            .plugin_status
+            .iter()
+            .cloned()
+            .chain(self.wasm_widgets.iter().map(|(_, c)| c.clone()))
+            .collect();
+        self.dirty = true;
+    }
+
+    /// The WASM widgets' drawings.
+    pub fn set_wasm_widgets(&mut self, drawn: Vec<(String, Cells)>) {
+        if drawn != self.wasm_widgets {
+            self.wasm_widgets = drawn;
+            self.rebuild_status_widgets();
+        }
     }
 
     /// Something drawn by the desktop changed outside of it (a plugin
@@ -2036,6 +2062,15 @@ impl Desktop {
                     self.session.select(idx);
                 } else if let Some(p) = self.ui.status_regions.minimized_at(m.x, m.y) {
                     self.session.active_mut().toggle_minimize(p);
+                } else if let Some((i, column)) = self.ui.status_regions.widget_at(m.x, m.y)
+                    && let Some((name, _)) = i
+                        .checked_sub(self.plugin_status.len())
+                        .and_then(|j| self.wasm_widgets.get(j))
+                {
+                    self.requests.push(SessionRequest::WidgetClick {
+                        name: name.clone(),
+                        column,
+                    });
                 }
             }
             self.after_focus_change();
@@ -2632,7 +2667,7 @@ impl Desktop {
                 .status
                 .clock
                 .then(|| jiff::Zoned::now().strftime("%H:%M").to_string()),
-            widgets: &self.plugin_status,
+            widgets: &self.status_widgets,
             prompt: self
                 .ui
                 .prompt

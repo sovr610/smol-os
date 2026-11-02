@@ -49,6 +49,8 @@ pub struct StatusRegions {
     /// `(x_start, x_end_exclusive, workspace index)`.
     pub tabs: Vec<(u16, u16, usize)>,
     pub minimized: Vec<(u16, u16, PaneId)>,
+    /// `(x_start, x_end_exclusive, widget index)`: where each widget is.
+    pub widgets: Vec<(u16, u16, usize)>,
 }
 
 impl StatusRegions {
@@ -59,6 +61,18 @@ impl StatusRegions {
                     .iter()
                     .find(|(a, b, _)| x >= *a && x < *b)
                     .map(|t| t.2)
+            })
+            .flatten()
+    }
+
+    /// The widget at (`x`, `y`) and the column within it.
+    pub fn widget_at(&self, x: u16, y: u16) -> Option<(usize, u16)> {
+        (y == self.y)
+            .then(|| {
+                self.widgets
+                    .iter()
+                    .find(|(a, b, _)| x >= *a && x < *b)
+                    .map(|(a, _, i)| (*i, x - a))
             })
             .flatten()
     }
@@ -120,8 +134,11 @@ pub fn draw(
         };
         right.push((text, style));
     }
+    // Which entries of `right` each widget is (for clicks).
+    let mut widget_spans: Vec<(usize, usize)> = Vec::new();
     for widget in info.widgets {
         right.push((" ".into(), theme.status));
+        let first = right.len();
         for (text, style) in widget {
             let mut st = *style;
             if st.fg == termos_render::color::Color::Default {
@@ -132,6 +149,7 @@ pub fn draw(
             }
             right.push((text.clone(), st));
         }
+        widget_spans.push((first, right.len()));
         right.push((" ".into(), theme.status));
     }
     if let Some(clock) = &info.clock {
@@ -189,8 +207,16 @@ pub fn draw(
     }
 
     let mut rx = cols.saturating_sub(right_w);
+    let mut starts = Vec::with_capacity(right.len() + 1);
     for (text, style) in &right {
+        starts.push(rx);
         rx = grid.put_str(rx, y, text, *style, cols);
+    }
+    starts.push(rx);
+    for (i, (first, end)) in widget_spans.into_iter().enumerate() {
+        if first < end {
+            regions.widgets.push((starts[first], starts[end], i));
+        }
     }
     (regions, None)
 }

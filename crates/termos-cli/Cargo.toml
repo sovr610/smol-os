@@ -14,6 +14,12 @@ publish.workspace = true
 name = "termos"
 path = "src/main.rs"
 
+[features]
+default = ["wasm-widgets"]
+# WASM status-line widgets (D-050: in every build; the engine starts only
+# when a widget is configured).
+wasm-widgets = ["termos-shell/wasm-widgets"]
+
 [dependencies]
 anyhow.workspace = true
 clap.workspace = true

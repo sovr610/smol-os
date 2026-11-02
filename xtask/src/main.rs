@@ -8,6 +8,8 @@
 //!   (`--write` updates ROADMAP.md in place).
 //! - `perf [secs]`  — performance budgets on an optimized build (Linux):
 //!   keystroke latency, idle CPU over `secs` (default 60), memory, floods.
+//! - `widgets`     — build the sample WASM widget and refresh the test
+//!   fixture `crates/termos-shell/tests/fixtures/pomodoro.wasm`.
 
 mod markers;
 mod repo;
@@ -28,6 +30,8 @@ Commands:
   todos [--write] Print the open-work table; --write updates ROADMAP.md
   perf [SECS]     Check the performance budgets on a release build (Linux);
                   idle CPU is measured over SECS seconds (default 60)
+  widgets         Build the sample WASM widget (needs the wasm32-wasip2
+                  target) and refresh its test fixture
   help            Show this message
 ";
 
@@ -38,6 +42,7 @@ fn main() -> ExitCode {
         Some("check-todos") => check_repo(),
         Some("todos") => todos(&args[1..]),
         Some("perf") => perf(args.get(1).map(String::as_str)),
+        Some("widgets") => widgets(),
         Some("help" | "-h" | "--help") | None => {
             print!("{HELP}");
             Ok(())
@@ -94,7 +99,8 @@ const MACOS_TARGET: &str = "aarch64-apple-darwin";
 
 /// Crates whose tests are also checked for the other targets. The rest
 /// would pull in benchmark dependencies that need a C compiler for that
-/// target.
+/// target. The WASM widgets are left out the same way (wasmtime builds C
+/// for Windows): the native CI jobs check them.
 const CROSS_TEST_CRATES: &[&str] = &[
     "termos-core",
     "termos-hw",
@@ -121,7 +127,7 @@ fn cross_clippy(root: &Path, target: &str, native: bool) -> Result<()> {
         return Ok(());
     }
     let common = [
-        "--all-features",
+        "--no-default-features",
         "--locked",
         "--target",
         target,
@@ -279,6 +285,42 @@ fn perf(idle_secs: Option<&str>) -> Result<()> {
 
 fn cargo() -> String {
     std::env::var("CARGO").unwrap_or_else(|_| String::from("cargo"))
+}
+
+const WASM_TARGET: &str = "wasm32-wasip2";
+const SAMPLE_WIDGET: &str = "examples/widgets/pomodoro";
+const WIDGET_FIXTURE: &str = "crates/termos-shell/tests/fixtures/pomodoro.wasm";
+
+/// Builds the sample widget for WASI and copies it to the test fixture
+/// (review and commit the result).
+fn widgets() -> Result<()> {
+    let root = repo::root();
+    if !target_installed(WASM_TARGET) {
+        return Err(format!("install the target first: rustup target add {WASM_TARGET}").into());
+    }
+    let manifest = format!("{SAMPLE_WIDGET}/Cargo.toml");
+    run_cargo(
+        &root,
+        &[
+            "build",
+            "--release",
+            "--locked",
+            "--target",
+            WASM_TARGET,
+            "--manifest-path",
+            &manifest,
+        ],
+    )?;
+    let built = root.join(format!(
+        "{SAMPLE_WIDGET}/target/{WASM_TARGET}/release/termos_widget_pomodoro.wasm"
+    ));
+    std::fs::copy(&built, root.join(WIDGET_FIXTURE))?;
+    println!(
+        "xtask: copied {} ({} bytes) to {WIDGET_FIXTURE}",
+        built.display(),
+        std::fs::metadata(&built)?.len()
+    );
+    Ok(())
 }
 
 fn run_cargo(root: &Path, args: &[&str]) -> Result<()> {

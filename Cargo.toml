@@ -54,6 +54,10 @@ portable-pty = "0.9.0"
 # Settings edit config.toml in place, keeping comments.
 toml_edit = "0.25.17"
 trash = { version = "5.2.9", default-features = false, features = ["coinit_apartmentthreaded"] }
+# WASM status-line widgets (D-042, D-051): the component model with
+# cranelift; no parallel compilation (rayon), no GC, no profiling.
+wasmtime = { version = "50.0.1", default-features = false, features = ["async", "component-model", "cranelift", "runtime", "std"] }
+wasmtime-wasi = { version = "50.0.1", default-features = false, features = ["p2"] }
 pulldown-cmark = { version = "0.13.6", default-features = false }
 ratatui-core = { version = "0.1.2", features = ["std"] }
 # CPU, memory, temperatures, disks, network, processes and GPUs; no rayon.

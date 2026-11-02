@@ -1,0 +1,64 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// TermOS status-line widgets as WebAssembly components (DECISIONS.md D-013,
+// D-042, D-051). A widget draws a few styled spans in the status line,
+// may ask to be called again after a delay, and hears about clicks.
+//
+// Widgets run sandboxed: no files (unless `dirs` grants some, read-only),
+// no network, no environment, bounded memory and CPU per call.
+
+package termos:widget@0.1.0;
+
+interface types {
+    /// A colour: the status line's own, a 256-colour palette index, or RGB.
+    variant color {
+        default,
+        indexed(u8),
+        rgb(tuple<u8, u8, u8>),
+    }
+
+    record style {
+        fg: color,
+        bg: color,
+        bold: bool,
+        italic: bool,
+        underline: bool,
+        dim: bool,
+    }
+
+    /// Text in one style.
+    record span {
+        text: string,
+        style: style,
+    }
+
+    /// What the widget wants after a call.
+    record update {
+        /// Draw it again (`render` is called next).
+        redraw: bool,
+        /// Call `tick` after this many milliseconds (at least 100); `none`
+        /// stops ticking. A widget that never ticks costs nothing at rest.
+        next-tick-ms: option<u32>,
+    }
+
+    variant event {
+        /// A click on the widget, at this column within it.
+        click(u16),
+    }
+}
+
+world widget {
+    use types.{span, update, event};
+
+    /// Called once, with the `settings` table of the widget's config.
+    export init: func(settings: list<tuple<string, string>>) -> result<update, string>;
+
+    /// The widget's text: at most `width` columns are shown.
+    export render: func(width: u16) -> list<span>;
+
+    /// The delay asked for in the last update has passed.
+    export tick: func() -> update;
+
+    /// Something happened to the widget.
+    export on-event: func(event: event) -> update;
+}

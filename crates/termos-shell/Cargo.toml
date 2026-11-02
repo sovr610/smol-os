@@ -10,6 +10,11 @@ homepage.workspace = true
 authors.workspace = true
 publish.workspace = true
 
+[features]
+# WASM status-line widgets (D-042, D-050): wasmtime, created only when a
+# widget is configured.
+wasm-widgets = ["dep:wasmtime", "dep:wasmtime-wasi"]
+
 [dependencies]
 getrandom.workspace = true
 jiff.workspace = true
@@ -28,6 +33,8 @@ tokio.workspace = true
 toml.workspace = true
 tracing.workspace = true
 unicode-width.workspace = true
+wasmtime = { workspace = true, optional = true }
+wasmtime-wasi = { workspace = true, optional = true }
 
 [dev-dependencies]
 base64.workspace = true

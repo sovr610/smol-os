@@ -12,3 +12,4 @@
 *.bmp binary
 *.bin binary
 *.six -text -diff
+*.wasm binary

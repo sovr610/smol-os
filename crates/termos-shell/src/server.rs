@@ -130,6 +130,9 @@ enum Event {
         plugin: String,
         conn: u64,
     },
+    /// A WASM widget drew something new or stopped.
+    #[cfg(feature = "wasm-widgets")]
+    Widgets,
 }
 
 /// An admitted plugin connection: its name, connection id, and the lines
@@ -476,6 +479,13 @@ pub struct Server {
     events_rx: mpsc::UnboundedReceiver<Event>,
     reload_rx: Option<mpsc::UnboundedReceiver<()>>,
     plugins: PluginHost,
+    /// The running WASM widgets and the config they started from; `None`
+    /// while none is configured, so no engine exists (D-051).
+    #[cfg(feature = "wasm-widgets")]
+    widgets: Option<(
+        crate::wasm::WidgetHost,
+        std::collections::BTreeMap<String, termos_core::config::WidgetConfig>,
+    )>,
     host_rx: mpsc::UnboundedReceiver<HostEvent>,
     /// Notices for the next session created (startup problems).
     notices: Vec<(Level, String)>,
@@ -569,6 +579,8 @@ impl Server {
             events_rx,
             reload_rx: None,
             plugins,
+            #[cfg(feature = "wasm-widgets")]
+            widgets: None,
             host_rx,
             notices: Vec::new(),
             saved: Vec::new(),
@@ -725,6 +737,7 @@ impl Server {
             },
         );
         self.sync_plugins(false);
+        self.sync_widgets();
     }
 
     // ----- snapshots and restore (D-033) -------------------------------
@@ -1115,6 +1128,63 @@ impl Server {
             e.desktop.reload_config();
         }
         self.sync_plugins(true);
+        self.sync_widgets();
+    }
+
+    // ----- WASM widgets (D-051) -------------------------------------------
+
+    /// Starts, restarts or stops the WASM widgets to match `[widgets]`.
+    #[cfg(feature = "wasm-widgets")]
+    fn sync_widgets(&mut self) {
+        let wanted = &self.config.widgets;
+        if self.widgets.as_ref().is_some_and(|(_, c)| c == wanted) {
+            return;
+        }
+        // Dropping the host stops its thread.
+        self.widgets = None;
+        if wanted.is_empty() {
+            self.push_widgets();
+            return;
+        }
+        let base = self
+            .opts
+            .config_path
+            .parent()
+            .map(std::path::Path::to_owned)
+            .unwrap_or_default();
+        let tx = self.events_tx.clone();
+        match crate::wasm::WidgetHost::start(wanted, &base, move || {
+            let _ = tx.send(Event::Widgets);
+        }) {
+            Ok(host) => self.widgets = Some((host, wanted.clone())),
+            Err(e) => self.post_everywhere(Level::Error, &format!("widgets did not start: {e}")),
+        }
+        self.push_widgets();
+    }
+
+    #[cfg(not(feature = "wasm-widgets"))]
+    fn sync_widgets(&mut self) {
+        if !self.config.widgets.is_empty() {
+            self.post_everywhere(
+                Level::Warn,
+                "[widgets] is set, but this TermOS was built without WASM widgets (the wasm-widgets feature)",
+            );
+        }
+    }
+
+    /// Gives every desktop the widgets' drawings and shows their problems.
+    #[cfg(feature = "wasm-widgets")]
+    fn push_widgets(&mut self) {
+        let (drawn, problems) = match &self.widgets {
+            Some((host, _)) => (host.drawn(), host.take_problems()),
+            None => (Vec::new(), Vec::new()),
+        };
+        for e in self.sessions.values_mut() {
+            e.desktop.set_wasm_widgets(drawn.clone());
+        }
+        for p in problems {
+            self.post_everywhere(Level::Warn, &p);
+        }
     }
 
     // ----- plugins (D-034) ------------------------------------------------
@@ -1523,6 +1593,8 @@ impl Server {
                 });
                 let _ = reply.send(resp);
             }
+            #[cfg(feature = "wasm-widgets")]
+            Event::Widgets => self.push_widgets(),
             Event::PluginGone { plugin, conn } => {
                 let closed = self.plugins.disconnected(&plugin, conn);
                 self.close_windows(&closed);
@@ -1720,6 +1792,14 @@ impl Server {
                     e.desktop
                         .post(Level::Info, "there are no saved sessions to restore");
                 }
+            }
+            SessionRequest::WidgetClick { name, column } => {
+                #[cfg(feature = "wasm-widgets")]
+                if let Some((host, _)) = &self.widgets {
+                    host.click(&name, column);
+                }
+                #[cfg(not(feature = "wasm-widgets"))]
+                let _ = (name, column);
             }
             SessionRequest::PluginCommand { name } => {
                 let session = self

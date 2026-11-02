@@ -42,6 +42,8 @@ pub struct Config {
     pub session: SessionConfig,
     pub plugins: PluginsConfig,
     pub clipboard: ClipboardConfig,
+    /// WASM status-line widgets by name (D-013, D-051).
+    pub widgets: std::collections::BTreeMap<String, WidgetConfig>,
 }
 
 impl Default for Config {
@@ -63,6 +65,7 @@ impl Default for Config {
             session: SessionConfig::default(),
             plugins: PluginsConfig::default(),
             clipboard: ClipboardConfig::default(),
+            widgets: std::collections::BTreeMap::new(),
         }
     }
 }
@@ -299,6 +302,28 @@ impl Default for ClipboardConfig {
     }
 }
 
+/// One WASM status-line widget (`[widgets.<name>]`).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+pub struct WidgetConfig {
+    /// The component (`.wasm`); relative paths are relative to the config
+    /// file's directory.
+    pub path: PathBuf,
+    /// Folders the widget may read (nothing else on disk).
+    #[serde(default)]
+    pub dirs: Vec<PathBuf>,
+    /// Text for the widget's `init` (its own options).
+    #[serde(default)]
+    pub settings: std::collections::BTreeMap<String, String>,
+    /// The most columns it may take in the status line.
+    #[serde(default = "default_widget_width")]
+    pub max_width: u16,
+}
+
+fn default_widget_width() -> u16 {
+    24
+}
+
 /// Out-of-process plugins (D-034). Only plugins listed here are started.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize)]
 #[serde(default, deny_unknown_fields, rename_all = "kebab-case")]
@@ -469,6 +494,14 @@ enabled = []             # plugin directory names under ~/.config/termos/plugins
 # Copies remembered for the clipboard manager (prefix =), newest first.
 # Kept in memory only: never written to disk. 0 remembers none.
 history = 50
+
+# WASM status-line widgets (see docs/widgets.md). Each runs sandboxed: no
+# network, no files except the folders in `dirs` (read-only).
+# [widgets.pomodoro]
+# path = "widgets/pomodoro.wasm"   # relative to this file's folder
+# settings = { minutes = "25" }
+# dirs = []
+# max-width = 24
 
 [theme]
 # auto | dark | light | high-contrast. "auto" is dark or light to match each

@@ -33,8 +33,8 @@ pub mod server;
 pub mod snapshot;
 pub mod status;
 pub mod ui;
+#[cfg(feature = "wasm-widgets")]
+pub mod wasm;
 pub mod whichkey;
 
 pub use desktop::{Desktop, DesktopOptions};
-
-// TODO(M4): optional WASM runtime for status-bar widgets (behind a cargo feature).

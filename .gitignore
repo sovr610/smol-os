@@ -16,3 +16,5 @@
 .vscode/
 /fuzz/Cargo.lock
 /fuzz/coverage/
+# The sample WASM widget builds on its own (cargo xtask widgets).
+/examples/widgets/*/target/

@@ -1058,3 +1058,34 @@ async fn a_session_restored_in_place_keeps_plugin_widgets() {
     })
     .await;
 }
+
+/// A WASM widget in the status line: drawn for the client, and a click on
+/// it reaches the widget (the sample pomodoro starts counting down).
+#[cfg(feature = "wasm-widgets")]
+#[tokio::test]
+async fn wasm_widgets_draw_and_hear_clicks() {
+    use termos_core::input::{Mods, MouseButton, MouseEvent, MouseKind};
+
+    let wasm = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/pomodoro.wasm");
+    // A literal string: Windows paths have backslashes.
+    let extra = format!(
+        "[widgets.pomodoro]\npath = '{}'\nsettings = {{ minutes = \"1\" }}\n",
+        wasm.display()
+    );
+    let srv = start_with(&extra, |_| {}).await;
+    let mut s = Screen::attach(&srv.socket, frontend(None, true), 80, 24).await;
+    s.until("the widget", |t| t.contains("🍅 1:00")).await;
+    let status = s.text().lines().last().unwrap_or("").to_owned();
+    let before = status.split("🍅").next().unwrap_or("");
+    let x = u16::try_from(unicode_width::UnicodeWidthStr::width(before)).expect("narrow");
+    s.client
+        .tx
+        .send(ClientMsg::Mouse(MouseEvent {
+            kind: MouseKind::Down(MouseButton::Left),
+            x,
+            y: 23,
+            mods: Mods::empty(),
+        }))
+        .expect("server alive");
+    s.until("the countdown", |t| t.contains("🍅 0:59")).await;
+}

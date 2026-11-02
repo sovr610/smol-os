@@ -508,13 +508,15 @@ async fn the_monitor_samples_only_while_visible() {
 #[tokio::test]
 async fn the_clipboard_history_pastes_back() {
     let mut h = Harness::new("");
-    h.clipboard.lock().expect("not poisoned").push(
-        "echo from-hist''ory",
-        termos_core::clipboard::ClipSource::Selection,
-    );
+    // Quoted so the output differs from the command, in every shell.
+    let command = common::echo_split("from-hist", "ory");
+    h.clipboard
+        .lock()
+        .expect("not poisoned")
+        .push(&command, termos_core::clipboard::ClipSource::Selection);
     h.keys("C-b =");
     h.wait_text("Clipboard").await;
-    h.wait_text("echo from-hist''ory").await;
+    h.wait_text(&command).await;
     h.type_text("\n");
     // The window closed and the text went to the shell: run it.
     h.type_text("\n");

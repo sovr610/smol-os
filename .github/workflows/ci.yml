@@ -39,13 +39,15 @@ jobs:
       # Windows-only code is type-checked here too, so most Windows
       # breakage shows up without waiting for the Windows runner. Crates
       # whose tests build C code for the target (criterion) are checked
-      # without their tests; the Windows job runs those. Keep the crate
-      # list in sync with WINDOWS_TEST_CRATES in xtask/src/main.rs.
+      # without their tests, and the WASM widgets (wasmtime builds C for
+      # Windows) are left out; the Windows job checks and runs all of it.
+      # Keep the crate list in sync with CROSS_TEST_CRATES in
+      # xtask/src/main.rs.
       - name: clippy for Windows
         run: |
           rustup target add x86_64-pc-windows-msvc
-          cargo clippy --workspace --lib --bins --all-features --locked --target x86_64-pc-windows-msvc -- -D warnings
-          cargo clippy -p termos-core -p termos-term -p termos-wm -p termos-plugin -p termos-shell -p termos-cli --all-targets --all-features --locked --target x86_64-pc-windows-msvc -- -D warnings
+          cargo clippy --workspace --lib --bins --no-default-features --locked --target x86_64-pc-windows-msvc -- -D warnings
+          cargo clippy -p termos-core -p termos-hw -p termos-term -p termos-wm -p termos-plugin -p termos-apps -p termos-shell -p termos-cli --all-targets --no-default-features --locked --target x86_64-pc-windows-msvc -- -D warnings
 
   test:
     name: Clippy + test (${{ matrix.name }})
@@ -268,3 +270,22 @@ jobs:
       - uses: actions-rust-lang/setup-rust-toolchain@v1
       - name: Latency, idle CPU, memory, flood throughput
         run: cargo xtask perf 30
+
+  widget-sample:
+    name: WASM widget sample (built from source)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          target: wasm32-wasip2
+      # The tests normally use the build kept in tests/fixtures; here they
+      # run against a fresh build of examples/widgets/pomodoro, so the
+      # fixture can never drift from its source.
+      - name: Build the sample widget
+        run: cargo build --release --locked --target wasm32-wasip2 --manifest-path examples/widgets/pomodoro/Cargo.toml
+      - name: Widget tests against the fresh build
+        run: |
+          export TERMOS_TEST_WIDGET="$PWD/examples/widgets/pomodoro/target/wasm32-wasip2/release/termos_widget_pomodoro.wasm"
+          cargo test -p termos-shell --features wasm-widgets --locked --test widgets
