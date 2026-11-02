@@ -85,15 +85,27 @@ jobs:
       - name: Pack
         if: always()
         run: |
-          mkdir -p dist
-          cp target/image/${{ matrix.target }}-boot/*.png target/image/${{ matrix.target }}-boot/serial-*.log dist/ 2>/dev/null || true
+          mkdir -p dist boot
+          cp target/image/${{ matrix.target }}-boot/*.png target/image/${{ matrix.target }}-boot/serial-*.log boot/ 2>/dev/null || true
           if [ -f target/image/${{ matrix.target }}/images/disk.img ]; then
             zstd -q -T0 -10 target/image/${{ matrix.target }}/images/disk.img -o dist/termos-${{ matrix.target }}.img.zst
           fi
+          # The license report (manifests and license texts) without the
+          # source archives it gathers, about 1 GB: those are Buildroot's
+          # downloads, kept in the cache above.
           if [ -d target/image/${{ matrix.target }}/legal-info ]; then
-            tar -C target/image/${{ matrix.target }} -cJf dist/legal-info-${{ matrix.target }}.tar.xz legal-info
+            tar -C target/image/${{ matrix.target }} -cJf dist/legal-info-${{ matrix.target }}.tar.xz \
+              --exclude=legal-info/sources --exclude=legal-info/host-sources legal-info
           fi
-          ls -la dist
+          ls -la boot dist
+      # Screenshots and serial logs on their own, small, to look at first.
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: boot-${{ matrix.target }}
+          path: boot/
+          retention-days: 14
+          if-no-files-found: ignore
       - uses: actions/upload-artifact@v4
         if: always()
         with:

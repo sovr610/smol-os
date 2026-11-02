@@ -24,7 +24,7 @@ questions (DECISIONS.md, "Open questions").
 | M5b | Dev rootfs, Podman, package manager app (D-053) | ⏳ |
 | M6 | AI agents: providers, agent windows, permissions, sandbox, audit, MCP, external agents, secrets (D-058 to D-064) | 🔍 |
 | M7 | Local models: Hugging Face downloads, fit estimates, llama.cpp, candle embeddings, the router, agents' local provider (D-065 to D-068) | 🔍 |
-| M8 | Bare-metal images | 🚧 |
+| M8 | Bare-metal images: the KMS console, Buildroot images for x86_64, aarch64 and the Pis, QEMU boot tests (D-072 to D-076) | 🔍 |
 | M9 | Polish and release | ⏳ |
 
 Unfinished work in code is always a `TODO(M<n>)` marker (D-018). The
@@ -621,7 +621,7 @@ What was shown, and where (Linux, in an isolated `tmux -L termos-m7` with its ow
 ---
 
 ## M8 — Bare-metal images
-**Status:** 🚧 · Owner answers: O-9 → swash; O-10 → BusyBox init; O-11 → iwd + dhcpcd; O-14 → GRUB2 (D-072). Design: D-073 to D-076, ARCHITECTURE.md §5.9 and §13; user guide [bare-metal.md](docs/bare-metal.md).
+**Status:** 🔍 done, awaiting review · Owner answers: O-9 → swash; O-10 → BusyBox init; O-11 → iwd + dhcpcd; O-14 → GRUB2 (D-072). Design: D-073 to D-076, ARCHITECTURE.md §5.9 and §13; user guide [bare-metal.md](docs/bare-metal.md).
 
 **Deliverables**
 - **Buildroot** (D-074): [x] the external tree in `termos-image`: the `termos` package, BusyBox init scripts, the session on tty1, GRUB configs, partition layouts, a kernel fragment; [x] targets for x86_64 (BIOS + UEFI disk image), aarch64 UEFI, Pi 5, Pi 4, and Pi 3 / Zero 2 W (best effort), each Buildroot's board defconfig plus TermOS fragments, checked setting by setting; [ ] the x86_64 ISO (with the M9 releases)
@@ -636,9 +636,17 @@ What was shown, and where (Linux, in an isolated `tmux -L termos-m7` with its ow
 - Idle RAM < 150 MB, measured in QEMU.
 - Pi 4 latency measured on hardware and recorded.
 
-**Acceptance results so far**
-- **The console, booted for real:** the KMS client ran in QEMU here (Ubuntu's kernel and a small initramfs with seatd and udev, not yet a Buildroot image): seatd gave it the seat, it printed `TERMOS-READY` after its first page flip, and the screenshot showed the desktop at 1280×800 with the tutorial. Keys typed through QEMU's virtio keyboard reached a shell, and Ctrl+= twice made the text bigger while the desktop was resized to fit.
-- **The images:** built and booted only by the `images` workflow (this sandbox cannot reach Buildroot's or the kernel's download sites). Its first run pins Buildroot's checksum.
+**Acceptance results**
+- **The images, built and booted by CI (passed):** the `images` workflow's sixth run built both images from scratch (x86_64 in 38 minutes, aarch64-virt in 54, on four-core runners) and booted them in QEMU to the desktop. The time is from QEMU's start to `TERMOS-READY` on the serial console; the memory is `MemTotal − MemAvailable` 30 s (KVM) or 60 s (emulated) after boot:
+
+  | Image | Firmware | Ready after | Screen | In use |
+  | --- | --- | --- | --- | --- |
+  | x86_64 (KVM) | UEFI (OVMF) | 3.5 s | 812 colours, status bar rows 780–799 | 60 MiB of 979 MiB |
+  | x86_64 (KVM) | BIOS (SeaBIOS) | 3.0 s | 824 colours, status bar rows 780–799 | 59 MiB of 985 MiB |
+  | aarch64-virt (emulated) | UEFI (AAVMF) | 15.0 s | 816 colours, status bar rows 780–799 | 110 MiB of 959 MiB |
+- **Idle RAM < 150 MB:** 59–60 MiB on x86_64 and 110 MiB on aarch64-virt, the kernel and every service included.
+- **What the first runs found, all fixed:** Bootlin's toolchains name their tools `<arch>-linux-gcc` (the build now asks Buildroot for `TARGET_CROSS`); the `libseat` crate's default C logger shim adds `-I /usr/local/include`, which Buildroot's compiler refuses (the feature is off); the PC base configuration brings ConnMan (left out; iwd and dhcpcd do its work); GRUB's BIOS first stage is not among the images (copied from its build); Buildroot links `/var/lib/dbus` to `/tmp/dbus` on read-only roots (the data partition is bound there); genimage fills file systems that name no files from its root folder (it gets an empty one, so the data partition starts empty).
+- **The console in QEMU before the images:** the KMS client ran here on Ubuntu's kernel with a small initramfs: seatd gave it the seat, the screenshot showed the desktop at 1280×800, keys typed through the virtio keyboard reached a shell, and Ctrl+= made the text bigger while the desktop was resized to fit.
 - **Pi 4 latency:** to be measured by the owner on hardware.
 
 **What the tests cover**

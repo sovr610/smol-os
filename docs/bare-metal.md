@@ -26,8 +26,9 @@ cargo xtask image build x86_64
 
 The first build downloads Buildroot (a pinned release, checked against its
 SHA-256), Bootlin's prebuilt toolchain, the kernel and the packages into
-`target/image/dl`, and takes about an hour; later builds reuse what they
-can. The image is `target/image/<target>/images/disk.img`.
+`target/image/dl`, and takes 40 minutes to an hour on four cores (the
+generic Arm kernel, with all its modules, is the slow part); later builds
+reuse what they can. The image is `target/image/<target>/images/disk.img`.
 
 `cargo xtask image build <target> --legal-info` also writes Buildroot's
 license report (every package's license and source) to
@@ -45,7 +46,13 @@ That is the boot test CI runs: it waits for the console's first frame,
 takes a screenshot (`target/image/<target>-boot/screen-*.png`), and checks
 the memory in use once the desktop has settled (the budget is 150 MB). It
 needs `qemu-system-x86` / `qemu-system-arm` and the UEFI firmware (`ovmf`,
-`qemu-efi-aarch64`; or set `TERMOS_OVMF` / `TERMOS_AAVMF`).
+`qemu-efi-aarch64`; or set `TERMOS_OVMF` / `TERMOS_AAVMF`). When the console
+does not come up, it says so with the end of the serial log, and keeps a
+screenshot of what the machine got to.
+
+CI's `images` workflow keeps, for two weeks, each boot test's screenshots
+and serial logs (the `boot-<target>` artifact) and the image itself,
+compressed with zstd, with its license report (`image-<target>`).
 
 To use the desktop yourself, run QEMU with a window:
 
@@ -115,7 +122,8 @@ logind) to build and run.
 ```
 
 - The system partition is read-only; what you keep lives on the data
-  partition, mounted on `/data`, with `/home` and iwd's state bound from it.
+  partition, mounted on `/data`, with `/home`, iwd's networks, D-Bus's
+  machine ID and dhcpcd's leases bound from it.
 - BusyBox init starts udev, D-Bus, iwd (Wi-Fi), dhcpcd (addresses) and
   seatd, then runs TermOS's console on tty1 as the user `termos`. If the
   console stops, init starts it again and it reattaches to the running

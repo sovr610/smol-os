@@ -443,7 +443,7 @@ termos-ai holds all of it; the CLI hands the server a launcher for its windows (
 - **Boot flow (D-075):**
   1. firmware → GRUB2 (a Pi: its firmware) → the kernel on the boot partition (KMS drivers: virtio-gpu, simpledrm, bochs, vc4/v3d; i915 and amdgpu as the board configs have them);
   2. BusyBox init (D-072);
-  3. mounts: the read-only squashfs root in slot A, the data partition on `/data` (`/home` and iwd's state bound from it);
+  3. mounts: the read-only squashfs root in slot A, the data partition on `/data` (`/home`, iwd's networks, D-Bus's machine ID and dhcpcd's leases bound from it);
   4. eudev, D-Bus, iwd, dhcpcd, seatd;
   5. `termos --kms` on tty1 as the user `termos`, respawned if it stops;
   6. first-run setup (the tutorial).
