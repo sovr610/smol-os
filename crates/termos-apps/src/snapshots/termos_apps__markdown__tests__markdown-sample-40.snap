@@ -1,0 +1,32 @@
+---
+source: crates/termos-apps/src/markdown.rs
+expression: "text(&layout(&doc, 40, &[None]))"
+---
+TermOS
+
+A terminal-first desktop with real code
+and a link (https://example.com).
+
+Lists
+
+• one
+• two
+  ◦ nested
+• ☑ done
+• ☐ todo
+
+1. first
+2. second
+
+▎ quoted text that goes on
+
+│ fn main() {}
+
+Name  │ Size
+──────┼─────
+a.txt │   10
+b.png │ 2048
+
+────────────────────────────────────────
+
+🖼 a cat

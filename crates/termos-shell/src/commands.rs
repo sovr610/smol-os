@@ -63,6 +63,8 @@ pub enum Command {
     ThemeSelect(ThemeBase),
     /// Open an image in the viewer (a path, which may contain spaces).
     ImageOpen(String),
+    /// Open a markdown document in the viewer.
+    MarkdownOpen(String),
 }
 
 /// Static description of a command name.
@@ -185,7 +187,24 @@ pub const COMMANDS: &[CommandInfo] = &[
         description: "Open an image",
         arg: Some("photo.png"),
     },
+    CommandInfo {
+        name: "markdown.open",
+        description: "Open a markdown document",
+        arg: Some("README.md"),
+    },
 ];
+
+/// Commands whose argument is the rest of the line: a path, spaces and
+/// all. The flag says whether the path may be left out.
+const PATH_COMMANDS: [(&str, bool); 2] = [("image.open", false), ("markdown.open", false)];
+
+fn path_command(name: &str, path: String) -> Option<Command> {
+    Some(match name {
+        "image.open" => Command::ImageOpen(path),
+        "markdown.open" => Command::MarkdownOpen(path),
+        _ => return None,
+    })
+}
 
 /// Error for an unknown or malformed command.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -224,14 +243,17 @@ impl FromStr for Command {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         // A path is the rest of the line, spaces and all.
-        if let Some(rest) = s.trim_start().strip_prefix("image.open")
-            && (rest.is_empty() || rest.starts_with(char::is_whitespace))
-        {
-            let path = rest.trim();
-            if path.is_empty() {
-                return Err(CommandError("`image.open` needs a file".into()));
+        for (name, optional) in PATH_COMMANDS {
+            if let Some(rest) = s.trim_start().strip_prefix(name)
+                && (rest.is_empty() || rest.starts_with(char::is_whitespace))
+            {
+                let path = rest.trim();
+                if path.is_empty() && !optional {
+                    return Err(CommandError(format!("`{name}` needs a file")));
+                }
+                return path_command(name, path.to_owned())
+                    .ok_or_else(|| CommandError(format!("`{name}`: unknown command")));
             }
-            return Ok(Command::ImageOpen(path.to_owned()));
         }
         let mut parts = s.split_whitespace();
         let name = parts.next().unwrap_or("");
@@ -402,6 +424,7 @@ impl fmt::Display for Command {
             Command::SessionRestore => f.write_str("session.restore"),
             Command::ThemeSelect(b) => write!(f, "theme.select {b}"),
             Command::ImageOpen(p) => write!(f, "image.open {p}"),
+            Command::MarkdownOpen(p) => write!(f, "markdown.open {p}"),
         }
     }
 }
@@ -465,6 +488,10 @@ mod tests {
         assert_eq!(
             "image.open /tmp/my photos/a.png".parse(),
             Ok(Command::ImageOpen("/tmp/my photos/a.png".into()))
+        );
+        assert_eq!(
+            "markdown.open  notes/To Do.md ".parse(),
+            Ok(Command::MarkdownOpen("notes/To Do.md".into()))
         );
         assert!("image.open".parse::<Command>().is_err());
         assert!("image.opener x".parse::<Command>().is_err());

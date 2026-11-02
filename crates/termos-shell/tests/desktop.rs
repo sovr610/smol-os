@@ -408,6 +408,46 @@ async fn images_fall_back_to_blocks_that_floats_cover() {
     assert!(after < before && after > 0, "{before} → {after}");
 }
 
+/// A markdown document with a local picture: text wrapped in its window,
+/// the picture in blocks below it, scrolling with the text.
+#[tokio::test]
+async fn markdown_with_a_picture() {
+    use termos_render::color::{Color, Rgb};
+    use termos_render::graphics::Picture;
+    use termos_shell::commands::Command;
+
+    let mut h = Harness::new("");
+    let dir = h.dir.path().join("docs");
+    std::fs::create_dir_all(&dir).expect("mkdir");
+    let pic = Picture::from_rgba(200, 100, [0, 200, 0, 255].repeat(200 * 100)).expect("valid");
+    std::fs::write(dir.join("green.png"), pic.to_png()).expect("write");
+    std::fs::write(
+        dir.join("README.md"),
+        "# Hello docs\n\nSome *text* before the picture.\n\n![green](green.png)\n\nAfter it.\n",
+    )
+    .expect("write");
+    h.desktop.run(Command::MarkdownOpen(
+        dir.join("README.md").display().to_string(),
+    ));
+    let green = |g: &Grid| {
+        let mut n = 0;
+        for y in 0..g.rows() {
+            for x in 0..g.cols() {
+                if g.get(x, y).map(|c| c.style.bg) == Some(Color::Rgb(Rgb::new(0, 200, 0))) {
+                    n += 1;
+                }
+            }
+        }
+        n
+    };
+    h.wait_grid("the picture in blocks", |g| green(g) > 4).await;
+    let screen = h.screen();
+    assert!(screen.contains("Markdown · README.md"), "{screen}");
+    assert!(screen.contains("Hello docs"), "{screen}");
+    assert!(screen.contains("Some text before the picture."), "{screen}");
+    assert!(screen.contains("After it."), "{screen}");
+}
+
 #[tokio::test]
 async fn split_right_type_and_see_separator() {
     let mut h = Harness::new("");

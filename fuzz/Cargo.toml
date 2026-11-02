@@ -11,6 +11,7 @@ cargo-fuzz = true
 
 [dependencies]
 libfuzzer-sys = "0.4.13"
+termos-apps = { path = "../crates/termos-apps" }
 termos-core = { path = "../crates/termos-core" }
 termos-render = { path = "../crates/termos-render" }
 termos-term = { path = "../crates/termos-term" }
@@ -64,6 +65,13 @@ bench = false
 [[bin]]
 name = "apc_dcs_intercept"
 path = "fuzz_targets/apc_dcs_intercept.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "markdown_layout"
+path = "fuzz_targets/markdown_layout.rs"
 test = false
 doc = false
 bench = false

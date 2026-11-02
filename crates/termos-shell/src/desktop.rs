@@ -307,6 +307,14 @@ fn next_minute(now: Instant) -> Instant {
     now + wait.max(Duration::from_millis(10))
 }
 
+/// The user's home directory (`HOME`, or `USERPROFILE` on Windows).
+pub(crate) fn home_dir() -> Option<PathBuf> {
+    std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .filter(|h| !h.is_empty())
+        .map(PathBuf::from)
+}
+
 impl Desktop {
     /// A desktop without panes yet (the caller adds them).
     fn blank(
@@ -829,6 +837,24 @@ impl Desktop {
         self.animate(anim::Kind::FloatOpen(id), Instant::now());
         self.dirty = true;
         self.layout_changed = true;
+    }
+
+    /// A path typed for a command: relative to the focused pane's
+    /// directory, like in a shell; `~` is the home directory.
+    fn resolve_path(&self, text: &str) -> PathBuf {
+        let path = match text.strip_prefix('~') {
+            Some(rest) if rest.is_empty() || rest.starts_with(['/', '\\']) => match home_dir() {
+                Some(home) => home.join(rest.trim_start_matches(['/', '\\'])),
+                None => PathBuf::from(text),
+            },
+            _ => PathBuf::from(text),
+        };
+        if path.is_absolute() {
+            return path;
+        }
+        self.focused_cwd()
+            .or_else(|| std::env::current_dir().ok())
+            .map_or(path.clone(), |dir| dir.join(&path))
     }
 
     /// The focused pane's working directory, for new panes.
@@ -1663,16 +1689,12 @@ impl Desktop {
             }
             Command::ReloadConfig => self.reload_config(),
             Command::ImageOpen(path) => {
-                // Relative to the focused pane's directory, like a shell.
-                let path = PathBuf::from(path);
-                let path = if path.is_absolute() {
-                    path
-                } else {
-                    self.focused_cwd()
-                        .or_else(|| std::env::current_dir().ok())
-                        .map_or(path.clone(), |dir| dir.join(&path))
-                };
+                let path = self.resolve_path(&path);
                 self.open_app(Box::new(termos_apps::ImageViewer::open(path)));
+            }
+            Command::MarkdownOpen(path) => {
+                let path = self.resolve_path(&path);
+                self.open_app(Box::new(termos_apps::MarkdownViewer::open(path)));
             }
             Command::ThemeSelect(base) => {
                 // The client that asked (the control API acts as the
@@ -1783,7 +1805,8 @@ impl Desktop {
                 | Command::WorkspaceSelect(_)
                 | Command::SessionSwitch(_)
                 | Command::ThemeSelect(_)
-                | Command::ImageOpen(_) => continue,
+                | Command::ImageOpen(_)
+                | Command::MarkdownOpen(_) => continue,
                 _ => {}
             }
             items.push(PaletteItem {

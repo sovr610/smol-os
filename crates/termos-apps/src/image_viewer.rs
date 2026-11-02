@@ -266,7 +266,12 @@ impl App for ImageViewer {
 
     fn set_waker(&mut self, waker: AppWaker) {
         if let Ok(mut w) = self.waker.lock() {
-            *w = Some(waker);
+            *w = Some(waker.clone());
+        }
+        // Work started before the waker existed may already be done:
+        // look once now.
+        if self.rx.is_some() {
+            waker.wake();
         }
     }
 }
