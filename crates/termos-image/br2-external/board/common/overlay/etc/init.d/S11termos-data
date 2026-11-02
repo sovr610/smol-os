@@ -22,7 +22,9 @@ start() {
 	chmod 0700 /data/home/termos
 	mount --bind /data/home /home
 	mount --bind /data/iwd /var/lib/iwd
-	mount --bind /data/dbus /var/lib/dbus
+	# /var/lib/dbus links to /tmp/dbus (Buildroot, for read-only roots).
+	mkdir -p /tmp/dbus
+	mount --bind /data/dbus /tmp/dbus
 	mount --bind /data/dhcpcd /var/db/dhcpcd
 }
 
