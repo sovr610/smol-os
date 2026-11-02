@@ -16,6 +16,7 @@ mod images;
 mod kms;
 mod models;
 mod probe;
+mod tryboot;
 mod update;
 
 use std::io::{IsTerminal, Write};

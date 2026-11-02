@@ -69,6 +69,18 @@ type=raw
 bootname=B
 EOF
 
+# A Pi's slots carry their boot files (D-078): the kernel and device trees
+# are in /boot already; add the firmware's overlays and the command line's
+# template, which `termos system rauc-tryboot-install` copies to the boot
+# partition when the slot is installed.
+case "$BOARD" in
+rpi*)
+	mkdir -p "$TARGET_DIR/boot/overlays" "$TARGET_DIR/usr/share/termos"
+	cp -r "$BINARIES_DIR/rpi-firmware/overlays/." "$TARGET_DIR/boot/overlays/"
+	cp "$BR2_EXTERNAL_TERMOS_PATH/board/rpi/cmdline.txt" "$TARGET_DIR/usr/share/termos/rpi-cmdline.txt"
+	;;
+esac
+
 # `termos system` is the only way to root (D-078); sudo wants its rule
 # files read-only.
 chmod 0440 "$TARGET_DIR/etc/sudoers.d/termos"

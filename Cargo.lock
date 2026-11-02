@@ -5427,6 +5427,7 @@ dependencies = [
  "drm",
  "futures-util",
  "input",
+ "libc",
  "libseat",
  "portable-pty",
  "rustix",

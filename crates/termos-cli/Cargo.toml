@@ -51,6 +51,7 @@ tracing.workspace = true
 rustix.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
+libc.workspace = true
 drm = { workspace = true, optional = true }
 input = { workspace = true, optional = true }
 libseat = { workspace = true, optional = true }

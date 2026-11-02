@@ -37,12 +37,21 @@ aarch64-virt)
 	write_grubenv "$ESP/grubenv"
 	;;
 rpi*)
-	cp -r "$BINARIES_DIR"/rpi-firmware/* "$ESP/"
-	cp "$BINARIES_DIR"/*.dtb "$ESP/" 2>/dev/null || true
-	cp "$BINARIES_DIR/Image" "$ESP/"
-	cp "$BOARD_DIR/cmdline.txt" "$ESP/cmdline.txt"
+	# The firmware's files at the top; each slot's kernel, device trees,
+	# overlays and command line under slot-a/ and slot-b/, picked by
+	# config.txt's os_prefix (D-078). The image starts on slot A.
+	for f in "$BINARIES_DIR"/rpi-firmware/*; do
+		case "${f##*/}" in overlays | cmdline.txt) ;; *) cp -r "$f" "$ESP/" ;; esac
+	done
+	mkdir -p "$ESP/slot-a"
+	cp -r "$BINARIES_DIR/rpi-firmware/overlays" "$ESP/slot-a/"
+	cp "$BINARIES_DIR"/*.dtb "$ESP/slot-a/" 2>/dev/null || true
+	cp "$BINARIES_DIR/Image" "$ESP/slot-a/"
+	sed 's/@PART@/02/; s/@SLOT@/A/' "$BOARD_DIR/cmdline.txt" >"$ESP/slot-a/cmdline.txt"
 	# The KMS display driver.
-	grep -q '^dtoverlay=vc4-kms-v3d' "$ESP/config.txt" || echo 'dtoverlay=vc4-kms-v3d' >> "$ESP/config.txt"
+	grep -q '^dtoverlay=vc4-kms-v3d' "$ESP/config.txt" || echo 'dtoverlay=vc4-kms-v3d' >>"$ESP/config.txt"
+	echo 'os_prefix=slot-a/' >>"$ESP/config.txt"
+	printf 'A=good\nprimary=A\n' >"$ESP/termos-ab.txt"
 	# The firmware wants its files at the top of the partition.
 	rm -f "$BINARIES_DIR/boot.vfat"
 	mkdosfs -n TERMOS -C "$BINARIES_DIR/boot.vfat" 131072

@@ -60,11 +60,25 @@ pub(crate) enum SystemCmd {
     InstallBundle { bundle: PathBuf },
     /// RAUC's view of the slots.
     Status,
-    /// Restart the machine.
+    /// Restart the machine (on a Pi with an update to try, into it once).
     Restart,
     /// Turn the machine off.
     PowerOff,
+    /// RAUC's custom boot-loader backend on a Raspberry Pi (tryboot).
+    RaucTryboot {
+        /// get-primary, set-primary SLOT, get-state SLOT, set-state SLOT
+        /// good|bad, get-current.
+        #[arg(num_args = 1..=3)]
+        args: Vec<String>,
+    },
+    /// RAUC's post-install handler on a Raspberry Pi: the new slot's boot
+    /// files onto the boot partition.
+    RaucTrybootInstall,
 }
+
+/// The boot partition, where S11termos-data mounts it.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+const ESP: &str = "/boot/esp";
 
 /// What this TermOS image is.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -378,16 +392,140 @@ pub(crate) fn system_command(cmd: &SystemCmd) -> anyhow::Result<ExitCode> {
                 ExitCode::from(1)
             })
         };
+        let boot = crate::tryboot::Boot::new(ESP);
+        let on_pi = || Image::detect().is_ok_and(|i| i.board.starts_with("rpi"));
         match cmd {
             SystemCmd::InstallBundle { bundle } => {
                 check_bundle_path(bundle)?;
                 run("rauc", &["install".as_ref(), bundle.as_os_str()])
             }
             SystemCmd::Status => run("rauc", &["status".as_ref(), "--detailed".as_ref()]),
-            SystemCmd::Restart => run("reboot", &[]),
+            SystemCmd::Restart => {
+                if on_pi() && boot.pending()?.is_some() {
+                    boot.mark_tried()?;
+                    return Err(tryboot_restart());
+                }
+                run("reboot", &[])
+            }
             SystemCmd::PowerOff => run("poweroff", &[]),
+            SystemCmd::RaucTryboot { args } => {
+                let arg = |i: usize| args.get(i).map(String::as_str).unwrap_or("");
+                let booted = Image::detect().ok().and_then(|i| i.slot);
+                match arg(0) {
+                    "get-primary" => out!("{}", boot.get_primary()?),
+                    "set-primary" => boot.set_primary(arg(1))?,
+                    "get-state" => out!("{}", boot.get_state(arg(1))?),
+                    "set-state" => {
+                        let good = match arg(2) {
+                            "good" => true,
+                            "bad" => false,
+                            other => bail!("set-state: `{other}` is not good or bad"),
+                        };
+                        boot.set_state(arg(1), good, booted.as_deref())?;
+                    }
+                    "get-current" => out!(
+                        "{}",
+                        booted.context("no rauc.slot= on the kernel's command line")?
+                    ),
+                    other => bail!("rauc-tryboot: no action `{other}`"),
+                }
+                Ok(ExitCode::SUCCESS)
+            }
+            SystemCmd::RaucTrybootInstall => {
+                let slots = std::env::var("RAUC_TARGET_SLOTS").unwrap_or_default();
+                let mnt = Path::new("/run/termos-slot");
+                for i in slots.split_whitespace() {
+                    let var =
+                        |k: &str| std::env::var(format!("RAUC_SLOT_{k}_{i}")).unwrap_or_default();
+                    let (device, slot) = (var("DEVICE"), var("BOOTNAME"));
+                    if slot.is_empty() {
+                        continue;
+                    }
+                    std::fs::create_dir_all(mnt)?;
+                    let mounted = Command::new("mount")
+                        .args(["-t", "squashfs", "-o", "ro", &device])
+                        .arg(mnt)
+                        .status()?;
+                    if !mounted.success() {
+                        bail!("cannot mount {device}");
+                    }
+                    let done = boot.install_slot(&slot, mnt);
+                    let _ = Command::new("umount").arg(mnt).status();
+                    done?;
+                }
+                Ok(ExitCode::SUCCESS)
+            }
         }
     }
+}
+
+/// Restarts a Pi into the slot it is trying, once (D-078): the firmware
+/// reads `tryboot.txt` for the next boot only when the restart says
+/// `0 tryboot`, which BusyBox's `reboot` cannot. So this shuts down the way
+/// init does (the services' stop scripts, every other process told to end,
+/// then killed, the file systems synced and made read-only) and restarts
+/// with that argument. It returns only if the restart failed.
+#[cfg(target_os = "linux")]
+fn tryboot_restart() -> anyhow::Error {
+    ignore_ending_signals();
+    let _ = Command::new("/etc/init.d/rcK").status();
+    signal_everyone(libc::SIGTERM);
+    std::thread::sleep(std::time::Duration::from_secs(2));
+    signal_everyone(libc::SIGKILL);
+    let _ = Command::new("sync").status();
+    for fs in ["/data", ESP] {
+        let _ = Command::new("mount")
+            .args(["-o", "remount,ro", fs])
+            .status();
+    }
+    let _ = Command::new("sync").status();
+    let err = reboot_tryboot();
+    anyhow::anyhow!("the tryboot restart failed: {err}")
+}
+
+/// sudo passes the signals it gets on to us; we must outlive them.
+#[cfg(target_os = "linux")]
+#[allow(unsafe_code)]
+fn ignore_ending_signals() {
+    for sig in [libc::SIGTERM, libc::SIGHUP, libc::SIGINT] {
+        // SAFETY: SIG_IGN is a valid disposition for these signals, and
+        // nothing in this process relies on handling them from here on.
+        unsafe {
+            libc::signal(sig, libc::SIG_IGN);
+        }
+    }
+}
+
+/// `kill(-1, sig)`: every process but init and this one.
+#[cfg(target_os = "linux")]
+#[allow(unsafe_code)]
+fn signal_everyone(sig: libc::c_int) {
+    // SAFETY: kill(2) takes no pointers; -1 means every process we may
+    // signal except init and the caller.
+    unsafe {
+        libc::kill(-1, sig);
+    }
+}
+
+/// `reboot(2)` with `LINUX_REBOOT_CMD_RESTART2` and `0 tryboot`, which the
+/// Pi's firmware driver passes on to the firmware.
+#[cfg(target_os = "linux")]
+#[allow(unsafe_code)]
+fn reboot_tryboot() -> std::io::Error {
+    let arg = c"0 tryboot";
+    // SAFETY: reboot(2) reads the NUL-terminated string `arg`, a static
+    // that outlives the call; the other arguments are the kernel's
+    // constants. On success the call does not return.
+    unsafe {
+        libc::syscall(
+            libc::SYS_reboot,
+            libc::LINUX_REBOOT_MAGIC1,
+            libc::LINUX_REBOOT_MAGIC2,
+            libc::LINUX_REBOOT_CMD_RESTART2,
+            arg.as_ptr(),
+        );
+    }
+    std::io::Error::last_os_error()
 }
 
 #[cfg(test)]

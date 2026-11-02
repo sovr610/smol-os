@@ -1,0 +1,4 @@
+#!/bin/sh
+# RAUC's post-install handler on a Raspberry Pi (D-078): the new slot's
+# kernel, device trees and command line onto the boot partition.
+exec /usr/bin/termos system rauc-tryboot-install

@@ -1,0 +1,3 @@
+#!/bin/sh
+# RAUC's custom boot-loader backend on a Raspberry Pi (D-078).
+exec /usr/bin/termos system rauc-tryboot "$@"
