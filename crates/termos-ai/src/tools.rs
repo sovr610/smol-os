@@ -544,11 +544,7 @@ impl Toolbox {
         network: bool,
         on_output: &mut (dyn FnMut(&[u8]) + Send),
     ) -> Output {
-        let argv: Vec<String> = if cfg!(windows) {
-            vec!["cmd.exe".into(), "/C".into(), line.into()]
-        } else {
-            vec!["/bin/sh".into(), "-c".into(), line.into()]
-        };
+        let (argv, env) = shell_command(line);
         let spec = sandbox::Spec {
             workspace: self.policy.workspace.clone(),
             writable: self.policy.write_paths.clone(),
@@ -570,6 +566,7 @@ impl Toolbox {
         };
         run_on_pty(
             &argv,
+            env,
             &self.policy.workspace,
             timeout,
             on_output,
@@ -579,10 +576,66 @@ impl Toolbox {
     }
 }
 
+/// The environment variable that carries a command line to `cmd.exe`.
+const WINDOWS_COMMAND_VAR: &str = "TERMOS_COMMAND";
+
+/// How to run `line` in the platform's shell: the program and its
+/// arguments, and extra environment variables.
+///
+/// On Windows, an argument can only reach a program through the
+/// C runtime's quoting (`\"`), which `cmd.exe` does not read: a line with
+/// quotes would arrive mangled. So `cmd.exe` gets `%TERMOS_COMMAND%`
+/// instead, which it expands to a second `cmd.exe /D /S /C "<line>"` (see
+/// [`windows_inner_command`]); that one reads the line exactly as typed,
+/// `%VARIABLES%`, `&&`, pipes and quotes included.
+pub fn shell_command(line: &str) -> (Vec<String>, Vec<(String, String)>) {
+    if cfg!(windows) {
+        let comspec = std::env::var("ComSpec").unwrap_or_else(|_| "cmd.exe".into());
+        (
+            vec![
+                comspec.clone(),
+                "/D".into(),
+                "/S".into(),
+                "/C".into(),
+                format!("%{WINDOWS_COMMAND_VAR}%"),
+            ],
+            vec![(
+                WINDOWS_COMMAND_VAR.into(),
+                windows_inner_command(&comspec, line),
+            )],
+        )
+    } else {
+        (vec!["/bin/sh".into(), "-c".into(), line.into()], Vec::new())
+    }
+}
+
+/// What the outer `cmd.exe` runs: `"<comspec>" /D /S /C "<line>"`. The
+/// outer one reads the line inside the quotes around it, so the parts
+/// inside the line's own quotes are outside quotes for it: there, the
+/// characters it would act on (`& | < > ^ ( )`) are escaped with `^`, and
+/// it passes the line on unchanged. With `/S`, the inner one drops only
+/// the quotes around the line.
+fn windows_inner_command(comspec: &str, line: &str) -> String {
+    let mut out = format!("\"{comspec}\" /D /S /C \"");
+    // The quote just written is open.
+    let mut quoted = true;
+    for c in line.chars() {
+        match c {
+            '"' => quoted = !quoted,
+            '&' | '|' | '<' | '>' | '^' | '(' | ')' if !quoted => out.push('^'),
+            _ => {}
+        }
+        out.push(c);
+    }
+    out.push('"');
+    out
+}
+
 /// Runs `argv` on a PTY, feeding its output to `on_output`; the result
 /// is its exit code and the end of its output as plain text.
 pub async fn run_on_pty(
     argv: &[String],
+    extra_env: Vec<(String, String)>,
     cwd: &Path,
     timeout: Duration,
     on_output: &mut (dyn FnMut(&[u8]) + Send),
@@ -595,10 +648,13 @@ pub async fn run_on_pty(
         program: argv[0].clone(),
         args: argv[1..].to_vec(),
         cwd: Some(cwd.to_owned()),
-        env: vec![
+        env: [
             ("TERM".into(), "xterm-256color".into()),
             ("TERMOS_SANDBOX".into(), "1".into()),
-        ],
+        ]
+        .into_iter()
+        .chain(extra_env)
+        .collect(),
         env_remove: sandbox::secret_env_names(std::env::vars()),
         cols: 120,
         rows: 30,
@@ -1275,6 +1331,69 @@ mod tests {
             "{}",
             out.text
         );
+    }
+
+    #[test]
+    fn windows_command_lines_survive_two_cmd_passes() {
+        let c = "C:\\Windows\\system32\\cmd.exe";
+        assert_eq!(
+            windows_inner_command(c, r#"findstr /C:"a + b" src\lib.rs"#),
+            r#""C:\Windows\system32\cmd.exe" /D /S /C "findstr /C:"a + b" src\lib.rs""#
+        );
+        // The outer pass reads the line inside the quotes around it: only
+        // what is inside the line's own quotes is outside quotes for it,
+        // and only there are its operators escaped.
+        assert_eq!(
+            windows_inner_command(c, r#"cd sub && echo "x & y" | more > out.txt"#),
+            r#""C:\Windows\system32\cmd.exe" /D /S /C "cd sub && echo "x ^& y" | more > out.txt""#
+        );
+        assert_eq!(
+            windows_inner_command(c, r#"echo "(a) ^ <b>""#),
+            r#""C:\Windows\system32\cmd.exe" /D /S /C "echo "^(a^) ^^ ^<b^>"""#
+        );
+        let (argv, env) = shell_command("echo hi");
+        if cfg!(windows) {
+            assert_eq!(argv[1..], ["/D", "/S", "/C", "%TERMOS_COMMAND%"]);
+            assert_eq!(env[0].0, "TERMOS_COMMAND");
+        } else {
+            assert_eq!(argv, ["/bin/sh", "-c", "echo hi"]);
+            assert!(env.is_empty());
+        }
+    }
+
+    /// The same lines through the real `cmd.exe`.
+    #[cfg(windows)]
+    #[tokio::test(flavor = "current_thread")]
+    async fn cmd_reads_command_lines_as_typed() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::create_dir(dir.path().join("sub")).expect("mkdir");
+        std::fs::write(dir.path().join("f.txt"), "x = a + b\r\n").expect("write");
+        let cases = [
+            (r#"findstr /C:"a + b" f.txt"#, "x = a + b", "exit code 0"),
+            ("echo %OS%", "Windows_NT", "exit code 0"),
+            ("cd sub && cd", "sub", "exit code 0"),
+            ("echo one| findstr one", "one", "exit code 0"),
+            (
+                r#""%ComSpec%" /D /C echo quoted program"#,
+                "quoted program",
+                "exit code 0",
+            ),
+            (r#"echo "a & b" & exit /b 3"#, "\"a & b\"", "exit code 3"),
+        ];
+        for (line, want, status) in cases {
+            let (argv, env) = shell_command(line);
+            let out = run_on_pty(
+                &argv,
+                env,
+                dir.path(),
+                Duration::from_secs(30),
+                &mut |_| {},
+                &Redactor::new(),
+            )
+            .await;
+            assert!(out.text.starts_with(status), "{line}: {}", out.text);
+            assert!(out.text.contains(want), "{line}: {}", out.text);
+        }
     }
 
     #[test]
