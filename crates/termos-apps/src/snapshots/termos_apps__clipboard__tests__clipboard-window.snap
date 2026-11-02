@@ -1,0 +1,16 @@
+---
+source: crates/termos-apps/src/clipboard.rs
+expression: "crate::testing::render_text(&mut m, 60, 12)"
+---
+  cargo build --release                          Files  now
+  line one ⏎ +2 lines                              vim  now
+  first copy                                 selection  now
+
+
+
+── 21 characters ───────────────────────────────────────────
+ cargo build --release
+
+
+
+ enter paste · c copy again · p pin · d delete · D clear · …

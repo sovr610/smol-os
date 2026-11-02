@@ -8,20 +8,28 @@
 //!   can show them (M4a).
 //! - [`markdown`]: markdown documents, with their local images.
 //! - [`files`]: the file manager, with previews.
+//! - [`monitor`]: CPU, memory, GPUs, temperatures, disks, network and
+//!   processes.
+//! - [`clipboard`]: what was copied, to paste again.
+//! - [`settings`]: the common options of `config.toml`.
 //!
-//! Planned (see `ARCHITECTURE.md`, "Apps and plugins"): file manager,
-//! system monitor (CPU/GPU/RAM/temps), markdown viewer, settings and
-//! clipboard manager (M4b); package manager UI (M5).
+//! Planned (see `ARCHITECTURE.md`, "Apps and plugins"): the package
+//! manager UI (M5).
 
+pub mod clipboard;
 pub mod files;
 pub mod image_viewer;
 pub mod markdown;
+pub mod monitor;
+pub mod settings;
 
+pub use clipboard::ClipboardManager;
 pub use files::FileManager;
 pub use image_viewer::ImageViewer;
 pub use markdown::MarkdownViewer;
+pub use monitor::SystemMonitor;
+pub use settings::Settings;
 
-// TODO(M4): system monitor, settings, clipboard manager.
 // TODO(M5): package manager UI over mise, the dev rootfs and the host package manager.
 
 /// Drawing apps in tests: the text of an app rendered at a size.

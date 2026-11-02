@@ -75,7 +75,8 @@ impl Tutorial {
                     "{p} [ or scroll up with the mouse wheel to look back through output.\n\n\
                      Move with the vi keys (h j k l, w b, g G, Ctrl+U/D). v starts a selection, y copies it \
                      (also to your system clipboard), / searches, q leaves.\n\n\
-                     You can also drag with the mouse to select and copy. {p} ] pastes."
+                     You can also drag with the mouse to select and copy. {p} ] pastes; {p} = lists \
+                     everything copied, to paste again."
                 ),
             ),
             (

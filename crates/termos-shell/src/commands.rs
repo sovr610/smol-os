@@ -72,6 +72,12 @@ pub enum Command {
     FileOpen(String),
     /// Edit a file with `$VISUAL` or `$EDITOR` in a new pane.
     FileEdit(String),
+    MonitorOpen,
+    SettingsOpen,
+    /// The clipboard history (D-050).
+    ClipboardOpen,
+    /// Forget the clipboard history (pinned entries stay).
+    ClipboardClear,
 }
 
 /// Static description of a command name.
@@ -200,6 +206,10 @@ pub const COMMANDS: &[CommandInfo] = &[
         arg: Some("README.md"),
     },
     info("files.open", "Files: browse this folder"),
+    info("monitor.open", "System monitor"),
+    info("settings.open", "Settings"),
+    info("clipboard.open", "Clipboard history"),
+    info("clipboard.clear", "Forget the clipboard history"),
     CommandInfo {
         name: "file.open",
         description: "Open a file",
@@ -374,6 +384,10 @@ impl FromStr for Command {
             "keys" => no_arg(Command::Keys),
             "notifications" => no_arg(Command::Notifications),
             "tutorial" => no_arg(Command::Tutorial),
+            "monitor.open" => no_arg(Command::MonitorOpen),
+            "settings.open" => no_arg(Command::SettingsOpen),
+            "clipboard.open" => no_arg(Command::ClipboardOpen),
+            "clipboard.clear" => no_arg(Command::ClipboardClear),
             "config.reload" => no_arg(Command::ReloadConfig),
             "send-prefix" => no_arg(Command::SendPrefix),
             "session.quit" => no_arg(Command::Quit),
@@ -456,6 +470,10 @@ impl fmt::Display for Command {
             Command::FilesOpen(p) => write!(f, "files.open {p}"),
             Command::FileOpen(p) => write!(f, "file.open {p}"),
             Command::FileEdit(p) => write!(f, "file.edit {p}"),
+            Command::MonitorOpen => f.write_str("monitor.open"),
+            Command::SettingsOpen => f.write_str("settings.open"),
+            Command::ClipboardOpen => f.write_str("clipboard.open"),
+            Command::ClipboardClear => f.write_str("clipboard.clear"),
         }
     }
 }

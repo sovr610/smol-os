@@ -2225,7 +2225,9 @@ dependencies = [
  "ratatui-core",
  "tempfile",
  "termos-core",
+ "termos-hw",
  "termos-render",
+ "toml_edit",
  "tracing",
  "trash",
  "unicode-width",
@@ -2532,6 +2534,7 @@ dependencies = [
  "indexmap",
  "toml_datetime",
  "toml_parser",
+ "toml_writer",
  "winnow",
 ]
 

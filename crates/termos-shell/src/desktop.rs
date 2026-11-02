@@ -1736,6 +1736,23 @@ impl Desktop {
                 };
                 self.open_app(Box::new(termos_apps::FileManager::open(dir)));
             }
+            Command::MonitorOpen => {
+                self.open_app(Box::new(termos_apps::SystemMonitor::open()));
+            }
+            Command::SettingsOpen => {
+                let path = self.opts.config_path.clone();
+                self.open_app(Box::new(termos_apps::Settings::open(path)));
+            }
+            Command::ClipboardOpen => {
+                let history = std::sync::Arc::clone(&self.opts.clipboard);
+                self.open_app(Box::new(termos_apps::ClipboardManager::new(history)));
+            }
+            Command::ClipboardClear => {
+                if let Ok(mut h) = self.opts.clipboard.lock() {
+                    h.clear();
+                }
+                self.notify(Level::Info, "clipboard history cleared (pins kept)");
+            }
             Command::FileOpen(path) => {
                 use termos_apps::files::{OpenKind, open_kind};
                 let path = self.resolve_path(&path);

@@ -1,0 +1,30 @@
+---
+source: crates/termos-apps/src/settings.rs
+expression: snap
+---
+ Appearance
+   Theme                      dark
+   Window borders             rounded
+   Drop shadows               on
+   Animations                 on
+   Reduced motion             off
+   Images                     auto
+
+ Status line
+   Position                   top
+   Clock                      on
+
+ Input
+   Mouse                      off
+   Key hints                  on
+   Key hints after (ms)       600
+
+ Sessions
+   Restore after a crash      ask
+   Save scrollback            off
+
+ Clipboard
+   History entries          ‹ 0 ›  kept in memory only; 0 keeps none
+
+
+ saved

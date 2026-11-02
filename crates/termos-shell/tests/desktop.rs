@@ -481,6 +481,70 @@ async fn file_manager_lists_previews_and_opens() {
     h.wait_text("Markdown · notes.md").await;
 }
 
+/// The system monitor reads the machine only while it is on screen.
+#[tokio::test]
+async fn the_monitor_samples_only_while_visible() {
+    use termos_shell::commands::Command;
+
+    let mut h = Harness::new("");
+    assert_eq!(h.desktop.next_deadline(), None, "idle: no timers");
+    h.desktop.run(Command::MonitorOpen);
+    let first = h.desktop.next_deadline().expect("a first reading is due");
+    h.desktop.on_timer(first);
+    h.wait_text("Memory").await;
+    let next = h.desktop.next_deadline().expect("the next reading");
+    assert!(next > first, "one second later");
+    // Minimized: nobody sees it, so no timer.
+    h.desktop.run(Command::Minimize);
+    assert_eq!(h.desktop.next_deadline(), None);
+    h.desktop.run(Command::RestoreMinimized);
+    assert_eq!(h.desktop.next_deadline(), Some(next));
+    // Closed: gone for good.
+    h.desktop.run(Command::KillPane);
+    assert_eq!(h.desktop.next_deadline(), None);
+}
+
+/// prefix = lists what was copied; Enter pastes it into the pane.
+#[tokio::test]
+async fn the_clipboard_history_pastes_back() {
+    let mut h = Harness::new("");
+    h.clipboard.lock().expect("not poisoned").push(
+        "echo from-hist''ory",
+        termos_core::clipboard::ClipSource::Selection,
+    );
+    h.keys("C-b =");
+    h.wait_text("Clipboard").await;
+    h.wait_text("echo from-hist''ory").await;
+    h.type_text("\n");
+    // The window closed and the text went to the shell: run it.
+    h.type_text("\n");
+    h.wait_for("the pasted command's output", |s, _| {
+        s.lines()
+            .any(|l| l.trim_end().ends_with("from-history") && !l.contains("echo"))
+    })
+    .await;
+}
+
+/// Settings write the config file and the desktop picks the change up.
+#[tokio::test]
+async fn settings_change_the_config() {
+    use termos_shell::commands::Command;
+
+    let mut h = Harness::new("");
+    h.desktop.run(Command::SettingsOpen);
+    h.wait_text("Window borders").await;
+    // The first setting is the theme: auto → dark.
+    h.key("Right");
+    let text = std::fs::read_to_string(h.config_path()).expect("config");
+    assert!(
+        text.contains("[theme]") && text.contains("base = \"dark\""),
+        "{text}"
+    );
+    // The original settings are still there.
+    assert!(text.contains("[tutorial]"), "{text}");
+    h.wait_text("config reloaded").await;
+}
+
 #[tokio::test]
 async fn split_right_type_and_see_separator() {
     let mut h = Harness::new("");

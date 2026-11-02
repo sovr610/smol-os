@@ -69,7 +69,11 @@ impl Widget for Sparkline<'_> {
         let levels = f64::from(area.height) * 8.0;
         let x0 = area.x + area.width - n as u16;
         for (i, v) in shown.iter().enumerate() {
-            let level = ((v.max(0.0) / top).min(1.0) * levels).round() as u32;
+            let mut level = ((v.max(0.0) / top).min(1.0) * levels).round() as u32;
+            // Anything above zero shows.
+            if *v > 0.0 {
+                level = level.max(1);
+            }
             for row in 0..area.height {
                 // Rows from the bottom.
                 let below = u32::from(row) * 8;

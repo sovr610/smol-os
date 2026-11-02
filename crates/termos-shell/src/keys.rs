@@ -91,6 +91,7 @@ pub fn default_prefix_bindings() -> Vec<Binding> {
         b("[", C::CopyMode),
         b("PPage", C::CopyModePageUp),
         b("]", C::Paste),
+        b("=", C::ClipboardOpen),
         b(":", C::Palette),
         b("?", C::Keys),
         b("N", C::Notifications),

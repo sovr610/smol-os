@@ -1,0 +1,37 @@
+---
+source: crates/termos-apps/src/monitor.rs
+expression: "crate::testing::render_text(&mut m, 60, 40)"
+---
+bench · TestOS 1.0 · Fixture CPU · up 3h 2m · load 0.50 0.40
+
+CPU 100% · 2.8 GHz
+100                                                       ⡼⠉
+                                                         ⣰⠃
+                                                        ⢰⠃
+                                                       ⢠⠏
+                                                      ⢠⠏
+0                                                     ⠚
+0  ███████████ 100% 2  ██████████▌  95%
+1  ▌··········   5% 3  █████▌·····  50%
+
+Memory
+RAM   ████████████████▉···························· 6.0G/16G
+
+GPU Fixture GPU · 61°C · 45 W
+Load  ██████████████████▏······························  37%
+VRAM  █████▌······································ 1.0G/8.0G
+
+Network
+↓      12K/s                                    ▁▁▂▃▃▄▅▅▆▇▇█
+↑     500B/s                                    ▁▁▁▁▁▁▁▁▁▁▁▁
+
+Temperatures
+cpu package         54°C
+
+Disks
+/     ███████████████████████████████████▎········ 400G/500G
+
+Processes · by CPU (s: by memory)
+    PID NAME                                   CPU%      MEM
+     42 compiler                              180.5     2.0G
+      7 editor                                  3.0     300M
