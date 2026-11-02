@@ -71,6 +71,15 @@ To build signed images by hand, point `TERMOS_RAUC_KEYRING`,
 development keys in `target/image/keys/`; images built with those accept
 only bundles made with them.
 
+## Rehearsing
+
+The workflow can also be run by hand (Actions → Release → Run workflow).
+It builds and packages the same files, named `…-<version>-rehearsal…`,
+and keeps them as the run's artifact for a week instead of making a
+release; nothing is attested. The images (about an hour and a half) are
+built only when the run asks for them, and without the signing secrets
+they trust development keys.
+
 ## Making a release
 
 1. Set the version in `Cargo.toml` (`[workspace.package] version`), run
