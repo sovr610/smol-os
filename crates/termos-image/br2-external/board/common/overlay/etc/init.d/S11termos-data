@@ -8,9 +8,10 @@ DATA_LABEL=termos-data
 
 # On the first boot of a disk bigger than the image (installed, written with
 # dd, a virtual disk made bigger), the data partition, the last one, grows
-# to the end of the disk (D-080). MBR sizes stop at 2 TiB.
+# to the end of the disk (D-080). MBR sizes stop at 2 TiB. $part is the
+# data partition's device.
 grow() {
-	part=$(readlink -f "/dev/disk/by-label/$DATA_LABEL") || return 0
+	[ -n "$part" ] || return 0
 	name=${part##*/}
 	[ "$(cat "/sys/class/block/$name/partition" 2>/dev/null)" = 4 ] || return 0
 	disk=$(basename "$(readlink -f "/sys/class/block/$name/..")")
@@ -34,13 +35,17 @@ start() {
 		data_binds
 		return
 	fi
-	mount -t vfat -o noatime,umask=0077 /dev/disk/by-partuuid/7e57c0de-01 /boot/esp 2>/dev/null ||
-		echo "termos: no boot partition on /boot/esp"
+	if ! err=$(mount -t vfat -o noatime,umask=0077 /dev/disk/by-partuuid/7e57c0de-01 /boot/esp 2>&1); then
+		echo "termos: no boot partition on /boot/esp: ${err:-mount failed}"
+	fi
 	GROWN=
+	# Found by its label before growing: udev takes the label's link away
+	# for a moment while it looks at the grown partition again.
+	part=$(readlink -f "/dev/disk/by-label/$DATA_LABEL" 2>/dev/null)
 	grow
-	dev="/dev/disk/by-label/$DATA_LABEL"
-	if [ -e "$dev" ] && mount -t ext4 -o noatime "$dev" /data; then
-		echo "termos: data on $(readlink -f "$dev")"
+	udevadm settle 2>/dev/null
+	if [ -n "$part" ] && [ -b "$part" ] && mount -t ext4 -o noatime "$part" /data; then
+		echo "termos: data on $part"
 		# ext4 grows while mounted.
 		[ -z "$GROWN" ] || resize2fs "$GROWN" >/dev/null 2>&1 ||
 			echo "termos: could not grow the data file system"

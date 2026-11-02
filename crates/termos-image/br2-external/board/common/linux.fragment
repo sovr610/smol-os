@@ -24,6 +24,12 @@ CONFIG_SQUASHFS_XZ=y
 CONFIG_SQUASHFS_ZSTD=y
 CONFIG_EXT4_FS=y
 CONFIG_VFAT_FS=y
+# FAT's default code page and character set: without them no FAT file
+# system mounts (Buildroot's PC kernel configuration has neither).
+CONFIG_NLS=y
+CONFIG_NLS_CODEPAGE_437=y
+CONFIG_NLS_ISO8859_1=y
+CONFIG_NLS_UTF8=y
 CONFIG_DEVTMPFS=y
 CONFIG_DEVTMPFS_MOUNT=y
 CONFIG_TMPFS=y

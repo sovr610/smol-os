@@ -16,11 +16,15 @@ ready=/run/termos/console-ready
 		sleep 1
 		i=$((i + 1))
 	done
-	if [ -e "$ready" ] && rauc status mark-good booted >/dev/null; then
-		echo "TERMOS-SLOT slot=$slot version=$version good" >/dev/console
-	else
+	if [ ! -e "$ready" ]; then
 		echo "TERMOS-SLOT slot=$slot version=$version bad: the console did not start; restarting" >/dev/console
 		rauc status mark-bad booted >/dev/null
 		reboot
+	elif rauc status mark-good booted >/dev/null; then
+		echo "TERMOS-SLOT slot=$slot version=$version good" >/dev/console
+	else
+		# The slot works but its record could not be written (RAUC says
+		# why above): restarting would not help.
+		echo "TERMOS-SLOT slot=$slot version=$version unrecorded: the console started, but RAUC could not mark the slot good" >/dev/console
 	fi
 ) &
