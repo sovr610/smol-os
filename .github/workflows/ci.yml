@@ -23,10 +23,10 @@ jobs:
     # A hang must not hold a runner for the default six hours.
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       # Reads rust-toolchain.toml (pinned 1.97.0 + rustfmt/clippy), enables the
       # Swatinem cache and sets RUSTFLAGS=-D warnings.
-      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: actions-rust-lang/setup-rust-toolchain@v2
       - name: rustfmt
         run: cargo fmt --all --check
       - name: Work markers, ROADMAP sync, SPDX headers
@@ -67,8 +67,8 @@ jobs:
           - name: windows-x86_64
             os: windows-latest
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: actions/checkout@v7
+      - uses: actions-rust-lang/setup-rust-toolchain@v2
       # Clippy runs on every platform so cfg-gated (Linux-only / macOS-only
       # / Windows-only) code is linted where it compiles.
       - name: clippy
@@ -98,13 +98,13 @@ jobs:
           - aarch64-unknown-linux-gnu
           - x86_64-unknown-linux-gnu
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: actions/checkout@v7
+      - uses: actions-rust-lang/setup-rust-toolchain@v2
         with:
           target: ${{ matrix.target }}
       # cargo-zigbuild uses zig as the cross linker; `python3 -m ziglang` is
       # one of the locations it probes.
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - name: Install zig
@@ -129,7 +129,7 @@ jobs:
           ./.github/scripts/buildinfo.sh "${{ matrix.target }} (glibc 2.31 or newer)" > "dist/$name/BUILDINFO.txt"
           tar -C dist -czf "dist/$name.tar.gz" "$name"
           echo "name=$name" >> "$GITHUB_OUTPUT"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: ${{ steps.package.outputs.name }}
           path: dist/${{ steps.package.outputs.name }}.tar.gz
@@ -154,8 +154,8 @@ jobs:
           - arch: aarch64
             os: ubuntu-24.04-arm
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
         with:
           pattern: termos-*-linux-${{ matrix.arch }}
           path: dist
@@ -175,8 +175,8 @@ jobs:
     # A hang must not hold a runner for the default six hours.
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: actions/checkout@v7
+      - uses: actions-rust-lang/setup-rust-toolchain@v2
       - name: Build termos
         run: cargo build --release --locked -p termos-cli
       - name: Package test build
@@ -191,7 +191,7 @@ jobs:
           TERMOS_BIN="dist/$name/termos" ./.github/scripts/daemon-smoke.sh
           tar -C dist -czf "dist/$name.tar.gz" "$name"
           echo "name=$name" >> "$GITHUB_OUTPUT"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: ${{ steps.package.outputs.name }}
           path: dist/${{ steps.package.outputs.name }}.tar.gz
@@ -205,8 +205,8 @@ jobs:
     # A hang must not hold a runner for the default six hours.
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: actions/checkout@v7
+      - uses: actions-rust-lang/setup-rust-toolchain@v2
       # The setup action sets RUSTFLAGS, which overrides .cargo/config.toml's
       # target rustflags: link the C runtime statically here explicitly, so
       # the build runs without the Visual C++ redistributable.
@@ -227,7 +227,7 @@ jobs:
           echo "name=$name" >> "$GITHUB_OUTPUT"
       # upload-artifact zips the directory: the download is a .zip holding
       # termos.exe and BUILDINFO.txt.
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: ${{ steps.package.outputs.name }}
           path: dist/${{ steps.package.outputs.name }}
@@ -240,7 +240,7 @@ jobs:
     # A hang must not hold a runner for the default six hours.
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       # cargo-fuzz needs nightly; the pinned stable toolchain is overridden
       # with `+nightly` only for this job.
       - name: Install nightly
@@ -266,8 +266,8 @@ jobs:
     # A hang must not hold a runner for the default six hours.
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: actions/checkout@v7
+      - uses: actions-rust-lang/setup-rust-toolchain@v2
       - name: Latency, idle CPU, memory, flood throughput
         run: cargo xtask perf 30
 
@@ -286,8 +286,8 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: actions/checkout@v7
+      - uses: actions-rust-lang/setup-rust-toolchain@v2
         with:
           target: wasm32-wasip2
       # The tests normally use the build kept in tests/fixtures; here they
