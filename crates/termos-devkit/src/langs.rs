@@ -136,11 +136,13 @@ const CODELLDB: Debugger = Debugger {
     ),
     port_args: Some(&["--port", "${port}"]),
 };
+// The release's DAP server tarball (its other asset is the VS Code
+// extension), without its top folder.
 const JS_DEBUG: Debugger = Debugger {
     name: "pwa-node",
     tool: tool(
-        "github:microsoft/vscode-js-debug",
-        &["node", "{install}/js-debug/src/dapDebugServer.js"],
+        "github:microsoft/vscode-js-debug[asset_pattern=js-debug-dap-v*.tar.gz,strip_components=1]",
+        &["node", "{install}/src/dapDebugServer.js"],
     ),
     port_args: Some(&["${port}", "127.0.0.1"]),
 };
@@ -297,9 +299,11 @@ pub const LANGUAGES: &[Language] = &[
         helpers: &[tool("python", &["python3"])],
         servers: &[Server {
             name: "jdtls",
+            // A milestone pinned by TermOS: mise's http backend cannot
+            // list versions, and the snapshots change under one name.
             tool: Some(Tool {
-                spec: "http:jdtls[url=https://download.eclipse.org/jdtls/snapshots/jdt-language-server-latest.tar.gz]",
-                version: "latest",
+                spec: "http:jdtls[url=https://download.eclipse.org/jdtls/milestones/1.63.0/jdt-language-server-1.63.0-202610191322.tar.gz]",
+                version: "1.63.0",
                 cmd: &["python3", "{install}/bin/jdtls"],
             }),
             cmd: &[],

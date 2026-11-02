@@ -12,6 +12,6 @@ return {
   },
   debuggers = {
     { name = "delve", cmd = { "/bin/mise", "exec", "go@1.23.2", "go:github.com/go-delve/delve/cmd/dlv@1.24.0", "--", "dlv" }, port_args = { "dap", "-l", "127.0.0.1:${port}" }, filetypes = { "go", "gomod" } },
-    { name = "pwa-node", cmd = { "/bin/mise", "exec", "node@22.11.0", "github:microsoft/vscode-js-debug@1.95.0", "--", "node", "/m/jsdbg/js-debug/src/dapDebugServer.js" }, port_args = { "${port}", "127.0.0.1" }, filetypes = { "javascript", "javascriptreact", "typescript", "typescriptreact" } },
+    { name = "pwa-node", cmd = { "/bin/mise", "exec", "node@22.11.0", "github:microsoft/vscode-js-debug[asset_pattern=js-debug-dap-v*.tar.gz,strip_components=1]@1.95.0", "--", "node", "/m/jsdbg/src/dapDebugServer.js" }, port_args = { "${port}", "127.0.0.1" }, filetypes = { "javascript", "javascriptreact", "typescript", "typescriptreact" } },
   },
 }

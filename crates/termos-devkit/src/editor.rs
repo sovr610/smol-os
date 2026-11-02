@@ -556,7 +556,7 @@ mod tests {
             .expect("js-debug");
         assert!(
             js.cmd
-                .contains(&"/m/jsdbg/js-debug/src/dapDebugServer.js".to_owned()),
+                .contains(&"/m/jsdbg/src/dapDebugServer.js".to_owned()),
             "{:?}",
             js.cmd
         );

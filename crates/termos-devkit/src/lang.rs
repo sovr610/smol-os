@@ -451,7 +451,7 @@ pub(crate) mod tests {
             "go": [{"version": "1.23.2", "install_path": "/m/go/1.23.2", "active": true},
                    {"version": "1.22.0", "install_path": "/m/go/1.22.0", "active": false}],
             "go:golang.org/x/tools/gopls": [{"version": "0.16.0", "install_path": "/m/gopls", "active": false}],
-            "http:jdtls": [{"version": "latest", "install_path": "/m/jdtls", "active": false}],
+            "http:jdtls": [{"version": "1.63.0", "install_path": "/m/jdtls", "active": false}],
             "junk": 3
         }"#;
         let ls = parse_ls(json);

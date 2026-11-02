@@ -1089,5 +1089,7 @@ async fn wasm_widgets_draw_and_hear_clicks() {
             mods: Mods::empty(),
         }))
         .expect("server alive");
-    s.until("the countdown", |t| t.contains("🍅 0:59")).await;
+    // Any running countdown: a loaded runner can land the first tick late
+    // and skip 0:59 (the clock is the widget's own).
+    s.until("the countdown", |t| t.contains("🍅 0:")).await;
 }

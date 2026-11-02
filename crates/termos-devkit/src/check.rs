@@ -90,10 +90,11 @@ pub fn run(lang: &'static Language, version: Option<&str>, c: &mut Check<'_>) ->
     };
 
     (c.say)(&format!("termos check: installing {}", lang.title));
-    let step = install_step(lang, version, c.platform, c.mise);
-    let stop = step.failed();
+    let (step, runtime_ok) = install_step(lang, version, c.platform, c.mise);
     push(&mut steps, c.say, step);
-    if stop {
+    // Without the runtime nothing else can run; a server or debugger that
+    // did not install still lets the other steps show what works.
+    if !runtime_ok {
         return steps;
     }
 
@@ -148,19 +149,20 @@ pub fn run(lang: &'static Language, version: Option<&str>, c: &mut Check<'_>) ->
     steps
 }
 
+/// The install step, and whether the runtime (if any) installed.
 fn install_step(
     lang: &Language,
     version: Option<&str>,
     platform: &str,
     mise: &mut dyn Runner,
-) -> Step {
+) -> (Step, bool) {
     match lang::install(lang, version, platform, mise) {
         Ok(r) if r.failed.is_empty() => {
             let mut text = r.done.join(", ");
             for (spec, why) in &r.skipped {
                 text.push_str(&format!("; left out {spec}: {why}"));
             }
-            Step::new("install", Outcome::Passed(text))
+            (Step::new("install", Outcome::Passed(text)), true)
         }
         Ok(r) => {
             let failed: Vec<String> = r
@@ -168,12 +170,13 @@ fn install_step(
                 .iter()
                 .map(|(spec, what)| format!("{what} ({spec})"))
                 .collect();
-            Step::new(
+            let step = Step::new(
                 "install",
                 Outcome::Failed(format!("did not install: {}", failed.join(", "))),
-            )
+            );
+            (step, true)
         }
-        Err(e) => Step::new("install", Outcome::Failed(e.to_string())),
+        Err(e) => (Step::new("install", Outcome::Failed(e.to_string())), false),
     }
 }
 
@@ -384,7 +387,10 @@ for _, name in ipairs(want) do
   local state = ready(name) and "initialized" or (c and "starting" or "not started")
   local info = ""
   if c and c.server_info then
-    info = " (" .. (c.server_info.name or "?") .. " " .. (c.server_info.version or "") .. ")"
+    -- Some servers send their whole build information as the version.
+    local v = c.server_info.version or ""
+    if #v > 40 then v = v:sub(1, 40) .. "…" end
+    info = " (" .. (c.server_info.name or "?") .. " " .. v .. ")"
   end
   out("termos check: " .. name .. ": " .. state .. info)
 end
@@ -694,8 +700,24 @@ mod tests {
             ..Fake::default()
         };
         let go = find("go").expect("go");
-        let step = install_step(go, None, "linux-x86_64", &mut m);
-        assert!(matches!(step.outcome, Outcome::Passed(_)), "{step:?}");
+        let (step, runtime) = install_step(go, None, "linux-x86_64", &mut m);
+        assert!(
+            matches!(step.outcome, Outcome::Passed(_)) && runtime,
+            "{step:?}"
+        );
+        // A debugger that does not install fails the step, but the
+        // runtime is there for the rest.
+        let mut broken = Fake {
+            fail: vec!["delve"],
+            ..Fake::default()
+        };
+        let (step, runtime) = install_step(go, None, "linux-x86_64", &mut broken);
+        assert!(step.failed() && runtime);
+        let mut broken = Fake {
+            fail: vec!["use --global go@"],
+            ..Fake::default()
+        };
+        assert!(!install_step(go, None, "linux-x86_64", &mut broken).1);
         let t = template_for(go).expect("template");
         templates::create(t, &project, Some(&mut m), &mut |_| {}).expect("created");
         let steps = task_steps(t, &project, &mut m);
