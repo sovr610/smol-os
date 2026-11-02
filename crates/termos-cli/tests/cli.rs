@@ -210,6 +210,107 @@ fn edit_starts_termos_neovim_through_mise() {
     assert!(cfg.join("termos-nvim/lua/termos/generated.lua").is_file());
 }
 
+/// `termos lang check` installs, creates the template, builds, runs and
+/// tests it, and starts the editor on it; the stand-in mise runs commands
+/// after `exec --` itself and plays Neovim.
+#[cfg(unix)]
+#[test]
+fn lang_check_runs_every_step() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let log = dir.path().join("calls.log");
+    let fake = dir.path().join("mise");
+    std::fs::write(
+        &fake,
+        format!(
+            "#!/bin/sh\n\
+             echo \"NVIM_APPNAME=$NVIM_APPNAME $*\" >> '{log}'\n\
+             case \"$1\" in\n\
+             --version) echo '2026.10.14';;\n\
+             ls) echo '{{\"node\": [{{\"version\": \"22.1.0\", \"install_path\": \"/m/node\", \"active\": true}}], \
+             \"npm:bash-language-server\": [{{\"version\": \"5.4.0\", \"install_path\": \"/m/bls\"}}], \
+             \"neovim\": [{{\"version\": \"0.12.6\", \"install_path\": \"/m/nvim\"}}]}}';;\n\
+             exec)\n\
+               while [ \"$1\" != -- ]; do shift; done; shift\n\
+               case \"$*\" in\n\
+               nvim*) echo 'termos check: bashls: initialized'; exit \"${{FAKE_NVIM_EXIT:-0}}\";;\n\
+               *shellcheck*) exit 0;;\n\
+               esac\n\
+               exec \"$@\";;\n\
+             esac\n",
+            log = log.display()
+        ),
+    )
+    .expect("write");
+    std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+    let tmp = dir.path().join("tmp");
+    std::fs::create_dir_all(&tmp).expect("tmp");
+    let run = |args: &[&str], nvim_exit: &str| {
+        Command::new(env!("CARGO_BIN_EXE_termos"))
+            .args(args)
+            .env("TERMOS_MISE", &fake)
+            .env("XDG_DATA_HOME", dir.path().join("data"))
+            .env("XDG_CONFIG_HOME", dir.path().join("cfg"))
+            .env("TMPDIR", &tmp)
+            .env("FAKE_NVIM_EXIT", nvim_exit)
+            .output()
+            .expect("runs")
+    };
+    let out = run(&["lang", "check", "shell"], "0");
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success(),
+        "{text}{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    for step in [
+        "✓ install",
+        "✓ create: shell-script",
+        "✓ run: `sh main.sh` printed \"Hello from hello!\"",
+        "✓ test: shellcheck main.sh",
+        "✓ editor: bashls initialized in Neovim",
+        "- debugger: TermOS sets up no debugger for Shell",
+        "Shell works on",
+    ] {
+        assert!(text.contains(step), "{step:?} in {text}");
+    }
+    let calls = std::fs::read_to_string(&log).expect("mise was called");
+    let nvim = calls
+        .lines()
+        .find(|l| l.contains(" -- nvim "))
+        .expect("Neovim was started");
+    assert!(
+        nvim.starts_with("NVIM_APPNAME=termos-nvim exec neovim@0.12.6 -- nvim --headless --cmd"),
+        "{nvim}"
+    );
+    assert!(
+        nvim.contains(" -S ") && nvim.ends_with("hello/main.sh"),
+        "{nvim}"
+    );
+    // The scratch project is gone after a pass.
+    assert_eq!(std::fs::read_dir(&tmp).expect("tmp").count(), 0);
+
+    // A server that does not start fails the check; the project stays.
+    let kept = dir.path().join("kept");
+    let out = run(
+        &[
+            "lang",
+            "check",
+            "shell",
+            "--dir",
+            kept.to_str().expect("utf-8"),
+        ],
+        "1",
+    );
+    assert!(!out.status.success());
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains("Shell failed on") && err.contains("(editor)"),
+        "{err}"
+    );
+    assert!(kept.join("main.sh").is_file());
+}
+
 /// `termos create` writes a project, pinning the installed version, and
 /// `termos task` builds, runs and tests it from its files.
 #[cfg(unix)]

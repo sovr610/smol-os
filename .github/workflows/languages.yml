@@ -1,0 +1,91 @@
+name: Languages
+
+# The developer environment from start to finish (ROADMAP M5a, D-053,
+# D-056). For each language, `termos lang check` installs it with mise,
+# creates its template project, builds, runs and tests it, completes the
+# LSP handshake in TermOS's Neovim and the DAP handshake with its
+# debugger. Every language runs on x86_64 and aarch64 nightly, when the
+# developer environment changes, and on demand; ci.yml calls this
+# workflow on every push for a quick subset.
+
+on:
+  schedule:
+    - cron: "23 4 * * *"
+  push:
+    paths:
+      - "crates/termos-devkit/**"
+      - ".github/workflows/languages.yml"
+  workflow_dispatch:
+    inputs:
+      languages:
+        description: 'Languages as a JSON list, e.g. ["go", "zig"] (empty: all)'
+        required: false
+        default: ""
+  workflow_call:
+    inputs:
+      languages:
+        description: The languages, as a JSON list.
+        type: string
+        required: true
+      runners:
+        description: The runners, as a JSON list.
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: languages-${{ github.event_name }}-${{ github.ref }}-${{ inputs.languages || 'all' }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  # A smaller binary to hand to the check jobs; nothing here is debugged.
+  CARGO_PROFILE_DEV_DEBUG: "0"
+
+jobs:
+  build:
+    name: Build termos (${{ matrix.runner }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      matrix:
+        runner: ${{ fromJSON(inputs.runners || '["ubuntu-24.04", "ubuntu-24.04-arm"]') }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      # The WASM widget host is not needed to check languages.
+      - name: Build
+        run: cargo build --locked -p termos-cli --no-default-features
+      - uses: actions/upload-artifact@v4
+        with:
+          name: termos-${{ matrix.runner }}
+          path: target/debug/termos
+          retention-days: 3
+
+  check:
+    name: ${{ matrix.language }} (${{ matrix.runner }})
+    needs: build
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: ${{ fromJSON(inputs.runners || '["ubuntu-24.04", "ubuntu-24.04-arm"]') }}
+        language: ${{ fromJSON(inputs.languages || '["rust", "c", "cpp", "zig", "go", "python", "java", "kotlin", "csharp", "node", "bun", "deno", "web", "lua", "shell"]') }}
+    env:
+      # mise looks releases up on GitHub; without a token those calls are
+      # rate-limited per runner address.
+      GITHUB_TOKEN: ${{ github.token }}
+    steps:
+      # No checkout: the binary carries its templates and editor config.
+      - uses: actions/download-artifact@v4
+        with:
+          name: termos-${{ matrix.runner }}
+          path: bin
+      - name: termos lang check ${{ matrix.language }}
+        run: |
+          chmod +x bin/termos
+          bin/termos lang check ${{ matrix.language }}

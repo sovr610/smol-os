@@ -24,8 +24,13 @@ o.splitright = true
 o.splitbelow = true
 o.undofile = true
 
-require("termos.plugins")
-require("termos.lsp")
-require("termos.dap")
+-- Each part loads on its own, so one failing (plugins that could not be
+-- downloaded, say) leaves the others working.
+for _, part in ipairs({ "termos.plugins", "termos.lsp", "termos.dap" }) do
+  local ok, err = pcall(require, part)
+  if not ok then
+    vim.notify("TermOS: " .. part .. ": " .. tostring(err), vim.log.levels.ERROR)
+  end
+end
 
 pcall(require, "user")

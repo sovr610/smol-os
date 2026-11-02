@@ -593,6 +593,16 @@ rewrite history.
   - **Panels:** `task.build`, `task.run`, `task.test` and `task NAME` open a pane at the bottom running `termos task NAME --wait` (it waits for Enter, so the output stays); a task's next run replaces its panel. `git.open` (prefix `g`) opens `termos git` (lazygit through mise) in a float. The desktop runs the `termos` binary itself, which keeps termos-devkit out of termos-shell (ARCHITECTURE.md §4).
 - **Alternatives:** `termos new` doing both (a session name and a template name would be ambiguous); generating every project with each language's own tool (results drift with versions); task detection inside the shell crate (would put devkit below the shell).
 
+## D-056: `termos lang check` is the language acceptance test; TermOS trusts the `mise.toml` it writes
+- **Status:** Accepted (lead) · 2026-11-02
+- **Decision:**
+  - **`termos lang check <lang>[@version]`** runs, in order: install (as `termos lang install`), create the language's template in a scratch folder, its build, run and test tasks through `mise exec` (as in a pane; the run must print what the template prints), TermOS's Neovim headless on the template's main file until every server for that filetype has completed the LSP `initialize` handshake, and the debugger started as nvim-dap starts it until it answers the DAP `initialize` request. It prints each step, exits non-zero if any failed, and keeps the project only then. The check is in the product, not in CI scripts, so a user can run the same check on their own machine.
+  - **CI (D-053):** `.github/workflows/languages.yml` builds `termos` once per architecture and runs one job per language and architecture (ubuntu-24.04 and ubuntu-24.04-arm), nightly, on developer-environment changes and on demand; ci.yml calls it on every push for Rust, Python and Go on x86_64. The check jobs do not check out the repository: the binary carries its templates and editor config.
+  - **Platform limits** name the tool (`Limit { platform, tool, why }`): `termos lang install` leaves such a tool out on that platform and says why; the check reports the step it would have tested as skipped, not failed. The first one: clangd has no aarch64 Linux build.
+  - **`mise trust`:** `termos create` marks the `mise.toml` it just wrote as trusted. mise can stop to ask before it uses a config file it has not been told to trust, and nobody can answer in CI or behind a task panel; this file was written by TermOS and lists only tools.
+  - **Neovim:** each part of TermOS's config (plugins, servers, debuggers) loads on its own, so one failing leaves the others working; root markers that are patterns (`*.csproj`) are found by a `root_dir` function, since `root_markers` takes names literally.
+- **Alternatives:** shell scripts in the workflow (users could not run the check, and it would drift from the product); checking servers by starting them outside an editor (it would not test the editor config users get); the full matrix on every push (about 30 jobs of downloads per push).
+
 ---
 
 ## Open questions (the owner will be asked before the milestone that needs each one)

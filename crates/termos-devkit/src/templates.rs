@@ -9,6 +9,7 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::lang::{LangError, Runner};
 use crate::langs::{self, Language};
 
 /// A project template.
@@ -23,6 +24,11 @@ pub struct Template {
     /// A generator to run in the new folder instead (or before the
     /// files), through `mise exec`.
     pub generate: Option<&'static [&'static str]>,
+    /// The file to open first (and to check the language server on).
+    pub main: &'static str,
+    /// What running it prints (`{name}` is the project's name), when it
+    /// runs at all.
+    pub prints: Option<&'static str>,
 }
 
 pub const TEMPLATES: &[Template] = &[
@@ -41,6 +47,8 @@ pub const TEMPLATES: &[Template] = &[
             ),
             (".gitignore", "/target\n"),
         ],
+        main: "src/main.rs",
+        prints: Some("Hello from {name}!"),
         generate: None,
     },
     Template {
@@ -58,6 +66,8 @@ pub const TEMPLATES: &[Template] = &[
                 "package main\n\nimport \"testing\"\n\nfunc TestGreeting(t *testing.T) {\n\tif 1+1 != 2 {\n\t\tt.Fatal(\"arithmetic is broken\")\n\t}\n}\n",
             ),
         ],
+        main: "main.go",
+        prints: Some("Hello from {name}!"),
         generate: None,
     },
     Template {
@@ -79,6 +89,8 @@ pub const TEMPLATES: &[Template] = &[
             ),
             (".gitignore", "__pycache__/\n.venv/\n"),
         ],
+        main: "main.py",
+        prints: Some("Hello from {name}!"),
         generate: None,
     },
     Template {
@@ -97,6 +109,8 @@ pub const TEMPLATES: &[Template] = &[
             ),
             (".gitignore", "node_modules/\n"),
         ],
+        main: "index.js",
+        prints: Some("Hello from {name}!"),
         generate: None,
     },
     Template {
@@ -115,6 +129,8 @@ pub const TEMPLATES: &[Template] = &[
             ),
             (".gitignore", "node_modules/\n"),
         ],
+        main: "index.ts",
+        prints: Some("Hello from {name}!"),
         generate: None,
     },
     Template {
@@ -132,6 +148,8 @@ pub const TEMPLATES: &[Template] = &[
                 "Deno.test(\"arithmetic\", () => {\n  if (1 + 1 !== 2) throw new Error(\"arithmetic is broken\");\n});\n",
             ),
         ],
+        main: "main.ts",
+        prints: Some("Hello from {name}!"),
         generate: None,
     },
     Template {
@@ -149,6 +167,8 @@ pub const TEMPLATES: &[Template] = &[
             ),
             (".gitignore", "/build\n"),
         ],
+        main: "main.c",
+        prints: Some("Hello from {name}!"),
         generate: None,
     },
     Template {
@@ -166,6 +186,8 @@ pub const TEMPLATES: &[Template] = &[
             ),
             (".gitignore", "/build\n"),
         ],
+        main: "main.cpp",
+        prints: Some("Hello from {name}!"),
         generate: None,
     },
     Template {
@@ -173,6 +195,8 @@ pub const TEMPLATES: &[Template] = &[
         lang: "zig",
         about: "a Zig program (from `zig init`)",
         files: &[],
+        main: "src/main.zig",
+        prints: None,
         generate: Some(&["zig", "init"]),
     },
     Template {
@@ -183,6 +207,8 @@ pub const TEMPLATES: &[Template] = &[
             "Main.java",
             "public class Main {\n    public static void main(String[] args) {\n        System.out.println(\"Hello from {name}!\");\n    }\n}\n",
         )],
+        main: "Main.java",
+        prints: Some("Hello from {name}!"),
         generate: None,
     },
     Template {
@@ -193,6 +219,8 @@ pub const TEMPLATES: &[Template] = &[
             "main.kt",
             "fun main() {\n    println(\"Hello from {name}!\")\n}\n",
         )],
+        main: "main.kt",
+        prints: Some("Hello from {name}!"),
         generate: None,
     },
     Template {
@@ -200,6 +228,8 @@ pub const TEMPLATES: &[Template] = &[
         lang: "csharp",
         about: "a .NET console program (from `dotnet new console`)",
         files: &[],
+        main: "Program.cs",
+        prints: Some("Hello, World!"),
         generate: Some(&[
             "dotnet", "new", "console", "--name", "{name}", "--output", ".",
         ]),
@@ -209,6 +239,8 @@ pub const TEMPLATES: &[Template] = &[
         lang: "lua",
         about: "a Lua script",
         files: &[("main.lua", "print(\"Hello from {name}!\")\n")],
+        main: "main.lua",
+        prints: Some("Hello from {name}!"),
         generate: None,
     },
     Template {
@@ -219,6 +251,8 @@ pub const TEMPLATES: &[Template] = &[
             "main.sh",
             "#!/bin/sh\nset -eu\necho \"Hello from {name}!\"\n",
         )],
+        main: "main.sh",
+        prints: Some("Hello from {name}!"),
         generate: None,
     },
     Template {
@@ -235,6 +269,8 @@ pub const TEMPLATES: &[Template] = &[
                 "body {\n  font-family: system-ui, sans-serif;\n}\n",
             ),
         ],
+        main: "index.html",
+        prints: None,
         generate: None,
     },
 ];
@@ -271,6 +307,10 @@ pub fn project_name(dir: &Path) -> String {
 pub enum CreateError {
     #[error("{0} is not empty; TermOS creates projects in new or empty folders")]
     NotEmpty(PathBuf),
+    #[error("the {0} generator failed in {1}")]
+    Generator(&'static str, PathBuf),
+    #[error("{0}")]
+    Lang(#[from] LangError),
     #[error("{0}")]
     Io(#[from] std::io::Error),
 }
@@ -322,6 +362,75 @@ pub fn write(
     Ok(written)
 }
 
+/// Whether creating from `t` needs mise: for the runtime's version, or
+/// for the generator.
+pub fn needs_mise(t: &Template) -> bool {
+    language(t).is_some_and(|l| l.runtime.is_some()) || t.generate.is_some()
+}
+
+/// `termos create`: writes `template` into `dir` with a `mise.toml`
+/// pinning the runtime version mise has installed (else the registry's),
+/// marks that file trusted for mise (TermOS wrote it, and it only lists
+/// tools), then runs the generator, if any, through `mise exec`. `mise`
+/// must be given when [`needs_mise`].
+pub fn create(
+    template: &Template,
+    dir: &Path,
+    mut mise: Option<&mut dyn Runner>,
+    say: &mut dyn FnMut(&str),
+) -> Result<Vec<PathBuf>, CreateError> {
+    let lang = language(template).ok_or_else(|| {
+        CreateError::Io(std::io::Error::other(format!(
+            "the template {} names no known language",
+            template.name
+        )))
+    })?;
+    let mut pins = Vec::new();
+    if let (Some(rt), Some(m)) = (&lang.runtime, mise.as_deref_mut()) {
+        let have = crate::lang::installed(m)?;
+        let version = have
+            .get(rt.spec)
+            .and_then(|v| v.iter().find(|i| i.active).or_else(|| v.last()))
+            .map(|i| i.version.clone());
+        let version = version.unwrap_or_else(|| {
+            say(&format!(
+                "termos: {} is not installed yet (termos lang install {}); pinning {}",
+                lang.title, lang.name, rt.version
+            ));
+            rt.version.to_owned()
+        });
+        pins.push((rt.spec.to_owned(), version));
+    }
+    let files = write(template, dir, &pins)?;
+    if let Some(m) = mise {
+        let toml = dir.join("mise.toml");
+        if toml.is_file() {
+            let trust = vec!["trust".to_owned(), toml.display().to_string()];
+            if !m.run(&trust, Some(dir))? {
+                say(&format!(
+                    "termos: mise could not trust {}; run `mise trust` there",
+                    toml.display()
+                ));
+            }
+        }
+        if let Some(generate) = generator(template, dir) {
+            let mut args = vec!["exec".to_owned()];
+            args.extend(pins.iter().map(|(s, v)| format!("{s}@{v}")));
+            args.push("--".to_owned());
+            args.extend(generate);
+            if !m.run(&args, Some(dir))? {
+                return Err(CreateError::Generator(template.name, dir.to_owned()));
+            }
+        }
+    } else if needs_mise(template) {
+        return Err(CreateError::Io(std::io::Error::other(format!(
+            "the {} template needs mise",
+            template.name
+        ))));
+    }
+    Ok(files)
+}
+
 /// The language a template is for.
 pub fn language(t: &Template) -> Option<&'static Language> {
     langs::find(t.lang)
@@ -359,6 +468,75 @@ mod tests {
                 l.name
             );
         }
+    }
+
+    #[test]
+    fn creating_pins_trusts_and_generates() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut m = crate::lang::tests::Fake {
+            ls: r#"{"dotnet": [{"version": "9.0.100", "install_path": "/m/dotnet", "active": true}]}"#
+                .to_owned(),
+            ..Default::default()
+        };
+        let p = dir.path().join("hello");
+        let mut said = Vec::new();
+        create(
+            find("csharp-cli").expect("cs"),
+            &p,
+            Some(&mut m),
+            &mut |s| said.push(s.to_owned()),
+        )
+        .expect("creates");
+        assert!(said.is_empty(), "{said:?}");
+        assert!(
+            std::fs::read_to_string(p.join("mise.toml"))
+                .expect("pinned")
+                .contains("dotnet = \"9.0.100\"")
+        );
+        let toml = p.join("mise.toml").display().to_string();
+        assert_eq!(m.calls[1], format!("trust {toml} (in {})", p.display()));
+        assert!(
+            m.calls[2].starts_with("exec dotnet@9.0.100 -- dotnet new console --name hello"),
+            "{:?}",
+            m.calls
+        );
+        // Not installed: the registry's version, and a note.
+        let mut m = crate::lang::tests::Fake {
+            ls: "{}".to_owned(),
+            ..Default::default()
+        };
+        create(
+            find("go-cli").expect("go"),
+            &dir.path().join("g"),
+            Some(&mut m),
+            &mut |s| said.push(s.to_owned()),
+        )
+        .expect("creates");
+        assert!(said[0].contains("termos lang install go"), "{said:?}");
+        // A failing generator is an error; no runtime needs no mise.
+        let mut m = crate::lang::tests::Fake {
+            ls: "{}".to_owned(),
+            fail: vec!["zig init"],
+            ..Default::default()
+        };
+        assert!(matches!(
+            create(
+                find("zig-cli").expect("zig"),
+                &dir.path().join("z"),
+                Some(&mut m),
+                &mut |_| {}
+            ),
+            Err(CreateError::Generator("zig-cli", _))
+        ));
+        assert!(!needs_mise(find("shell-script").expect("sh")));
+        create(
+            find("shell-script").expect("sh"),
+            &dir.path().join("s"),
+            None,
+            &mut |_| {},
+        )
+        .expect("no mise needed");
+        assert!(!dir.path().join("s/mise.toml").exists());
     }
 
     #[test]

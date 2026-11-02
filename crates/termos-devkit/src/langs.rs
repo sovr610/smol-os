@@ -74,12 +74,38 @@ pub struct Language {
     pub helix: &'static [&'static str],
     /// Files that mark a project's root.
     pub root_markers: &'static [&'static str],
-    /// Platforms (`os-arch`) where something above has no build, with
-    /// what is missing (for `docs/languages.md` and `termos lang list`).
-    pub limits: &'static [(&'static str, &'static str)],
+    /// Tools above that have no build for a platform: `termos lang
+    /// install` leaves them out there and says why (`docs/languages.md`,
+    /// `termos lang list`).
+    pub limits: &'static [Limit],
+}
+
+/// A tool a language uses that has no build for one platform.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Limit {
+    /// `os-arch`, as [`platform`] gives it.
+    pub platform: &'static str,
+    /// The tool's mise spec.
+    pub tool: &'static str,
+    /// What to do instead.
+    pub why: &'static str,
 }
 
 impl Language {
+    /// What has no build on `platform`.
+    pub fn limits_on(&self, platform: &str) -> impl Iterator<Item = &'static Limit> + use<> {
+        let platform = platform.to_owned();
+        self.limits.iter().filter(move |l| l.platform == platform)
+    }
+
+    /// Whether `spec` has a build on `platform`.
+    pub fn available(&self, spec: &str, platform: &str) -> bool {
+        !self
+            .limits
+            .iter()
+            .any(|l| l.platform == platform && l.tool == spec)
+    }
+
     /// Every mise tool `termos lang install` installs for it.
     pub fn tools(&self) -> Vec<Tool> {
         let mut v: Vec<Tool> = self.runtime.into_iter().collect();
@@ -130,10 +156,11 @@ const CLANGD: Server = Server {
     cmd: &[],
     needs_root: false,
 };
-const C_LIMITS: &[(&str, &str)] = &[(
-    "linux-aarch64",
-    "clangd has no aarch64 Linux build on GitHub: install it with your system's packages",
-)];
+const C_LIMITS: &[Limit] = &[Limit {
+    platform: "linux-aarch64",
+    tool: "github:clangd/clangd",
+    why: "clangd has no aarch64 Linux build on GitHub: install it with your system's packages and set it up in lua/user.lua",
+}];
 
 pub const LANGUAGES: &[Language] = &[
     Language {
@@ -533,5 +560,21 @@ mod tests {
         assert_eq!(split_version("go@1.23"), ("go", Some("1.23")));
         assert_eq!(split_version("go@"), ("go", None));
         assert_eq!(split_version("go"), ("go", None));
+    }
+
+    #[test]
+    fn limits_name_tools_the_language_installs() {
+        for l in LANGUAGES {
+            let specs: Vec<&str> = l.tools().iter().map(|t| t.spec).collect();
+            for limit in l.limits {
+                assert!(specs.contains(&limit.tool), "{}: {}", l.name, limit.tool);
+                assert!(limit.platform.contains('-'));
+            }
+        }
+        let c = find("c").expect("c");
+        assert!(!c.available("github:clangd/clangd", "linux-aarch64"));
+        assert!(c.available("github:clangd/clangd", "linux-x86_64"));
+        assert_eq!(c.limits_on("linux-aarch64").count(), 1);
+        assert_eq!(c.limits_on("macos-aarch64").count(), 0);
     }
 }

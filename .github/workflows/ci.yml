@@ -271,6 +271,16 @@ jobs:
       - name: Latency, idle CPU, memory, flood throughput
         run: cargo xtask perf 30
 
+  # Every language, on both architectures, runs nightly and when the
+  # developer environment changes (languages.yml); this quick subset runs
+  # on every push.
+  languages-quick:
+    name: Languages (quick)
+    uses: ./.github/workflows/languages.yml
+    with:
+      languages: '["rust", "python", "go"]'
+      runners: '["ubuntu-24.04"]'
+
   widget-sample:
     name: WASM widget sample (built from source)
     runs-on: ubuntu-24.04

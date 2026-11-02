@@ -183,6 +183,21 @@ enum LangCmd {
         #[arg(value_name = "LANG[@VERSION]")]
         lang: String,
     },
+    /// Check a language from start to finish: install it, create its
+    /// template project, build, run and test it, then start its language
+    /// servers in TermOS's Neovim and its debugger (what the language CI
+    /// runs).
+    Check {
+        #[arg(value_name = "LANG[@VERSION]")]
+        lang: String,
+        /// Where to create the project (new or empty). By default a
+        /// scratch folder, removed when every step passed.
+        #[arg(long)]
+        dir: Option<PathBuf>,
+        /// Seconds a language server or debugger may take to start.
+        #[arg(long, default_value_t = 240)]
+        timeout: u64,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -485,43 +500,20 @@ fn create_command(
         Some(d) => d.to_owned(),
         None => std::env::current_dir()?,
     };
-    let lang = templates::language(t).context("the template's language")?;
-    // Pin what is installed; mise is needed only when the language has a
-    // runtime or the template has a generator.
-    let mut pins = Vec::new();
-    let mut runner = None;
-    if let Some(rt) = &lang.runtime {
+    let mut runner = if templates::needs_mise(t) {
         let mise = termos_devkit::mise::ensure(&paths.data_dir, &mut |m| println!("{m}"))?;
-        let mut r = termos_devkit::lang::MiseRunner { mise };
-        let have = termos_devkit::lang::installed(&mut r)?;
-        let version = have
-            .get(rt.spec)
-            .and_then(|v| v.iter().find(|i| i.active).or_else(|| v.last()))
-            .map(|i| i.version.clone());
-        match version {
-            Some(v) => pins.push((rt.spec.to_owned(), v)),
-            None => {
-                println!(
-                    "termos: {} is not installed yet (termos lang install {}); pinning {}",
-                    lang.title, lang.name, rt.version
-                );
-                pins.push((rt.spec.to_owned(), rt.version.to_owned()));
-            }
-        }
-        runner = Some(r);
-    }
-    let files = templates::write(t, &dir, &pins)?;
-    if let Some(generate) = templates::generator(t, &dir) {
-        let r = runner.as_mut().context("a generator needs mise")?;
-        let mut args = vec!["exec".to_owned()];
-        args.extend(pins.iter().map(|(s, v)| format!("{s}@{v}")));
-        args.push("--".to_owned());
-        args.extend(generate);
-        use termos_devkit::lang::Runner;
-        if !r.run(&args, Some(&dir))? {
-            bail!("the {} generator failed in {}", t.name, dir.display());
-        }
-    }
+        Some(termos_devkit::lang::MiseRunner { mise })
+    } else {
+        None
+    };
+    let files = templates::create(
+        t,
+        &dir,
+        runner
+            .as_mut()
+            .map(|r| r as &mut dyn termos_devkit::lang::Runner),
+        &mut |m| println!("{m}"),
+    )?;
     println!(
         "termos: created {} ({}) in {}: {}",
         templates::project_name(&dir),
@@ -738,8 +730,11 @@ fn lang_command(action: &LangCmd, paths: &Paths) -> anyhow::Result<ExitCode> {
             for arg in wanted {
                 let (l, version) = find(arg)?;
                 println!("termos: installing {}", l.title);
-                let report = lang::install(l, version.as_deref(), &mut runner)?;
+                let report = lang::install(l, version.as_deref(), &langs::platform(), &mut runner)?;
                 println!("termos: {}: installed {}", l.name, report.done.join(", "));
+                for (spec, why) in &report.skipped {
+                    println!("termos: {}: left out {spec}: {why}", l.name);
+                }
                 for (spec, what) in &report.failed {
                     ok = false;
                     eprintln!("termos: {}: {what} ({spec}) did not install", l.name);
@@ -770,6 +765,53 @@ fn lang_command(action: &LangCmd, paths: &Paths) -> anyhow::Result<ExitCode> {
             let removed = lang::remove(l, version.as_deref(), &mut runner)?;
             println!("termos: removed {}", removed.join(", "));
             Ok(ExitCode::SUCCESS)
+        }
+        LangCmd::Check {
+            lang: arg,
+            dir,
+            timeout,
+        } => {
+            use termos_devkit::check;
+            let (l, version) = find(arg)?;
+            let scratch = dir.is_none();
+            let dir = dir.clone().unwrap_or_else(check::scratch_dir);
+            let mise_path = runner.mise.path.clone();
+            let platform = langs::platform();
+            let get = |k: &str| std::env::var(k).ok();
+            let mut say = |m: &str| println!("{m}");
+            let steps = check::run(
+                l,
+                version.as_deref(),
+                &mut check::Check {
+                    mise_path: &mise_path,
+                    mise: &mut runner,
+                    get: &get,
+                    platform: &platform,
+                    dir: &dir,
+                    timeout: Duration::from_secs(*timeout),
+                    say: &mut say,
+                },
+            );
+            let failed: Vec<&str> = steps
+                .iter()
+                .filter(|s| s.failed())
+                .map(|s| s.name)
+                .collect();
+            if failed.is_empty() {
+                println!("termos check: {} works on {platform}", l.title);
+                if scratch && let Some(root) = dir.parent() {
+                    let _ = std::fs::remove_dir_all(root);
+                }
+                Ok(ExitCode::SUCCESS)
+            } else {
+                eprintln!(
+                    "termos check: {} failed on {platform} ({}); the project is in {}",
+                    l.title,
+                    failed.join(", "),
+                    dir.display()
+                );
+                Ok(ExitCode::FAILURE)
+            }
         }
     }
 }

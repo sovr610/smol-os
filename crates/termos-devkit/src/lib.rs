@@ -6,11 +6,13 @@
 //! - [`langs`]: the languages TermOS sets up, with their language servers
 //!   and debuggers;
 //! - [`lang`]: `termos lang install|use|list|remove` over mise;
+//! - [`check`]: `termos lang check`, a language from install to debugger;
 //! - [`editor`]: TermOS's Neovim and Helix, with the installed servers
 //!   and debuggers;
 //! - [`templates`]: `termos create <template> [dir]`;
 //! - [`tasks`]: build, run and test for a project.
 
+pub mod check;
 pub mod editor;
 pub mod lang;
 pub mod langs;

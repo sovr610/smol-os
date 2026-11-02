@@ -28,6 +28,9 @@ pub trait Runner {
     /// Runs `mise <args>` and returns its standard output when it
     /// succeeded.
     fn output(&mut self, args: &[String]) -> io::Result<Option<String>>;
+    /// Runs `mise <args>` in `cwd`, its errors going to the user; whether
+    /// it succeeded, and its standard output.
+    fn capture(&mut self, args: &[String], cwd: &Path) -> io::Result<(bool, String)>;
 }
 
 /// The real mise.
@@ -57,6 +60,19 @@ impl Runner for MiseRunner {
             .success()
             .then(|| String::from_utf8_lossy(&out.stdout).into_owned()))
     }
+
+    fn capture(&mut self, args: &[String], cwd: &Path) -> io::Result<(bool, String)> {
+        let out = Command::new(&self.mise.path)
+            .args(args)
+            .current_dir(cwd)
+            .stdin(Stdio::null())
+            .stderr(Stdio::inherit())
+            .output()?;
+        Ok((
+            out.status.success(),
+            String::from_utf8_lossy(&out.stdout).into_owned(),
+        ))
+    }
 }
 
 fn s(v: &[&str]) -> Vec<String> {
@@ -73,6 +89,8 @@ pub struct Report {
     pub done: Vec<String>,
     /// Tools that did not install, and what they were for.
     pub failed: Vec<(String, &'static str)>,
+    /// Tools with no build for this platform, and what to do instead.
+    pub skipped: Vec<(String, &'static str)>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -85,13 +103,17 @@ pub enum LangError {
     Io(#[from] io::Error),
 }
 
-/// `termos lang install <lang>[@version]`.
+/// `termos lang install <lang>[@version]` on `platform` (`os-arch`).
 pub fn install(
     lang: &Language,
     version: Option<&str>,
+    platform: &str,
     mise: &mut dyn Runner,
 ) -> Result<Report, LangError> {
     let mut report = Report::default();
+    for limit in lang.limits_on(platform) {
+        report.skipped.push((limit.tool.to_owned(), limit.why));
+    }
     for h in lang.helpers {
         let at = spec_at(h, None);
         if mise.run(&s(&["use", "--global", &at]), None)? {
@@ -126,7 +148,7 @@ pub fn install(
         .collect();
     let mut seen = Vec::new();
     for (t, what) in extra {
-        if seen.contains(&t.spec) {
+        if seen.contains(&t.spec) || !lang.available(t.spec, platform) {
             continue;
         }
         seen.push(t.spec);
@@ -285,11 +307,7 @@ pub fn rows(installed: &BTreeMap<String, Vec<Installed>>, platform: &str) -> Vec
                 .filter_map(|srv| srv.tool.map(|t| (srv.name, has(t.spec))))
                 .chain(l.debugger.map(|d| (d.name, has(d.tool.spec))))
                 .collect(),
-            limit: l
-                .limits
-                .iter()
-                .find(|(p, _)| *p == platform)
-                .map(|(_, why)| *why),
+            limit: l.limits_on(platform).next().map(|x| x.why),
         })
         .collect()
 }
@@ -305,6 +323,8 @@ pub(crate) mod tests {
         pub calls: Vec<String>,
         pub fail: Vec<&'static str>,
         pub ls: String,
+        /// What `capture` returns as the program's output.
+        pub printed: String,
     }
 
     impl Runner for Fake {
@@ -322,12 +342,25 @@ pub(crate) mod tests {
             self.calls.push(args.join(" "));
             Ok(Some(self.ls.clone()))
         }
+
+        fn capture(&mut self, args: &[String], cwd: &Path) -> io::Result<(bool, String)> {
+            let line = format!("{} (in {})", args.join(" "), cwd.display());
+            let ok = !self.fail.iter().any(|f| line.contains(f));
+            self.calls.push(line);
+            Ok((ok, self.printed.clone()))
+        }
     }
 
     #[test]
     fn install_sets_the_runtime_globally_and_installs_servers() {
         let mut m = Fake::default();
-        let r = install(find("go").expect("go"), Some("1.23"), &mut m).expect("installs");
+        let r = install(
+            find("go").expect("go"),
+            Some("1.23"),
+            "linux-x86_64",
+            &mut m,
+        )
+        .expect("installs");
         assert_eq!(
             m.calls,
             [
@@ -343,7 +376,13 @@ pub(crate) mod tests {
             fail: vec!["basedpyright"],
             ..Fake::default()
         };
-        let r = install(find("python").expect("python"), None, &mut m).expect("installs");
+        let r = install(
+            find("python").expect("python"),
+            None,
+            "linux-x86_64",
+            &mut m,
+        )
+        .expect("installs");
         assert_eq!(m.calls[0], "use --global uv@latest");
         assert_eq!(m.calls[1], "use --global python@latest");
         assert_eq!(
@@ -355,18 +394,29 @@ pub(crate) mod tests {
             fail: vec!["use --global go@"],
             ..Fake::default()
         };
-        assert!(install(find("go").expect("go"), None, &mut m).is_err());
+        assert!(install(find("go").expect("go"), None, "linux-x86_64", &mut m).is_err());
         // C has no runtime: no version can be asked for.
         let mut m = Fake::default();
         assert!(matches!(
-            install(find("c").expect("c"), Some("17"), &mut m),
+            install(find("c").expect("c"), Some("17"), "linux-x86_64", &mut m),
             Err(LangError::NoRuntime(..))
         ));
-        let r = install(find("c").expect("c"), None, &mut m).expect("tools only");
+        let r = install(find("c").expect("c"), None, "linux-x86_64", &mut m).expect("tools only");
         assert!(
             r.done.contains(&"github:clangd/clangd@latest".to_owned()),
             "{r:?}"
         );
+        // Where clangd has no build it is not tried, and the report says
+        // why.
+        let mut m = Fake::default();
+        let r = install(find("c").expect("c"), None, "linux-aarch64", &mut m).expect("tools");
+        assert!(
+            !m.calls.iter().any(|c| c.contains("clangd")),
+            "{:?}",
+            m.calls
+        );
+        assert_eq!(r.skipped.len(), 1);
+        assert!(r.skipped[0].1.contains("system's packages"));
     }
 
     #[test]
