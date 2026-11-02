@@ -47,7 +47,7 @@ jobs:
         run: |
           rustup target add x86_64-pc-windows-msvc
           cargo clippy --workspace --lib --bins --no-default-features --locked --target x86_64-pc-windows-msvc -- -D warnings
-          cargo clippy -p termos-core -p termos-devkit -p termos-hw -p termos-term -p termos-wm -p termos-plugin -p termos-apps -p termos-shell -p termos-cli -p termos-ai --all-targets --no-default-features --locked --target x86_64-pc-windows-msvc -- -D warnings
+          cargo clippy -p termos-core -p termos-devkit -p termos-hw -p termos-term -p termos-wm -p termos-plugin -p termos-apps -p termos-shell -p termos-cli -p termos-ai -p termos-models --all-targets --no-default-features --locked --target x86_64-pc-windows-msvc -- -D warnings
 
   test:
     name: Clippy + test (${{ matrix.name }})
@@ -266,7 +266,7 @@ jobs:
       - name: Run fuzz targets
         working-directory: fuzz
         run: |
-          for target in vt_advance config_parse keyspec_parse proto_decode caps_reply sixel_decode apc_dcs_intercept markdown_layout sse_parse; do
+          for target in vt_advance config_parse keyspec_parse proto_decode caps_reply sixel_decode apc_dcs_intercept markdown_layout sse_parse gguf_parse; do
             cargo +nightly fuzz run "$target" --target x86_64-unknown-linux-gnu -- -max_total_time=60
           done
 
@@ -309,3 +309,26 @@ jobs:
         run: |
           export TERMOS_TEST_WIDGET="$PWD/examples/widgets/pomodoro/target/wasm32-wasip2/release/termos_widget_pomodoro.wasm"
           cargo test -p termos-shell --features wasm-widgets --locked --test widgets
+
+  # Local models end to end (M7): real downloads from the Hugging Face Hub,
+  # llama.cpp's official release installed through mise, chat and
+  # embeddings through the router, and agents' `local` provider finding
+  # it. Tiny public models keep it to a few MiB.
+  models:
+    name: Local models (Hugging Face, llama.cpp, candle)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      # mise asks GitHub's API for llama.cpp's latest release.
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      # What the asset patterns in termos-models/src/llama.rs must match.
+      - name: llama.cpp's latest release assets
+        run: gh release view --repo ggml-org/llama.cpp --json tagName,assets --jq '.tagName, .assets[].name'
+      - name: Build
+        run: cargo build --locked -p termos-cli
+      - name: Models end to end
+        run: ./.github/scripts/models-e2e.sh target/debug/termos

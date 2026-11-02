@@ -15,13 +15,16 @@ name = "termos"
 path = "src/main.rs"
 
 [features]
-default = ["wasm-widgets", "tls"]
+default = ["wasm-widgets", "tls", "candle"]
 # WASM status-line widgets (D-050: in every build; the engine starts only
 # when a widget is configured).
 wasm-widgets = ["termos-shell/wasm-widgets"]
 # HTTPS for agents' providers, fetch_url and MCP (D-058); left out only
 # where ring cannot be built (clippy for Windows from Linux).
-tls = ["termos-ai/tls"]
+tls = ["termos-ai/tls", "termos-models/tls"]
+# Embedding models in-process (D-067). Like the others, left out by the
+# clippy check for Windows run from Linux, which builds no default features.
+candle = ["termos-models/candle"]
 
 [dependencies]
 anyhow.workspace = true
@@ -34,6 +37,7 @@ termos-ai.workspace = true
 termos-core.workspace = true
 termos-devkit.workspace = true
 termos-hw.workspace = true
+termos-models.workspace = true
 termos-render.workspace = true
 termos-shell.workspace = true
 tokio = { workspace = true, features = ["rt", "macros", "sync", "time"] }

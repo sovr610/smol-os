@@ -12,6 +12,7 @@
 mod agents;
 mod client;
 mod images;
+mod models;
 mod probe;
 
 use std::io::{IsTerminal, Write};
@@ -168,6 +169,18 @@ enum Cmd {
     Sandbox {
         #[command(subcommand)]
         action: agents::SandboxCmd,
+    },
+    /// Local models: search Hugging Face, check what fits this machine,
+    /// download, list, remove.
+    Model {
+        #[command(subcommand)]
+        action: models::ModelCmd,
+    },
+    /// The local model server: an OpenAI-compatible endpoint that starts
+    /// models on demand.
+    Models {
+        #[command(subcommand)]
+        action: models::ModelsCmd,
     },
     /// Diagnostics.
     #[command(hide = true)]
@@ -332,6 +345,8 @@ fn main() -> ExitCode {
         Some(Cmd::Agent { action }) => agents::agent_command(action, &paths, &config_path),
         Some(Cmd::Audit { action }) => agents::audit_command(action, &paths),
         Some(Cmd::Sandbox { action }) => agents::sandbox_command(action, &paths),
+        Some(Cmd::Model { action }) => models::model_command(action, &paths, &config_path),
+        Some(Cmd::Models { action }) => models::models_command(action, &paths, &config_path),
         Some(Cmd::Debug {
             what: DebugCmd::Caps { raw },
         }) => debug_caps(*raw),
@@ -458,7 +473,9 @@ fn run(cli: &Cli, paths: &Paths, config_path: &Path, t: &Target) -> anyhow::Resu
             | Cmd::Secret { .. }
             | Cmd::Agent { .. }
             | Cmd::Audit { .. }
-            | Cmd::Sandbox { .. },
+            | Cmd::Sandbox { .. }
+            | Cmd::Model { .. }
+            | Cmd::Models { .. },
         ) => Ok(ExitCode::SUCCESS),
     }
 }
@@ -891,6 +908,9 @@ fn debug_hw() -> anyhow::Result<ExitCode> {
     use termos_hw::Source;
     let mut sampler = termos_hw::Sampler::new().context("cannot read this machine")?;
     println!("{:#?}", sampler.inventory());
+    for line in termos_hw::accel::detect().describe() {
+        println!("{line}");
+    }
     std::thread::sleep(Duration::from_secs(1));
     let mut sample = sampler.sample();
     sample.processes.truncate(5);
@@ -1186,6 +1206,7 @@ fn run_server(paths: &Paths, config_path: &Path, t: &Target) -> anyhow::Result<E
         .map(PathBuf::from);
     opts.launcher = Some(std::sync::Arc::new(termos_ai::ui::AgentLauncher::new(
         std::env::current_exe().ok(),
+        Some(config_path.to_owned()),
         home,
     )));
     // Plugins run in the same sandbox, through `termos sandbox run` (D-064).

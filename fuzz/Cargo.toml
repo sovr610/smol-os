@@ -14,6 +14,8 @@ libfuzzer-sys = "0.4.13"
 termos-ai = { path = "../crates/termos-ai", default-features = false }
 termos-apps = { path = "../crates/termos-apps" }
 termos-core = { path = "../crates/termos-core" }
+termos-hw = { path = "../crates/termos-hw" }
+termos-models = { path = "../crates/termos-models", default-features = false }
 termos-render = { path = "../crates/termos-render" }
 termos-term = { path = "../crates/termos-term" }
 
@@ -80,6 +82,13 @@ bench = false
 [[bin]]
 name = "sse_parse"
 path = "fuzz_targets/sse_parse.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "gguf_parse"
+path = "fuzz_targets/gguf_parse.rs"
 test = false
 doc = false
 bench = false

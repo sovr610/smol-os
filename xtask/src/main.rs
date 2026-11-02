@@ -106,6 +106,7 @@ const CROSS_TEST_CRATES: &[&str] = &[
     "termos-core",
     "termos-devkit",
     "termos-hw",
+    "termos-models",
     "termos-term",
     "termos-wm",
     "termos-plugin",

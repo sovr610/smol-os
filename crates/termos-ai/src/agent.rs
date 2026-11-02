@@ -226,8 +226,11 @@ pub struct Launch {
     pub workspace: PathBuf,
     /// Resume this saved conversation.
     pub resume: Option<String>,
-    /// The `termos` binary (the sandbox helper).
+    /// The `termos` binary (the sandbox helper; it also starts the model
+    /// router for `local` providers).
     pub helper: Option<PathBuf>,
+    /// The config file the server reads (passed on to the model router).
+    pub config_file: Option<PathBuf>,
     pub home: Option<PathBuf>,
 }
 
@@ -571,6 +574,22 @@ impl Session {
                     Err(Some(e)) => shared.error(format!("MCP server {name}: {e}")),
                 }
             }
+        }
+        // A `local` provider without an address uses the model router.
+        let mut pcfg = pcfg;
+        let mut key = key;
+        if provider::uses_router(&pcfg) {
+            shared.update(|v| v.status = "finding the local model router…".into());
+            let (url, token) = provider::local::router(
+                &launch.paths,
+                launch.helper.as_deref(),
+                launch.config_file.as_deref(),
+            )
+            .await
+            .map_err(|e| Some(e.message))?;
+            redactor.add(&token);
+            pcfg.base_url = Some(url);
+            key = Some(token);
         }
         let provider = provider::build(&provider_name, &pcfg, key).map_err(|e| Some(e.message))?;
         // The model.

@@ -13,6 +13,7 @@
 
 pub mod anthropic;
 pub mod http;
+pub mod local;
 pub mod openai;
 
 use std::fmt;
@@ -266,15 +267,22 @@ impl fmt::Debug for dyn Provider {
     }
 }
 
-/// The address a provider kind uses when the config names none.
+/// The address a provider kind uses when the config names none. A
+/// `local` provider without one uses TermOS's model router, which
+/// [`local::router`] finds (or starts) before [`build`].
 pub fn default_base_url(kind: ProviderKind) -> Option<&'static str> {
     match kind {
         ProviderKind::Anthropic => Some("https://api.anthropic.com"),
         ProviderKind::Openai => Some("https://api.openai.com/v1"),
         ProviderKind::Kimi => Some("https://api.moonshot.ai/v1"),
-        // TODO(M7): find the model router's address and token by itself once `termos models serve` exists.
         ProviderKind::OpenaiCompatible | ProviderKind::Local => None,
     }
+}
+
+/// Whether `cfg` uses TermOS's model router: a `local` provider with no
+/// `base-url`.
+pub fn uses_router(cfg: &ProviderConfig) -> bool {
+    cfg.kind == ProviderKind::Local && cfg.base_url.is_none()
 }
 
 /// Builds the provider `name` from its config, with its key (if it has

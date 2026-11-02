@@ -2,6 +2,9 @@
 //! The HTTP client every provider, `fetch_url` and MCP share.
 //!
 //! - TLS is rustls with ring, installed once (the `tls` feature, D-058).
+//!   reqwest has no crypto provider of its own, so without that feature
+//!   no client can be built at all; such builds exist only for
+//!   cross-target checks, and the error says so (D-065 corrects D-058).
 //! - No idle connections are pooled: hyper's pool would keep a timer
 //!   ticking while nothing happens (ARCHITECTURE.md §5.5). A turn costs a
 //!   new connection instead.
@@ -26,6 +29,9 @@ pub(crate) fn client() -> Result<&'static reqwest::Client, ProviderError> {
     static CLIENT: OnceLock<Result<reqwest::Client, String>> = OnceLock::new();
     CLIENT
         .get_or_init(|| {
+            if !cfg!(feature = "tls") {
+                return Err("this build of TermOS has no TLS support (the `tls` feature)".into());
+            }
             #[cfg(feature = "tls")]
             {
                 // Fails only if another provider is already installed,

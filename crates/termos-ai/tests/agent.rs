@@ -166,6 +166,7 @@ fn a_session_fixes_a_bug_with_approvals() {
         workspace: ws.clone(),
         resume: None,
         helper: None,
+        config_file: None,
         home: Some(dir.path().join("home")),
     })
     .expect("start");

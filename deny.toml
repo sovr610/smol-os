@@ -21,6 +21,8 @@ ignore = [
   # i18n.toml; never on input TermOS receives.
   { id = "RUSTSEC-2026-0374", reason = "basic-toml: build-time only (age's i18n macros)" },
   { id = "RUSTSEC-2026-0173", reason = "proc-macro-error2: build-time only (age's i18n macros)" },
+  # A macro crate, expanded at build time by gemm (candle's matrix code).
+  { id = "RUSTSEC-2024-0436", reason = "paste: build-time macro only (gemm, via candle)" },
 ]
 
 [licenses]

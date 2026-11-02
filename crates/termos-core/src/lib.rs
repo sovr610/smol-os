@@ -28,6 +28,7 @@ pub mod ids;
 pub mod input;
 pub mod local;
 pub mod log;
+pub mod models_endpoint;
 pub mod paths;
 pub mod proto;
 pub mod transport;

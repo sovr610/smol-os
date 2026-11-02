@@ -15,8 +15,10 @@ use termos_render::theme::ThemeConfig;
 use crate::input::KeyEvent;
 
 pub mod agents;
+pub mod models;
 
 pub use agents::{AgentsConfig, SecretsConfig};
+pub use models::ModelsConfig;
 
 /// The whole configuration. Every field has a default, so an empty or
 /// missing file is valid.
@@ -53,6 +55,8 @@ pub struct Config {
     pub agents: AgentsConfig,
     /// Where API keys are kept (D-058).
     pub secrets: SecretsConfig,
+    /// Local models (M7, D-065).
+    pub models: ModelsConfig,
 }
 
 impl Default for Config {
@@ -78,6 +82,7 @@ impl Default for Config {
             dev: DevConfig::default(),
             agents: AgentsConfig::default(),
             secrets: SecretsConfig::default(),
+            models: ModelsConfig::default(),
         }
     }
 }
@@ -594,6 +599,18 @@ history = true                # keep conversations (mode 0600) to resume them
 # there is one, else the OS keyring when it works, else the file (an age
 # file locked with a passphrase you choose).
 store = "auto"
+
+[models]
+# Local models (see docs/models.md): `termos model pull`, then the agents'
+# "local" provider or `termos models serve`.
+context = 4096           # tokens of context llama.cpp gets
+llama-cpp = "auto"       # auto | cpu | vulkan | cuda | rocm | metal
+port = 0                 # the router's port; 0 picks a free one
+# cache = "~/.cache/huggingface/hub"   # shared with huggingface_hub
+# cache-limit = "100G"   # `termos model gc` keeps the cache under this
+# token = "keyring:huggingface"        # gated or private models (or HF_TOKEN)
+# llama-server = "/opt/llama.cpp/build/bin/llama-server"   # your own build
+# memory-budget = "24G"  # loaded models at most (default: 90% of RAM + VRAM)
 
 # WASM status-line widgets (see docs/widgets.md). Each runs sandboxed: no
 # network, no files except the folders in `dirs` (read-only).

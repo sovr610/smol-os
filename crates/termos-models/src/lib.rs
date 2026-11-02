@@ -1,17 +1,28 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! # termos-models
 //!
-//! Local model management and inference.
+//! Local models (ARCHITECTURE.md §12, D-065 to D-068).
 //!
-//! **Status:** not started. Scheduled for M7 (see `ROADMAP.md`).
+//! - [`hub`]: the Hugging Face Hub's API; [`cache`]: the
+//!   `huggingface_hub`-compatible cache with resumable, verified
+//!   downloads.
+//! - [`gguf`]: GGUF headers; [`fit`]: memory estimates and placement.
+//! - [`catalog`]: models by name: pull plans, cached models, their ids.
+//! - [`llama`]: llama.cpp's `llama-server`, installed by mise for this
+//!   machine's accelerator; `embed` (feature `candle`): embedding models
+//!   in-process.
+//! - [`router`]: `termos models serve`, one OpenAI-compatible endpoint
+//!   that starts backends on demand within a memory budget.
 //!
-//! Planned modules (see `ARCHITECTURE.md`, "Local models"):
-//! - `hub` — Hugging Face search/pull/list/rm with resumable downloads,
-//!   checksum verification, cache management and HF token support.
-//! - `fit` — memory estimates and size/quantization recommendations for the
-//!   detected hardware.
-//! - `backend` — llama.cpp (default), ONNX Runtime and/or candle, an optional
-//!   Python sidecar (transformers/vLLM), and accelerator-specific paths.
-//! - `server` — one local OpenAI-compatible endpoint in front of every backend.
+//! Hardware detection is `termos_hw::accel`; the endpoint file agents
+//! read is `termos_core::models_endpoint`.
 
-// TODO(M7): HF adapter, hardware-aware recommendations, llama.cpp backend, OpenAI-compatible router.
+pub mod cache;
+pub mod catalog;
+#[cfg(feature = "candle")]
+pub mod embed;
+pub mod fit;
+pub mod gguf;
+pub mod hub;
+pub mod llama;
+pub mod router;

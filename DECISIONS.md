@@ -676,6 +676,43 @@ rewrite history.
 - **Decision:** with `[plugins] sandbox = true` (the default), the server starts each plugin through `termos sandbox run --keep-env --workspace <state>/plugins/<name> --keep <session socket> [--net] -- <exec…>` in the plugin's directory. The plugin's own data folder (`TERMOS_PLUGIN_DATA`, made for every plugin, sandboxed or not) is the only writable one besides a temporary folder; the session socket is bound back into the hidden runtime folder; the network needs the manifest's new `network` permission. `termos sandbox run` replaces itself with the sandbox, so stopping a plugin stops what runs inside. Without a sandbox (macOS, Windows, no bubblewrap or Landlock) plugins run as before.
 - **Alternatives:** a sandbox library call inside termos-shell (it would depend on termos-ai); off by default (plugins written before M6 needing the network now have to ask for it, which is the point).
 
+## D-065: Local model backends: llama.cpp as `llama-server` subprocesses, candle for embeddings
+- **Status:** Accepted (owner: O-6 and O-7, the recommended answers) · 2026-11-02
+- **Context:** M7 asked the owner to pick the llama.cpp integration (O-6) and the Rust-native runtime (O-7), and to confirm D-021.
+- **Decision:**
+  - **O-6, a subprocess.** Each loaded GGUF model runs in its own `llama-server`, on a 127.0.0.1 port picked at start, with a per-start key the router sends. The key goes in `LLAMA_API_KEY`, not on the command line where every local user could read it. After start, the router checks that a request without the key is refused, and stops a server that does not check it.
+  - **Which llama-server:** `[models] llama-server` (a build of your own, e.g. CUDA on Linux), else `TERMOS_LLAMA_SERVER`, else llama.cpp's official release for this machine, installed by mise's `github:` backend (`github:ggml-org/llama.cpp[asset_pattern=…]@latest`), as D-053 does for other tools. `[models] llama-cpp = "auto"` picks Metal on Apple Silicon, Vulkan where a GPU and the Vulkan loader are present (not on a Raspberry Pi), and the CPU otherwise; `cpu`, `vulkan`, `cuda`, `rocm` and `metal` override it. CUDA and ROCm are never automatic: the official releases have no Linux builds of either, and the Windows CUDA build needs CUDA's runtime libraries (a separate download) besides the driver, while Vulkan runs on the NVIDIA and AMD drivers alone. `termos model recommend` says so.
+  - **O-7, candle first,** for embedding models only: BERT-family safetensors (MiniLM, BGE, E5) in-process on the CPU, mean-pooled over the attention mask and normalized (feature `candle`, on by default). Chat models are llama.cpp's job on every platform; candle chat models would duplicate it with fewer quantizations and no GPU offload, so they are not included. ONNX Runtime is not included.
+  - **D-021 is followed as proposed** (the `huggingface_hub` cache, a separate router process). The owner confirms it at the M7 review.
+  - **`[models]`** in config.toml: `cache`, `cache-limit`, `token` (`keyring:<name>`), `context` (4096), `llama-cpp`, `llama-server`, `memory-budget`, `port`, and `[models.servers.<name>]`.
+  - **Correction to D-058:** reqwest built without a TLS crypto provider panics when a client is built, so a build without the `tls` feature builds no HTTP client at all, plain HTTP included, and says it has no TLS support. Only the clippy check for Windows run from Linux builds without it; termos-models has the same feature.
+- **Alternatives:** FFI through `llama-cpp-2` (a C++ build inside ours, one accelerator per build, and a crash takes the router down); Ollama as the backend (another daemon with its own model store instead of the Hub's cache); ONNX Runtime (a C++ runtime to ship or download, for the same embedding models).
+
+## D-066: Downloads, the cache, hardware detection and the fit estimate
+- **Status:** Accepted (lead) · 2026-11-02
+- **Decision:**
+  - **The Hub:** its JSON API (`/api/models` search, a revision's commit, the recursive file tree with LFS SHA-256s), `HF_ENDPOINT` for another address. The token is `[models] token` from the secret store, else `HF_TOKEN`, and is sent only to the Hub's own address; gated and missing repositories get their own errors.
+  - **The cache** is `huggingface_hub`'s layout (`[models] cache`, else `HF_HUB_CACHE`, else `HF_HOME/hub`, else `~/.cache/huggingface/hub`). A download goes to `blobs/<id>.incomplete`, resumes with a Range request, and is kept only if its size and SHA-256 (LFS) or git blob SHA-1 match; snapshots link to blobs (symlink, else hard link, else copy). Pulls pin a commit, so a moving branch never mixes files. Each snapshot records when it was last used. `termos model gc` removes interrupted downloads, unreferenced blobs and, over `--max` or `[models] cache-limit`, the least recently used snapshots.
+  - **Hardware** (`termos_hw::accel`): CPU features, RAM, GPUs with free memory (NVML, then `nvidia-smi`; AMD through sysfs, ROCm when `/dev/kfd` exists), the Vulkan loader, Metal, the Pi model, Coral (its USB IDs, `/dev/apex_*`), Hailo (`/dev/hailo*`) and Cloud TPU chips (PCI devices with Google's vendor ID and an accelerator class).
+  - **The fit estimate,** shown before any download: weights (file sizes) + KV cache (layers × context × KV heads × (key + value dims) × 2 bytes, from the GGUF header, which is read with Range requests, or `config.json`) + overhead (256 MiB + 5% of the weights), with 10% headroom. A model runs fully on the GPU, split across GPU and CPU (with the layer count llama-server gets), on the CPU, or not at all. `pull` without a file picks the best placement and, within it, the largest quantization. The arithmetic saturates: headers are untrusted input (fuzzed by `gguf_parse`).
+- **Alternatives:** the `hf-hub` crate (its own client setup; the resume, checksum and header-reading logic was needed on top of it anyway); estimating from parameter counts in names (often absent or wrong).
+
+## D-067: Embedding models run in-process with candle
+- **Status:** Accepted (lead; implements O-7) · 2026-11-02
+- **Decision:** candle 0.11 (`candle-core`, `candle-nn`, `candle-transformers`) and `tokenizers` 0.22 without default features (`fancy-regex` instead of Oniguruma, so no C library). A repository with `config.json` and safetensors weights is an embedding model; the router loads it on its first `/v1/embeddings` request on a blocking thread and keeps it like any other backend. The `paste` advisory (RUSTSEC-2024-0436, unmaintained, a build-time macro used by `gemm`) is ignored in deny.toml. The feature is off only in the clippy check for Windows run from Linux.
+- **Alternatives:** llama-server with `--embeddings` (it needs GGUF conversions, which most embedding models lack); `fastembed` (ONNX Runtime underneath).
+
+## D-068: The model router, its endpoint file, and agents' `local` provider
+- **Status:** Accepted (lead; implements D-021) · 2026-11-02
+- **Decision:**
+  - **`termos models serve`** is hyper (HTTP/1) on 127.0.0.1 (`--port`, `[models] port`, else a free port) and optionally a Unix socket. Every request but `/health` needs the per-start bearer token (128 bits from the OS generator, compared in constant time). It serves `/v1/models`, `/v1/chat/completions`, `/v1/completions`, `/v1/embeddings` and `/admin/stop`, and streams responses through as they arrive.
+  - **Model ids:** the repository for a repository with one model; `repo:quant` (`org/x-GGUF:q4_k_m`) or `repo:path` when it has several.
+  - **Backends start on the first request** for their model, one at a time. Over the memory budget (`[models] memory-budget`, default 90% of RAM plus discrete VRAM), the least recently used are stopped first, and their processes are waited for so their memory is free. `[models.servers.<name>]` runs a command for the repositories it lists, with `{model}`, `{repo}`, `{port}`, `{token}` and `{cache}` filled in and `HF_HUB_CACHE`/`HF_HUB_OFFLINE=1` set; `termos models sidecar vllm|transformers` makes a uv venv (through mise) and prints such an entry. That is the Python sidecar for big NVIDIA and AMD GPUs and for TPU VMs.
+  - **The endpoint file** `<runtime>/models.json` (0600, in the owner-only runtime folder, hidden from agents' commands) holds the URL, the token and the pid; the router writes it when listening and removes it when stopping.
+  - **Agents:** a `local` provider without `base-url` reads the file, checks `/health`, and otherwise starts `termos --config <file> models serve --daemon` and waits for it (30 s). The token is added to the session's redactor. termos-ai depends on termos-core for the file, not on termos-models.
+  - **Accelerator limits,** documented in docs/models.md and printed by `termos model recommend`: Coral runs only small int8 TFLite models (no LLMs); Hailo runs compiled HEF models through its own runtime (TermOS runs no LLMs on it); Cloud TPUs need the vLLM sidecar with TPU support.
+- **Alternatives:** llama-server's own multi-model mode (recent, GGUF only: no candle models or sidecars behind the same endpoint); agents talking to each llama-server directly (no eviction, no embeddings, a port per model).
+
 ---
 
 ## Open questions (the owner will be asked before the milestone that needs each one)
@@ -687,8 +724,8 @@ rewrite history.
 | O-3 | Git UI: embed lazygit/gitui in a window, or build our own panel? | M5 | **Resolved by D-053:** embed lazygit. |
 | O-4 | LLM clients: provider SDK crates (async-openai, others) or our own thin reqwest clients behind `Provider`? | M6 | **Resolved by D-058:** our own thin clients with shared SSE parsing. |
 | O-5 | Secret store on bare metal, where there's no Secret Service: an age-encrypted file unlocked by passphrase, a TPM-sealed key, or something else? | M6 | **Resolved by D-058:** an age file with a passphrase; TPM later. |
-| O-6 | llama.cpp integration: a managed `llama-server` subprocess or FFI (`llama-cpp-2`)? | M7 | Subprocess: crash isolation, a ready-made OpenAI API, easy CUDA/ROCm/Vulkan build swaps. |
-| O-7 | Rust-native inference: ONNX Runtime (`ort`), candle, or both? | M7 | candle first (pure Rust, no C++ runtime). |
+| O-6 | llama.cpp integration: a managed `llama-server` subprocess or FFI (`llama-cpp-2`)? | M7 | **Resolved by D-065:** `llama-server` subprocesses. |
+| O-7 | Rust-native inference: ONNX Runtime (`ort`), candle, or both? | M7 | **Resolved by D-065:** candle first (embedding models, D-067). |
 | O-8 | WASM engine for widgets: wasmtime (component model, JIT, larger) or wasmi (interpreter, small)? | M4 | **Resolved by D-042:** wasmtime. |
 | O-9 | KMS font rasterizer: swash or fontdue? | M8 | swash (shaping and hinting quality). |
 | O-10 | Init system: BusyBox init, s6, or systemd? | M8 | BusyBox init or s6, for size. |

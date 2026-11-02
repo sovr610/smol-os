@@ -8,7 +8,7 @@ written to a tamper-evident audit log.
 
 TermOS talks to the providers' APIs directly: Anthropic, OpenAI, Moonshot's
 Kimi, and anything OpenAI-compatible (Ollama, vLLM, LM Studio, OpenRouter, and
-TermOS's own model router from milestone M7). Models are never built in: the
+TermOS's own [model router](models.md) for models on your machine). Models are never built in: the
 window lists what your provider offers.
 
 You can also open Claude Code, Codex CLI and other command-line agents in
@@ -82,7 +82,7 @@ are kept in `~/.local/state/termos/agents/` (mode 0600, tool output redacted);
 [agents.providers.<name>]
 kind = "anthropic"        # anthropic | openai | kimi | openai-compatible | local
 key = "keyring:<secret>"  # not needed for local servers
-base-url = "…"            # each kind but openai-compatible and local has one
+base-url = "…"            # each kind but openai-compatible has one (local: the model router)
 max-tokens = 32000        # most tokens per reply (default: the model's limit, at most 64000)
 
 [agents.providers.<name>.prices."<model id>"]   # US$ per million tokens
@@ -98,7 +98,7 @@ cache-write = 3.75        # optional
 | `openai` | Chat Completions | `https://api.openai.com/v1` |
 | `kimi` | Chat Completions; its reasoning is sent back with its tool calls | `https://api.moonshot.ai/v1` |
 | `openai-compatible` | Chat Completions: Ollama, vLLM, LM Studio, OpenRouter… | none: set `base-url` |
-| `local` | TermOS's model router (M7) | none yet: set `base-url` |
+| `local` | TermOS's [model router](models.md), started when needed | found by itself (or set `base-url`) |
 
 Examples:
 
@@ -111,6 +111,10 @@ base-url = "http://127.0.0.1:11434/v1"
 kind = "openai-compatible"
 base-url = "https://openrouter.ai/api/v1"
 key = "keyring:openrouter"
+
+# Models you downloaded with `termos model pull` (docs/models.md).
+[agents.providers.local]
+kind = "local"
 ```
 
 Costs are shown only for models with known prices: from `prices` in the config,

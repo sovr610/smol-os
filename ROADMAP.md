@@ -23,7 +23,7 @@ questions (DECISIONS.md, "Open questions").
 | M5a | Languages and editors: `termos lang` (mise), managed Neovim/Helix with LSP and DAP, templates, task panels, Git UI (D-053 to D-057) | 🔍 |
 | M5b | Dev rootfs, Podman, package manager app (D-053) | ⏳ |
 | M6 | AI agents: providers, agent windows, permissions, sandbox, audit, MCP, external agents, secrets (D-058 to D-064) | 🔍 |
-| M7 | Local models | ⏳ |
+| M7 | Local models: Hugging Face downloads, fit estimates, llama.cpp, candle embeddings, the router, agents' local provider (D-065 to D-068) | 🔍 |
 | M8 | Bare-metal images | ⏳ |
 | M9 | Polish and release | ⏳ |
 
@@ -576,19 +576,21 @@ What was shown, and where (live, Linux, in an isolated `tmux -L termos-m6` with 
 ---
 
 ## M7 — Local models
-**Status:** ⏳ · **Ask first:** O-6 (llama.cpp integration), O-7 (ONNX vs candle), and confirm D-021.
+**Status:** 🔍 done, awaiting review · Owner answers: O-6 → `llama-server` subprocesses (D-065); O-7 → candle first, for embedding models (D-065, D-067). D-021 was followed as proposed and is to be confirmed at this review. Design: D-065 to D-068, ARCHITECTURE.md §12, §14, §16 and §17; user guide [models.md](docs/models.md).
 
 **Deliverables**
-- **CLI:** `termos model search|pull|list|rm|info|recommend`.
-- **Downloads:** resumable, checksum-verified downloads into the HF-compatible cache, with GC and the HF token.
-- **Hardware:** detection in `termos-hw` (NVML, ROCm, Vulkan, CPU features, RAM/VRAM, Pi model, Coral, Hailo, TPU VM), and a fit estimator shown before download.
+- **CLI:** [x] `termos model search|info|pull|list|rm|gc|recommend`; [x] `termos models serve|status|stop|setup|sidecar`
+- **Downloads** (D-066): [x] resumable (Range requests into `.incomplete` blobs), checksum-verified (SHA-256 or git blob id), commit-pinned downloads into the `huggingface_hub` cache, with GC, a size limit and the HF token (`keyring:` or `HF_TOKEN`)
+- **Hardware** (D-066):
+  - [x] Detection in `termos_hw::accel`: CPU features, RAM, NVML / `nvidia-smi`, AMD (sysfs, ROCm), the Vulkan loader, Metal, the Pi model, Coral, Hailo, Cloud TPU chips
+  - [x] The fit estimator (weights + KV cache from the GGUF header or `config.json` + overhead → GPU, split, CPU or too big), shown before any download
 - **Backends:**
-  - llama.cpp as the default, with automatic CPU/CUDA/ROCm/Vulkan selection and a manual override;
-  - ONNX Runtime and/or candle;
-  - the optional Python sidecar;
-  - TPU, Coral and Hailo paths where supported.
-- **Router:** the OpenAI-compatible `termos models serve`, wired into `termos-ai` as the local provider.
-- **Docs:** explicit limits for each accelerator.
+  - [x] llama.cpp as `llama-server` subprocesses (D-065): the official release for this machine through mise, `auto` choosing Metal, Vulkan or CPU, `[models] llama-cpp` / `llama-server` overrides (CUDA and ROCm by hand)
+  - [x] candle for embedding models, in-process (D-067); ONNX Runtime and candle chat models are not included (D-065)
+  - [x] The Python sidecar: `[models.servers.<name>]` and `termos models sidecar vllm|transformers` (D-068)
+  - [x] TPU, Coral and Hailo: detected, with their limits stated by `recommend` and in docs/models.md (Coral and Hailo-8 run no LLMs; TPUs go through the vLLM sidecar)
+- **Router** (D-068): [x] the OpenAI-compatible `termos models serve` (token, on-demand backends, LRU eviction within a memory budget, streaming, embeddings), [x] wired into termos-ai: a `local` provider without `base-url` finds the router through its endpoint file and starts it when none runs
+- **Docs:** [x] [docs/models.md](docs/models.md), with each accelerator's limits
 
 **Acceptance**
 - Resume test against a mock Hub with an interrupted transfer.
@@ -596,7 +598,25 @@ What was shown, and where (live, Linux, in an isolated `tmux -L termos-m6` with 
 - Estimator tests against known model metadata.
 - End to end on CI: pull a tiny GGUF and chat with it through the router on CPU.
 
+**Acceptance results**
+- **Resume** (`crates/termos-models/tests/hub.rs`, a mock Hub over HTTP): the first transfer of a 300 KB file is cut after 100 KB; the error says to run the command again, which sends `Range: bytes=…`, completes, verifies and links the file; the cache then has `huggingface_hub`'s layout (blobs, snapshot, `refs/main`).
+- **Checksum:** a Hub serving different bytes than its listed SHA-256 gets the download rejected and deleted; nothing is linked.
+- **Estimator** (`fit.rs`, `gguf.rs`): Llama 3 8B's shape (32 layers, 8 KV heads of 128) at 8192 tokens gives a 1 GiB KV cache as published (half at 4096, capped at the trained context); its Q4_K_M (about 6 GiB in all) runs fully on a 24 GB GPU, split on a 4 GB one, on the CPU of a 16 GB machine without a GPU, fully on the GPU of a 16 GB Mac, and not at all with 4 GB; with 8 GB of VRAM the largest file that fits on the GPU is ranked first, split ones after; quantization labels from file names; absurd headers saturate instead of overflowing (fuzzed: `gguf_parse`).
+- **Router** (`tests/router.rs`, with a stand-in llama-server): the token is required; models start on their first request with the expected arguments (and their key in the environment, not on the command line); a second model over the budget stops the first, whose process has exited before the next starts; a tiny random BERT answers `/v1/embeddings` through candle; a configured server serves its repository; `/admin/stop` stops every backend.
+- **Agents:** the `local` provider reads the endpoint file, and starts a stand-in `termos models serve --daemon` when the file is stale (`provider/local.rs`).
+- **End to end on CI:** the new `models` job pulls `ggml-org/models:tinyllamas/stories260K.gguf` and `sentence-transformers/all-MiniLM-L6-v2` from the Hub, installs llama.cpp's latest release through mise, starts the router through `termos agent models local`, chats (plain and streamed) on the CPU, checks embeddings for meaning (cat ~ kitten closer than cat ~ stocks), then stops, removes and collects. This sandbox cannot reach the Hub or GitHub, so that job is the first real run.
+
+**What the tests cover**
+- **Unit:** GGUF parsing (every value type, prefixes ask for more bytes, garbage refused); the estimator and placement; build choice and release asset names; finding `llama-server` in any layout; model references and ids; byte sizes; the endpoint file (round trip, mode 0600, only our own removed); hardware probes against fake `/sys`, `/proc` and `/dev` trees (Pi model, Coral, Hailo, TPU, Vulkan loader, `nvidia-smi` output); candle embeddings (unit length; the same text gives the same vector whatever the batch).
+- **Not covered here:** real Hub downloads, llama.cpp's releases and real chat (only the CI `models` job); GPU builds of llama.cpp (no GPU runners); the vLLM and transformers sidecars beyond the configured-server path (multi-GB installs); Coral, Hailo and TPU hardware (only detection against fake trees).
+
 **Demo:** `termos model recommend`, `termos model pull <repo>`, then chat with it in an agent window.
+
+What was shown, and where (Linux, in an isolated `tmux -L termos-m7` with its own home; the Hub and GitHub are out of reach here, so the model was a tiny GGUF placed in the cache and `TERMOS_LLAMA_SERVER` pointed at the stand-in llama-server from the tests):
+1. `termos model recommend` printed this machine (4 threads, AVX-512, 15.7 GiB) and "up to about 11.9 GiB of weights" on the CPU; `termos model list` showed `demo/tiny-chat-GGUF`.
+2. `C-b a` opened an agent window on the `local` provider (`[agents.providers.local] kind = "local"`, no address). No router ran, so it started `termos models serve --daemon`, read its endpoint file and listed `demo/tiny-chat-GGUF`.
+3. Picking it and sending a message started the stand-in llama-server, whose answer streamed into the window: `served demo/tiny-chat-GGUF … --ctx-size 512 --n-gpu-layers 0 --alias demo/tiny-chat-GGUF --jinja` (no key on its command line). The router's token appeared nowhere under the state, config, data or home folders.
+4. `termos models stop` stopped the router and the backend; nothing was left running.
 
 ---
 
@@ -654,8 +674,6 @@ Generated from the `TODO(M<n>)` markers in the code. Don't edit by hand; run `ca
 | --- | --- | --- |
 | M5 | `crates/termos-apps/src/lib.rs` | package manager UI over mise, the dev rootfs and the host package manager. |
 | M5 | `crates/termos-devkit/src/lib.rs` | dev rootfs, Podman and the package manager UI (M5b). |
-| M7 | `crates/termos-ai/src/provider/mod.rs` | find the model router's address and token by itself once `termos models serve` exists. |
-| M7 | `crates/termos-models/src/lib.rs` | HF adapter, hardware-aware recommendations, llama.cpp backend, OpenAI-compatible router. |
 | M8 | `crates/termos-image/src/lib.rs` | Buildroot external tree, image build driver, QEMU boot tests for x86_64 and aarch64 virt. |
 | M8 | `crates/termos-render/src/lib.rs` | DRM/KMS backend with font rasterizer and adjustable font size. |
 | M9 | `crates/termos-ai/src/sandbox.rs` | a Windows sandbox for agent commands (an AppContainer or a restricted token); until then every command asks. |

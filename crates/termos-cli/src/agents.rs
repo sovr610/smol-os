@@ -102,7 +102,7 @@ fn load_config(path: &Path) -> anyhow::Result<Config> {
 }
 
 /// Reads a line without echoing it, from the terminal.
-fn read_hidden(prompt: &str) -> anyhow::Result<SecretString> {
+pub(crate) fn read_hidden(prompt: &str) -> anyhow::Result<SecretString> {
     use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers, read};
     use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
     if !std::io::stdin().is_terminal() && !std::io::stderr().is_terminal() {
@@ -269,11 +269,26 @@ pub(crate) fn agent_command(
                 }
                 None => None,
             };
-            let p = termos_ai::provider::build(provider, pcfg, key)
-                .map_err(|e| anyhow::anyhow!(e.message))?;
             let rt = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()?;
+            // A `local` provider without an address uses the model router.
+            let mut pcfg = pcfg.clone();
+            let mut key = key;
+            if termos_ai::provider::uses_router(&pcfg) {
+                let helper = std::env::current_exe().ok();
+                let (url, token) = rt
+                    .block_on(termos_ai::provider::local::router(
+                        paths,
+                        helper.as_deref(),
+                        Some(config_path),
+                    ))
+                    .map_err(|e| anyhow::anyhow!(e.message))?;
+                pcfg.base_url = Some(url);
+                key = Some(token);
+            }
+            let p = termos_ai::provider::build(provider, &pcfg, key)
+                .map_err(|e| anyhow::anyhow!(e.message))?;
             let models = rt
                 .block_on(p.list_models())
                 .map_err(|e| anyhow::anyhow!("{provider}: {e}"))?;

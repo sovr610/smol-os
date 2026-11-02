@@ -408,28 +408,26 @@ termos-ai holds all of it; the CLI hands the server a launcher for its windows (
 
 ---
 
-## 12. Local models (M7; D-021)
+## 12. Local models (M7; D-021, D-065–D-068)
 
-- **CLI:** `termos model search|pull|list|rm|info|recommend`.
-- **Downloads:** resumable through HTTP Range requests into `.incomplete` files and checked against the Hub's SHA-256 (LFS) metadata. They use a `huggingface_hub`-compatible cache, with the HF token taken from the keyring or `HF_TOKEN`. Cache management includes size limits and GC.
-- **Hardware detection** (`termos-hw`):
-  - CPU features (AVX2, AVX-512, NEON, SVE, dotprod, i8mm) and RAM;
-  - NVIDIA through NVML, loaded dynamically, with `nvidia-smi` as a fallback;
-  - AMD through ROCm SMI or sysfs;
-  - Vulkan through the loader;
-  - Metal on macOS;
+- **CLI:** `termos model search|info|pull|list|rm|gc|recommend` and `termos models serve|status|stop|setup|sidecar` (docs/models.md).
+- **Downloads (D-066):** the Hub's JSON API (`HF_ENDPOINT` for another address), into `huggingface_hub`'s cache layout (`[models] cache`, `HF_HUB_CACHE`, `HF_HOME`), so other tools share the files. A pull pins a commit, resumes from `blobs/<id>.incomplete` with Range requests, and keeps a file only if its size and SHA-256 (LFS) or git blob SHA-1 match. The token is `[models] token` (`keyring:<name>`) or `HF_TOKEN`, sent only to the Hub. `gc` removes interrupted downloads, unreferenced blobs and, over the size limit, the least recently used snapshots.
+- **Hardware detection** (`termos_hw::accel`, D-066):
+  - CPU features (AVX2, AVX-512, VNNI, FMA, F16C; NEON, SVE, dotprod, i8mm), RAM;
+  - NVIDIA through NVML (loaded dynamically), then `nvidia-smi`; AMD through sysfs, with ROCm when `/dev/kfd` exists;
+  - the Vulkan loader; Metal on Apple Silicon;
   - the Pi model from the device tree;
-  - Coral (USB/PCIe IDs), Hailo (`/dev/hailo*`) and Cloud TPU VMs.
-- **Fit estimation:** weights size (exact from file sizes) + KV cache (2 × layers × kv_heads × head_dim × context × bytes per element, read from GGUF or `config.json` metadata) + overhead, compared with free RAM and VRAM, including partial offload. The estimate is shown *before* downloading, and TermOS recommends the largest quantization that fits with headroom.
+  - Coral (USB IDs, `/dev/apex_*`), Hailo (`/dev/hailo*`) and Cloud TPU chips (Google PCI accelerators).
+- **Fit estimation (D-066):** weights (file sizes) + KV cache (layers × context × KV heads × (key + value dims) × 2 bytes, from the GGUF header read with Range requests, or `config.json`) + overhead (256 MiB + 5% of the weights), with 10% headroom, against free RAM and VRAM: fully on the GPU, split (with the GPU layer count), CPU, or too big. It is shown before downloading; `pull` without a file takes the best placement and the largest quantization within it.
 - **Backends:**
-  - **llama.cpp (default; also the right choice for Raspberry Pi):** GGUF on CPU, CUDA, ROCm/HIP, Vulkan and Metal. Integration is O-6.
-  - **Rust-native:** ONNX Runtime and/or candle (O-7).
-  - **Optional Python sidecar** (transformers or vLLM, in a uv-managed venv) for high-end NVIDIA and AMD GPUs.
-  - **Accelerators, with honest limits:**
-    - Cloud TPU works only on a TPU VM, through JAX or PyTorch-XLA (vLLM TPU) in the sidecar.
-    - Coral Edge TPU runs only small int8 TFLite models compiled for the Edge TPU, such as vision and audio classifiers. It can't run LLMs.
-    - Hailo runs compiled HEF models, mostly vision. LLM support depends on the specific Hailo part and SDK, and will be verified and documented in M7.
-- **Router:** `termos models serve` exposes `/v1/models`, `/v1/chat/completions`, `/v1/completions` and `/v1/embeddings` on localhost or a Unix socket, protected by a token. It starts backends lazily and unloads the least recently used one when over the memory budget.
+  - **llama.cpp (D-065, O-6):** a `llama-server` subprocess per loaded GGUF model, on a localhost port with a per-start key passed in `LLAMA_API_KEY`. The binary is `[models] llama-server` or llama.cpp's official release for the machine, installed through mise; `[models] llama-cpp` picks the build (auto: Metal, Vulkan, CPU; CUDA and ROCm by hand). Linux CUDA and ROCm need a llama-server you built, or Vulkan. The right choice on a Raspberry Pi (CPU).
+  - **candle (D-067, O-7):** BERT-family embedding models in-process, mean-pooled and normalized. No ONNX Runtime; chat stays with llama.cpp.
+  - **Configured servers / the Python sidecar (D-068):** `[models.servers.<name>]` runs a command for the repositories it lists; `termos models sidecar vllm|transformers` sets up a uv venv and prints the entry. For high-end NVIDIA and AMD GPUs, and TPU VMs.
+  - **Accelerators, with honest limits** (docs/models.md):
+    - Cloud TPU works only on a TPU VM, through vLLM's TPU support in the sidecar.
+    - Coral Edge TPU runs only small int8 TFLite models compiled for it, such as vision and audio classifiers. It can't run LLMs.
+    - Hailo runs compiled HEF models (mostly vision) through Hailo's own runtime. TermOS runs no LLMs on it.
+- **Router (D-068):** `termos models serve`, hyper on 127.0.0.1 (and optionally a Unix socket), token-protected: `/v1/models`, `/v1/chat/completions`, `/v1/completions`, `/v1/embeddings` (streamed through), `/health`, `/admin/stop`. Model ids are the repository, or `repo:quant` / `repo:path` when it holds several. Backends start on their first request; over the memory budget (default 90% of RAM + VRAM), the least recently used are stopped and waited for. It writes `<runtime>/models.json` (0600) with its URL and token; agents' `local` provider without `base-url` reads it, starting `termos models serve --daemon` when no router answers. termos-ai reads the file through termos-core and never links termos-models.
 
 ---
 
@@ -468,7 +466,7 @@ termos-ai holds all of it; the CLI hands the server a launcher for its windows (
   - Snapshots keep command lines only for allowlisted programs.
   - Plugin tokens are never logged.
 - **Agents and plugins (D-060–D-064):** least privilege (profiles), the bubblewrap + Landlock sandbox for agents' commands, local MCP servers and launched plugins, confirmation for destructive or network actions, a tamper-evident audit log, and redaction of keys and credential-shaped text from everything written down. A canary-key test runs a whole session on the real desktop and checks logs, audit records, conversations and snapshots.
-- **Listeners:** nothing listens on the network by default. The model router binds localhost or a Unix socket and needs a token.
+- **Listeners:** nothing listens on the network by default. The model router (D-068) binds 127.0.0.1 or a 0600 Unix socket and needs a per-start token, which only the 0600 endpoint file in the runtime folder holds (hidden from agents' commands). Each llama-server gets its own key through its environment, not its command line, and is stopped if it does not check it.
 - **Supply chain:** cargo-deny checks licenses, advisories and sources (crates.io only); `Cargo.lock` is committed; Actions are pinned to major versions (SHA pinning to be reconsidered in M9).
 - **Developer tools (D-053, D-056):** the only download TermOS makes itself is mise, over HTTPS only (`curl --proto =https --tlsv1.2`), checked against SHA-256 sums compiled in before it is used. Everything else is mise's to download and verify. The `mise.toml` files TermOS writes list only tools and are marked trusted; TermOS never trusts a project's own mise config for you. Neovim plugins are pinned to commits.
 - **Bare metal:** a read-only root with signed A/B updates.
@@ -494,6 +492,7 @@ termos-ai holds all of it; the CLI hands the server a launcher for its windows (
 - **Snapshot tests** (`insta`): a `Grid` renders to text plus a style layer. The headless client drives the full desktop: inject input, then snapshot the screen. These cover chrome, layouts, apps and overlays.
 - **Integration tests:** real PTYs (`sh -c …`), client/server over the socket (sessions, detach, snapshots and restore, plugins), the real daemon driven through its CLI, config hot reload, and recorded provider fixtures with mock servers. CI never uses live API keys.
 - **Agents (M6):** provider contract tests run the real HTTP clients against a mock server answering with fixtures in the documented formats (streams cut at arbitrary bytes); a whole session runs against a scripted provider (passphrase, model list, approvals, a PTY command, the audit chain, the history); the permission engine, classifier, redactor and audit chain have unit tests; through the real binary, the sandbox must refuse writes outside the workspace and the network, a sandboxed plugin must still reach the session socket, a tampered log must fail `termos audit verify`, and the canary key must be nowhere after a session on the desktop. No live keys anywhere.
+- **Local models (M7):** downloads against a mock Hub (an interrupted transfer resumes, a checksum mismatch is rejected, gated repositories ask for a token, the cache layout and GC); the estimator against known model shapes; GGUF headers built in tests; the router end to end with a stand-in llama-server (a Python script), a configured server and a tiny random BERT for candle (on-demand starts, the token, eviction within the budget, streaming); the agents' router discovery against a stand-in `termos`. The CI `models` job does it for real (§17).
 - **Developer environment:** `termos lang`, `edit`, `create`, `task` and `lang check` are tested against a stand-in mise script (`TERMOS_MISE`) that logs its arguments and runs what follows `exec --`; DAP framing against in-memory and socket adapters. Real installs, builds, LSP and DAP handshakes run in the language CI (§17).
 - **Property tests** (`proptest`) for layout invariants (no overlaps or gaps, sizes sum to the parent), rectangle subtraction and the block raster.
 - **Golden bytes** for the Kitty, Sixel and iTerm2 encoders and the Kitty keyboard protocol table, and a Sixel round trip.
@@ -503,7 +502,8 @@ termos-ai holds all of it; the CLI hands the server a launcher for its windows (
   - protocol decoding (`proto_decode`: frames and JSON-RPC);
   - capability replies (`caps_reply`), Sixel decoding (`sixel_decode`) and the image interceptor (`apc_dcs_intercept`);
   - markdown layout (`markdown_layout`);
-  - provider event streams (`sse_parse`).
+  - provider event streams (`sse_parse`);
+  - GGUF headers (`gguf_parse`), with the fit estimate over whatever they claim.
   
   CI runs a timed smoke pass on every push and longer scheduled runs.
 - **QEMU boot tests** (M8).
@@ -515,10 +515,11 @@ termos-ai holds all of it; the CLI hands the server a launcher for its windows (
 
 - **Workspace and tooling:** a pinned toolchain (D-005); `cargo xtask ci` mirrors CI locally (D-020).
 - **CI** (D-016, D-041):
-  - lint: fmt, repo checks, cargo-deny, and clippy for the Windows target from Linux (without default features: wasmtime compiles C there); `cargo xtask ci` also runs clippy for macOS arm64 when that target is installed;
+  - lint: fmt, repo checks, cargo-deny, and clippy for the Windows target from Linux (without default features: wasmtime and ring compile C there); `cargo xtask ci` also runs clippy for macOS arm64 when that target is installed;
   - clippy, tests and a daemon smoke test (`new -d`, `ls`, `msg`, `kill-server`) on x86_64 Linux, aarch64 Linux, macOS arm64 and Windows x86_64; the Linux runners install bubblewrap and require the agent sandbox (D-061);
   - zigbuild cross-builds; a fuzz smoke pass; the performance budgets;
   - the sample WASM widget built from source for `wasm32-wasip2`, with the widget tests run against it;
+  - local models (`models`, D-065–D-068): real pulls from the Hugging Face Hub (a 260K-parameter GGUF and all-MiniLM-L6-v2), llama.cpp's release installed through mise, chat (plain and streamed) and embeddings (semantic similarity checked) through the router, the agents' `local` provider starting it, then stop, `rm` and `gc`;
   - the language CI (D-053, D-056, `languages.yml`): `termos lang check` for every language on ubuntu-24.04 and ubuntu-24.04-arm, nightly, on developer-environment changes and on demand; Rust, Python and Go on x86_64 on every push.
 - **Test builds** on every push (D-041): Linux x86_64/aarch64 (glibc 2.31) and macOS arm64 `.tar.gz`, Windows x86_64 `.zip` (static C runtime), each with a `BUILDINFO.txt`, kept 14 days. The Linux builds are downloaded and smoke-run on matching runners.
 - **Later CI jobs:**

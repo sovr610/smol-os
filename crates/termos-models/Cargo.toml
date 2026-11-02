@@ -1,6 +1,6 @@
 [package]
 name = "termos-models"
-description = "TermOS local models: Hugging Face adapter, hardware detection, inference backends"
+description = "TermOS local models: Hugging Face downloads, fit estimates, llama.cpp and candle backends, the router"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -10,7 +10,41 @@ homepage.workspace = true
 authors.workspace = true
 publish.workspace = true
 
+[features]
+default = ["tls", "candle"]
+# HTTPS to the Hugging Face Hub: rustls with ring (D-058).
+tls = ["rustls/ring"]
+# Embedding models served in-process with candle (pure Rust, D-067).
+candle = ["dep:candle-core", "dep:candle-nn", "dep:candle-transformers", "dep:tokenizers"]
+
 [dependencies]
+bytes.workspace = true
+candle-core = { workspace = true, optional = true }
+candle-nn = { workspace = true, optional = true }
+candle-transformers = { workspace = true, optional = true }
+futures-util.workspace = true
+getrandom.workspace = true
+http-body-util.workspace = true
+hyper.workspace = true
+hyper-util.workspace = true
+jiff.workspace = true
+regex.workspace = true
+reqwest.workspace = true
+rustls.workspace = true
+secrecy.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha1.workspace = true
+sha2.workspace = true
+termos-core.workspace = true
+termos-hw.workspace = true
+thiserror.workspace = true
+tokenizers = { workspace = true, optional = true }
+tokio = { workspace = true, features = ["rt", "macros", "sync", "time", "process", "io-util", "net", "fs"] }
+tracing.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
 
 [lints]
 workspace = true

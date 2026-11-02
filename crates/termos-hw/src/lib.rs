@@ -16,6 +16,7 @@
 
 use std::time::{Duration, Instant};
 
+pub mod accel;
 mod gpu;
 #[cfg(any(target_os = "linux", windows))]
 mod nvidia;
@@ -200,6 +201,18 @@ impl Sampler {
             nvidia: nvidia::Nvidia::load(),
             last: Instant::now(),
         })
+    }
+
+    /// Whether NVML (an NVIDIA driver) could be loaded.
+    pub fn has_nvml(&self) -> bool {
+        #[cfg(any(target_os = "linux", windows))]
+        {
+            self.nvidia.is_some()
+        }
+        #[cfg(not(any(target_os = "linux", windows)))]
+        {
+            false
+        }
     }
 
     fn gpu_samples(&mut self) -> Vec<GpuSample> {

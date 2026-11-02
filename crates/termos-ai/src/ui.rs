@@ -30,14 +30,21 @@ use crate::tools::Preview;
 pub struct AgentLauncher {
     /// The `termos` binary (the sandbox helper).
     helper: Option<PathBuf>,
+    /// The server's config file.
+    config_file: Option<PathBuf>,
     home: Option<PathBuf>,
     secrets: std::sync::OnceLock<Arc<SecretSlot>>,
 }
 
 impl AgentLauncher {
-    pub fn new(helper: Option<PathBuf>, home: Option<PathBuf>) -> Self {
+    pub fn new(
+        helper: Option<PathBuf>,
+        config_file: Option<PathBuf>,
+        home: Option<PathBuf>,
+    ) -> Self {
         Self {
             helper,
+            config_file,
             home,
             secrets: std::sync::OnceLock::new(),
         }
@@ -65,6 +72,7 @@ impl AgentLauncher {
                 .unwrap_or_else(|| PathBuf::from(".")),
             resume,
             helper: self.helper.clone(),
+            config_file: self.config_file.clone(),
             home: self.home.clone(),
         }
     }
