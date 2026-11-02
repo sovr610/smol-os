@@ -44,6 +44,10 @@ termos update restart    # start the new one
 termos update status     # which copy runs, and how both are doing
 ```
 
+From the desktop, **Updates** in the palette (or Settings → System →
+Updates) opens a window that does the same: it says whether a newer release
+exists, asks before installing it, and offers to restart.
+
 Nothing is checked or downloaded unless you ask. Updates come from the
 repository's GitHub releases and must be signed by its owner's key, which
 the system checks before writing anything; `termos update install <file or

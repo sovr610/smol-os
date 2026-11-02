@@ -20,7 +20,13 @@ use unicode_width::UnicodeWidthStr;
 enum Kind {
     Bool,
     Choice(&'static [&'static str]),
-    Number { min: i64, max: i64, step: i64 },
+    Number {
+        min: i64,
+        max: i64,
+        step: i64,
+    },
+    /// Not a setting: Enter runs this desktop command.
+    Action(&'static str),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -181,6 +187,14 @@ const SETTINGS: &[Setting] = &[
             step: 10,
         },
     ),
+    s(
+        "System",
+        "",
+        "",
+        "Updates",
+        "check for a newer TermOS and install it (TermOS machines)",
+        Kind::Action("update.open"),
+    ),
 ];
 
 fn lookup<'a>(doc: &'a DocumentMut, table: &str, key: &str) -> Option<&'a Item> {
@@ -252,6 +266,13 @@ impl Settings {
     /// Steps the selected setting forward or back.
     fn change(&mut self, forward: bool) -> AppEffect {
         let s = SETTINGS[self.selected];
+        if let Kind::Action(command) = s.kind {
+            return if forward {
+                AppEffect::Command(command.to_owned())
+            } else {
+                AppEffect::None
+            };
+        }
         let current = self.value(&s);
         let new: Value = match s.kind {
             Kind::Bool => Value::from(current != "true"),
@@ -270,6 +291,7 @@ impl Settings {
                 let v = if forward { v + step } else { v - step };
                 Value::from(v.clamp(min, max))
             }
+            Kind::Action(_) => return AppEffect::None,
         };
         self.save(&s, new)
     }
@@ -458,6 +480,7 @@ impl App for Settings {
             let value = match s.kind {
                 Kind::Bool if self.value(s) == "true" => "on".to_owned(),
                 Kind::Bool => "off".to_owned(),
+                Kind::Action(_) => "open".to_owned(),
                 _ => self.value(s),
             };
             let value = if selected {
@@ -519,6 +542,10 @@ mod tests {
     fn every_setting_has_a_default_and_parses() {
         let s = Settings::open(PathBuf::from("/nonexistent/config.toml"));
         for setting in SETTINGS {
+            if let Kind::Action(command) = setting.kind {
+                assert!(!command.is_empty());
+                continue;
+            }
             let v = s.value(setting);
             assert!(!v.is_empty(), "{} has no default", setting.key);
             match setting.kind {
@@ -528,8 +555,30 @@ mod tests {
                     let n: i64 = v.parse().expect("a number");
                     assert!((min..=max).contains(&n));
                 }
+                Kind::Action(_) => {}
             }
         }
+    }
+
+    #[test]
+    fn updates_open_from_settings() {
+        let mut s = Settings::open(PathBuf::from("/nonexistent/config.toml"));
+        let last = SETTINGS.len() - 1;
+        s.select(last);
+        assert_eq!(
+            s.handle_key(KeyEvent::new(
+                KeyCode::Enter,
+                termos_core::input::Mods::empty()
+            )),
+            AppEffect::Command("update.open".into())
+        );
+        assert_eq!(
+            s.handle_key(KeyEvent::new(
+                KeyCode::Left,
+                termos_core::input::Mods::empty()
+            )),
+            AppEffect::None
+        );
     }
 
     #[test]

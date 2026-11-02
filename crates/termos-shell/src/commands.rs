@@ -74,6 +74,8 @@ pub enum Command {
     FileEdit(String),
     MonitorOpen,
     NetworkOpen,
+    /// A window running `termos update install` (D-077).
+    UpdateOpen,
     SettingsOpen,
     /// Run a project task (build, run, test, or one from termos.toml) in
     /// a panel.
@@ -231,6 +233,7 @@ pub const COMMANDS: &[CommandInfo] = &[
     },
     info("git.open", "Git (lazygit)"),
     info("network.open", "Network: connections and Wi-Fi"),
+    info("update.open", "Updates: install a newer TermOS"),
     info("settings.open", "Settings"),
     info("clipboard.open", "Clipboard history"),
     info("clipboard.clear", "Forget the clipboard history"),
@@ -440,6 +443,7 @@ impl FromStr for Command {
             },
             "audit.open" => Ok(Command::AuditOpen(arg.unwrap_or("").to_owned())),
             "network.open" => no_arg(Command::NetworkOpen),
+            "update.open" => no_arg(Command::UpdateOpen),
             "settings.open" => no_arg(Command::SettingsOpen),
             "clipboard.open" => no_arg(Command::ClipboardOpen),
             "clipboard.clear" => no_arg(Command::ClipboardClear),
@@ -532,6 +536,7 @@ impl fmt::Display for Command {
             Command::Task(t) => write!(f, "task {t}"),
             Command::GitOpen => f.write_str("git.open"),
             Command::NetworkOpen => f.write_str("network.open"),
+            Command::UpdateOpen => f.write_str("update.open"),
             Command::SettingsOpen => f.write_str("settings.open"),
             Command::ClipboardOpen => f.write_str("clipboard.open"),
             Command::ClipboardClear => f.write_str("clipboard.clear"),

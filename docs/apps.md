@@ -10,6 +10,7 @@ move, resize, minimize or tile like any other. Open them from the palette
 | System monitor | "System monitor" | `monitor.open` | |
 | Clipboard history | "Clipboard history" | `clipboard.open` | prefix `=` |
 | Network | "Network: connections and Wi-Fi" | `network.open` | |
+| Updates (a window running `termos update install`) | "Updates: install a newer TermOS" | `update.open` | |
 | Settings | "Settings" | `settings.open` | |
 | Markdown viewer | | `markdown.open FILE` | |
 | Image viewer | | `image.open FILE` | |

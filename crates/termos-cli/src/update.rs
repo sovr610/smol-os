@@ -49,6 +49,9 @@ pub(crate) enum UpdateCmd {
         /// Restart into the update once it is installed.
         #[arg(long)]
         restart: bool,
+        /// Wait for Enter at the end (the desktop's Updates window).
+        #[arg(long)]
+        wait: bool,
     },
     /// Restart the machine (into a newly installed update, if any).
     Restart,
@@ -295,6 +298,21 @@ fn ask(question: &str) -> bool {
 }
 
 pub(crate) fn update_command(cmd: &UpdateCmd, paths: &Paths) -> anyhow::Result<ExitCode> {
+    let result = run_update(cmd, paths);
+    if let UpdateCmd::Install { wait: true, .. } = cmd {
+        // The window closes when this ends: show what happened first.
+        if let Err(e) = &result {
+            out!("termos: {e:#}");
+        }
+        print!("\nPress Enter to close.");
+        std::io::stdout().flush()?;
+        let mut line = String::new();
+        let _ = std::io::stdin().read_line(&mut line);
+    }
+    result
+}
+
+fn run_update(cmd: &UpdateCmd, paths: &Paths) -> anyhow::Result<ExitCode> {
     let image = Image::detect()?;
     match cmd {
         UpdateCmd::Status => {
@@ -330,6 +348,7 @@ pub(crate) fn update_command(cmd: &UpdateCmd, paths: &Paths) -> anyhow::Result<E
             bundle,
             yes,
             restart,
+            wait: _,
         } => {
             let Some(other) = image.other_slot() else {
                 bail!("this system runs from the live ISO: install it with `termos install` first");

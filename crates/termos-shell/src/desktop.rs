@@ -1045,6 +1045,32 @@ impl Desktop {
         }
     }
 
+    /// A floating window running `termos update install`, which checks
+    /// for a newer release, asks before installing it, and waits for a key
+    /// so its last words can be read (D-077).
+    fn open_update(&mut self, area: Rect) {
+        let Some(exe) = self.termos_exe() else {
+            self.notify(Level::Error, "cannot find the termos program");
+            return;
+        };
+        let cwd = self.focused_cwd();
+        let args = ["update", "install", "--wait"].map(str::to_owned).to_vec();
+        match self.spawn_pane(
+            cwd,
+            (area.w * 7 / 10, area.h / 2),
+            Some((exe.display().to_string(), args)),
+        ) {
+            Ok(id) => {
+                if let Some(p) = self.panes.get_mut(&id) {
+                    p.title = "updates".into();
+                }
+                self.session.active_mut().add_float(id, area);
+                self.animate(anim::Kind::FloatOpen(id), Instant::now());
+            }
+            Err(e) => self.notify(Level::Error, format!("cannot start termos update: {e}")),
+        }
+    }
+
     /// A path typed for a command: relative to the focused pane's
     /// directory, like in a shell; `~` is the home directory.
     fn resolve_path(&self, text: &str) -> PathBuf {
@@ -1928,6 +1954,7 @@ impl Desktop {
             Command::NetworkOpen => {
                 self.open_app(Box::new(termos_apps::NetworkPage::open()));
             }
+            Command::UpdateOpen => self.open_update(area),
             Command::SettingsOpen => {
                 let path = self.opts.config_path.clone();
                 self.open_app(Box::new(termos_apps::Settings::open(path)));

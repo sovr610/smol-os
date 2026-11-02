@@ -825,6 +825,15 @@ rewrite history.
 - **Tests:** a snapshot of the page over a fixed backend, passphrases masked and checked, saving and forgetting files in iwd's naming. QEMU has no Wi-Fi, so iwd itself is not exercised in CI.
 - **Alternatives:** `iwctl`'s text output; an iwd agent answering passphrase requests over D-Bus; a page inside Settings.
 
+## D-082: The accessibility review; the console measures its own latency
+- **Status:** Accepted (lead; M9's accessibility and Pi tuning deliverables) · 2026-11-02
+- **Decision:**
+  - **Contrast:** every preset's text colours (text, muted, accent, warnings, errors, status text) are tested against the backgrounds they are drawn on (overlays, the status line): 7:1 (WCAG AAA) for high contrast, 4.5:1 (AA) for dark and light. The review moved three colours to pass: the dark preset's muted text `#7d8590` → `#8b949e` (4.0 → 4.9:1), the light preset's accent `#0969da` → `#0860ca` and warnings `#9a6700` → `#8a5c00` (on the status line 4.4 and 4.2 → 5.1 and 5.0:1).
+  - **Selected rows** draw all their text in `fg` (`ThemeColors::selected`), in every app: on a selection colour still visible against black, no red or orange reaches 7:1, and `fg` does (9.5:1 in high contrast).
+  - **The console's text size:** 6 to 96 pixels (×1 to ×3 for dense screens), checked in `config.toml`, changed with Ctrl+=/−/0.
+  - **Input→frame time on a board:** the console times each key from its reading to the page flip after the desktop's next frame and logs the median, p99 and worst every 100 keys, so the Pi 4's budget (33 ms, D-019) is measured on the device by whoever has one, without a harness.
+- **Alternatives:** a darker selection for high contrast only (still not 7:1 for red); measuring latency with an external camera rig.
+
 ---
 
 ## Open questions (the owner will be asked before the milestone that needs each one)
