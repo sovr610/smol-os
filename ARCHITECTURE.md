@@ -219,7 +219,7 @@ text). For each client and image the desktop decides how to show it:
 - The KMS backend draws images natively (M8).
 
 ### 5.9 KMS console (M8, D-073)
-- **A client:** `termos --kms` (termos-cli's `kms` feature, Linux) attaches to the server like the terminal client and draws its frames itself. It consumes the same `Grid` spans and rasterizes the changed cells on the CPU (`termos_render::raster`) into a framebuffer; two DRM dumb buffers take turns, each copied only the rows it missed, and are shown with page flips. No GPU code: any KMS driver works.
+- **A client:** `termos --kms` (termos-cli's `kms` feature, Linux) attaches to the server like the terminal client and draws its frames itself. It consumes the same `Grid` spans and rasterizes the changed cells on the CPU (`termos_render::raster`) into a framebuffer; two DRM dumb buffers take turns, each copied only the rows it missed (as up to eight bands of rows, so a change at the top and one at the bottom do not copy the screen between them), and are shown with page flips. The console logs its input→frame times (D-019's measure: to asking for the flip) every 100 keys. No GPU code: any KMS driver works.
 - **Glyphs:** swash from the configured font (built in: DejaVu Sans Mono), a cache of cell-sized coverage masks, box drawing, blocks and braille drawn from geometry; the size is adjustable (Ctrl+= / Ctrl+-) and scaled for the screen's density.
 - **Devices:** libseat for the display and input devices (VT switches give them up and take them back), libinput and XKB for the keyboard and mouse; the hardware cursor for the pointer.
 - **Damage:** only changed cells are repainted, and only their rows are copied out.

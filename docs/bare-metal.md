@@ -214,6 +214,8 @@ logind) to build and run.
 - The Raspberry Pi images are built on request and have not been tested on
   hardware by CI, nor have their updates.
 - How fast keys reach the screen is measured by the console itself: every
-  100 keys it logs `input to frame: p50 … p99 … worst …` in
-  `~/.local/state/termos/log/`. The Pi 4's budget is 33 ms (p99); it is to
-  be measured on a real board.
+  100 keys it logs `input to frame: p50 … p99 … worst …; on the screen: …`
+  in `~/.local/state/termos/log/`. The first figures run to the frame being
+  handed to the display, which is what the budget counts; the second add
+  the wait for the screen's next refresh. The Pi 4's budget is 33 ms (p99);
+  it is to be measured on a real board.

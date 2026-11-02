@@ -28,7 +28,7 @@ candle = ["termos-models/candle"]
 # The bare-metal console (D-073): `termos --kms` draws on a DRM display and
 # reads input through libinput. Linux only; links libinput, libudev,
 # libxkbcommon and libseat, so it is on only in the images.
-kms = ["termos-render/raster", "dep:drm", "dep:input", "dep:libseat", "dep:xkbcommon"]
+kms = ["termos-render/raster", "dep:bytemuck", "dep:drm", "dep:input", "dep:libseat", "dep:xkbcommon"]
 
 [dependencies]
 anyhow.workspace = true
@@ -52,6 +52,7 @@ rustix.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libc.workspace = true
+bytemuck = { workspace = true, optional = true }
 drm = { workspace = true, optional = true }
 input = { workspace = true, optional = true }
 libseat = { workspace = true, optional = true }
@@ -62,6 +63,7 @@ windows-sys = { workspace = true, features = ["Win32_Foundation", "Win32_System_
 
 [dev-dependencies]
 portable-pty.workspace = true
+proptest.workspace = true
 tempfile.workspace = true
 vt100.workspace = true
 

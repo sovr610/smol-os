@@ -1,9 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//! The console's input→frame time (D-019's budget: 16 ms on x86_64, 33 ms
-//! on a Pi 4, p99): from reading a key to the page flip that shows the
-//! desktop's next frame. Every [`EVERY`] keys it reports the median, the
-//! 99th percentile and the worst of the last [`KEEP`], for the log, so a
-//! real board's numbers can be read off it (M9).
+//! The console's input→frame time. D-019's budget (16 ms on x86_64, 33 ms
+//! on a Pi 4, p99) runs from reading a key to flushing the frame that
+//! answers it, which here is asking the display to flip in a buffer that
+//! holds it. The flip itself happens at the next vertical blank, up to a
+//! refresh later, so the time until it is shown is reported beside it.
+//! Every [`EVERY`] keys the log gets the median, the 99th percentile and
+//! the worst of the last [`KEEP`], so a real board's numbers can be read
+//! off it (M9).
 
 use std::time::{Duration, Instant};
 
@@ -14,20 +17,46 @@ pub(super) const KEEP: usize = 1000;
 
 #[derive(Debug, Default)]
 pub(super) struct Latency {
-    /// The first key not yet answered by a frame on the screen.
+    /// The first key not yet answered by a frame sent to the display.
     pending: Option<Instant>,
     /// A frame came from the server after that key.
     framed: bool,
-    samples: Vec<Duration>,
+    /// A key whose frame was flushed: when it was read, and how long the
+    /// flush took. The flip that shows it finishes the sample.
+    flushed: Option<(Instant, Duration)>,
+    /// Key to flush (D-019's measure).
+    flush: Vec<Duration>,
+    /// Key to the frame on the screen.
+    shown: Vec<Duration>,
     measured: usize,
+}
+
+/// Percentiles of some samples.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct Stats {
+    pub(super) p50: Duration,
+    pub(super) p99: Duration,
+    pub(super) max: Duration,
+}
+
+impl Stats {
+    fn of(samples: &[Duration]) -> Self {
+        let mut s = samples.to_vec();
+        s.sort();
+        let at = |q: f64| s[((s.len() as f64 - 1.0) * q).round() as usize];
+        Self {
+            p50: at(0.5),
+            p99: at(0.99),
+            max: s[s.len() - 1],
+        }
+    }
 }
 
 /// A summary of recent samples.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct Report {
-    pub(super) p50: Duration,
-    pub(super) p99: Duration,
-    pub(super) max: Duration,
+    pub(super) flush: Stats,
+    pub(super) shown: Stats,
     pub(super) keys: usize,
 }
 
@@ -36,13 +65,23 @@ impl std::fmt::Display for Report {
         let ms = |d: Duration| d.as_secs_f64() * 1000.0;
         write!(
             f,
-            "input to frame: p50 {:.1} ms, p99 {:.1} ms, worst {:.1} ms (last {} keys)",
-            ms(self.p50),
-            ms(self.p99),
-            ms(self.max),
+            "input to frame: p50 {:.1} ms, p99 {:.1} ms, worst {:.1} ms; \
+             on the screen: p50 {:.1} ms, p99 {:.1} ms (last {} keys)",
+            ms(self.flush.p50),
+            ms(self.flush.p99),
+            ms(self.flush.max),
+            ms(self.shown.p50),
+            ms(self.shown.p99),
             self.keys
         )
     }
+}
+
+fn keep(samples: &mut Vec<Duration>, d: Duration) {
+    if samples.len() == KEEP {
+        samples.remove(0);
+    }
+    samples.push(d);
 }
 
 impl Latency {
@@ -61,28 +100,25 @@ impl Latency {
         }
     }
 
-    /// A page flip finished; a report every [`EVERY`] keys.
-    pub(super) fn flipped(&mut self, now: Instant) -> Option<Report> {
-        let start = self.pending.filter(|_| self.framed)?;
-        self.pending = None;
-        if self.samples.len() == KEEP {
-            self.samples.remove(0);
+    /// A flip was asked for, of a buffer holding every frame so far.
+    pub(super) fn flushed(&mut self, now: Instant) {
+        if let Some(start) = self.pending.filter(|_| self.framed) {
+            self.pending = None;
+            self.flushed = Some((start, now.saturating_duration_since(start)));
         }
-        self.samples.push(now.saturating_duration_since(start));
-        self.measured += 1;
-        self.measured.is_multiple_of(EVERY).then(|| self.report())
     }
 
-    fn report(&self) -> Report {
-        let mut s = self.samples.clone();
-        s.sort();
-        let at = |q: f64| s[((s.len() as f64 - 1.0) * q).round() as usize];
-        Report {
-            p50: at(0.5),
-            p99: at(0.99),
-            max: s[s.len() - 1],
-            keys: s.len(),
-        }
+    /// A page flip finished; a report every [`EVERY`] keys.
+    pub(super) fn flipped(&mut self, now: Instant) -> Option<Report> {
+        let (start, flush) = self.flushed.take()?;
+        keep(&mut self.flush, flush);
+        keep(&mut self.shown, now.saturating_duration_since(start));
+        self.measured += 1;
+        self.measured.is_multiple_of(EVERY).then(|| Report {
+            flush: Stats::of(&self.flush),
+            shown: Stats::of(&self.shown),
+            keys: self.flush.len(),
+        })
     }
 }
 
@@ -90,22 +126,31 @@ impl Latency {
 mod tests {
     use super::*;
 
+    fn ms(n: u64) -> Duration {
+        Duration::from_millis(n)
+    }
+
     #[test]
-    fn keys_are_timed_to_the_flip_after_their_frame() {
+    fn keys_are_timed_to_the_flush_of_their_frame() {
         let t0 = Instant::now();
         let mut l = Latency::default();
-        // A flip with no frame since the key does not count.
+        // A flush with no frame since the key does not count.
         l.key(t0);
-        assert_eq!(l.flipped(t0 + Duration::from_millis(3)), None);
+        l.flushed(t0 + ms(3));
+        assert_eq!(l.flipped(t0 + ms(4)), None);
+        assert!(l.flush.is_empty());
         // A second key before the frame keeps the first one's time.
-        l.key(t0 + Duration::from_millis(5));
+        l.key(t0 + ms(5));
         l.frame();
-        assert_eq!(l.flipped(t0 + Duration::from_millis(12)), None);
-        assert_eq!(l.samples, [Duration::from_millis(12)]);
-        // With nothing pending, frames and flips are not timed.
+        l.flushed(t0 + ms(12));
+        assert_eq!(l.flipped(t0 + ms(20)), None);
+        assert_eq!(l.flush, [ms(12)]);
+        assert_eq!(l.shown, [ms(20)]);
+        // With nothing pending, frames, flushes and flips are not timed.
         l.frame();
-        assert_eq!(l.flipped(t0 + Duration::from_millis(40)), None);
-        assert_eq!(l.samples.len(), 1);
+        l.flushed(t0 + ms(30));
+        assert_eq!(l.flipped(t0 + ms(40)), None);
+        assert_eq!(l.flush.len(), 1);
     }
 
     #[test]
@@ -114,23 +159,25 @@ mod tests {
         let mut l = Latency::default();
         let mut reports = Vec::new();
         for i in 0..200u64 {
-            let at = t0 + Duration::from_millis(i * 100);
+            let at = t0 + ms(i * 100);
             l.key(at);
             l.frame();
-            // 1..=100 ms, then again.
-            if let Some(r) = l.flipped(at + Duration::from_millis(i % 100 + 1)) {
+            // Flushed after 1..=100 ms, shown 16 ms later.
+            l.flushed(at + ms(i % 100 + 1));
+            if let Some(r) = l.flipped(at + ms(i % 100 + 17)) {
                 reports.push(r);
             }
         }
         assert_eq!(reports.len(), 2);
-        assert_eq!(reports[0].p50, Duration::from_millis(51));
-        assert_eq!(reports[0].p99, Duration::from_millis(99));
-        assert_eq!(reports[0].max, Duration::from_millis(100));
+        assert_eq!(reports[0].flush.p50, ms(51));
+        assert_eq!(reports[0].flush.p99, ms(99));
+        assert_eq!(reports[0].flush.max, ms(100));
+        assert_eq!(reports[0].shown.p50, ms(67));
         assert_eq!(reports[1].keys, 200);
-        assert!(
-            reports[0]
-                .to_string()
-                .starts_with("input to frame: p50 51.0 ms, p99 99.0 ms")
+        assert_eq!(
+            reports[0].to_string(),
+            "input to frame: p50 51.0 ms, p99 99.0 ms, worst 100.0 ms; \
+             on the screen: p50 67.0 ms, p99 115.0 ms (last 100 keys)"
         );
     }
 }

@@ -4,6 +4,7 @@
 //! cells it changed (and the cursor's old and new cells); the rows of
 //! pixels it touched are the damage the display copies out.
 
+use super::damage::Damage;
 use termos_core::proto::FrameUpdate;
 use termos_render::diff;
 use termos_render::encode::CursorState;
@@ -19,8 +20,8 @@ pub(super) struct Screen {
     /// `0x00RRGGBB`, `width` pixels per row.
     pub(super) pixels: Vec<u32>,
     cursor: Option<CursorState>,
-    /// Pixel rows changed since the display last took them: `[start, end)`.
-    damage: Option<(u32, u32)>,
+    /// Pixel rows changed since the display last took them.
+    damage: Damage,
 }
 
 impl Screen {
@@ -34,7 +35,7 @@ impl Screen {
             height,
             pixels: vec![0; width as usize * height as usize],
             cursor: None,
-            damage: None,
+            damage: Damage::default(),
         };
         s.repaint();
         s
@@ -45,17 +46,10 @@ impl Screen {
         (self.layout.cols, self.layout.rows)
     }
 
-    fn damage_rows(&mut self, y0: u32, y1: u32) {
-        let (a, b) = self
-            .damage
-            .map_or((y0, y1), |(a, b)| (a.min(y0), b.max(y1)));
-        self.damage = Some((a, b.min(self.height)));
-    }
-
     fn damage_cell_row(&mut self, row: u16) {
         let h = self.raster.metrics().height;
         let y0 = self.layout.y + u32::from(row) * h;
-        self.damage_rows(y0, y0 + h);
+        self.damage.add(y0, (y0 + h).min(self.height));
     }
 
     /// Repaints everything (first frame, a new font size, the seat back).
@@ -71,7 +65,7 @@ impl Screen {
             self.raster
                 .paint_cursor(&mut canvas, self.layout, &self.grid, c);
         }
-        self.damage = Some((0, self.height));
+        self.damage = Damage::all(self.height);
     }
 
     /// Applies a frame from the server.
@@ -134,14 +128,14 @@ impl Screen {
     }
 
     /// The pixel rows changed since the last call.
-    pub(super) fn take_damage(&mut self) -> Option<(u32, u32)> {
+    pub(super) fn take_damage(&mut self) -> Damage {
         self.damage.take()
     }
 
     /// Fills everything with the background (before the first frame).
     pub(super) fn clear(&mut self) {
         self.pixels.fill(pack(self.raster.palette.bg));
-        self.damage = Some((0, self.height));
+        self.damage = Damage::all(self.height);
     }
 }
 
@@ -181,8 +175,8 @@ mod tests {
         let mut s = screen();
         assert_eq!(s.cells(), (8, 4));
         assert_eq!(
-            s.take_damage(),
-            Some((0, 76)),
+            s.take_damage().bands(),
+            [(0, 76)],
             "the first paint is everything"
         );
         let red = Style::new().bg(Color::Indexed(1));
@@ -195,7 +189,7 @@ mod tests {
             None,
         );
         s.apply(&f);
-        assert_eq!(s.take_damage(), Some((38, 57)), "row 2 only");
+        assert_eq!(s.take_damage().bands(), [(38, 57)], "row 2 only");
         let at = |s: &Screen, x: u32, y: u32| s.pixels[(y * s.width + x) as usize];
         assert_eq!(at(&s, 10, 38), pack(XTERM_ANSI[1]));
         assert_eq!(at(&s, 0, 38), 0);
@@ -208,11 +202,15 @@ mod tests {
         };
         s.apply(&frame(Vec::new(), Some(cur)));
         assert_eq!(at(&s, 52, 2), pack(Rgb::new(200, 200, 200)));
-        assert_eq!(s.take_damage(), Some((0, 19)));
+        assert_eq!(s.take_damage().bands(), [(0, 19)]);
         s.apply(&frame(Vec::new(), Some(CursorState { y: 3, ..cur })));
         assert_eq!(at(&s, 52, 2), 0, "the old cursor is gone");
-        assert_eq!(s.take_damage(), Some((0, 76)), "rows 0 and 3");
-        assert_eq!(s.take_damage(), None);
+        assert_eq!(
+            s.take_damage().bands(),
+            [(0, 19), (57, 76)],
+            "rows 0 and 3, not the rows between"
+        );
+        assert!(s.take_damage().is_empty());
     }
 
     #[test]
@@ -223,7 +221,7 @@ mod tests {
         f.cols = 6;
         s.apply(&f);
         assert_eq!(s.grid.cols(), 6);
-        assert_eq!(s.take_damage(), Some((0, 76)));
+        assert_eq!(s.take_damage().bands(), [(0, 76)]);
         assert_eq!(s.set_font_size(32.0), Some((4, 2)));
         assert_eq!(s.set_font_size(32.0), None, "the same size again");
     }

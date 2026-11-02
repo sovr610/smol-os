@@ -8,6 +8,7 @@
 //! runs while the screen and input are idle (a held key repeats on a
 //! timer only while it is held).
 
+mod damage;
 mod display;
 mod keyboard;
 mod latency;
@@ -176,7 +177,10 @@ impl Console {
             // Shown in full when the seat comes back.
             return Ok(());
         }
-        self.display.present(&self.screen.pixels, damage)
+        if self.display.present(&self.screen.pixels, &damage)? {
+            self.latency.flushed(Instant::now());
+        }
+        Ok(())
     }
 
     fn font_size(&mut self, px: f32) -> io::Result<()> {
@@ -352,7 +356,7 @@ impl Console {
             }
         }
         if self.display.behind() && self.active {
-            self.display.present(&self.screen.pixels, None)?;
+            self.show()?;
         }
         Ok(())
     }

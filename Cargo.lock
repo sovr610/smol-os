@@ -5424,6 +5424,7 @@ name = "termos-cli"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "bytemuck",
  "clap",
  "crossterm",
  "drm",
@@ -5432,6 +5433,7 @@ dependencies = [
  "libc",
  "libseat",
  "portable-pty",
+ "proptest",
  "rustix",
  "secrecy",
  "serde_json",
