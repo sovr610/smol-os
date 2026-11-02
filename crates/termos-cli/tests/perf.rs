@@ -154,4 +154,57 @@ fn latency_idle_cpu_and_memory_budgets() {
         "RSS with the image open: client {rss_client:.1} MB + server {rss_server:.1} MB = {rss:.1} MB"
     );
     assert!(rss < 150.0, "RSS with an image {rss:.1} MB exceeds 150 MB");
+
+    // The system monitor reads the machine once a second while it is on
+    // screen; once closed, nothing runs.
+    t.send(b"q"); // close the image viewer
+    assert!(t.run(&["msg", "monitor.open"]).status.success());
+    t.wait_for("the monitor", Duration::from_secs(30), |s| {
+        s.contains("Memory")
+    });
+    let before = cpu();
+    std::thread::sleep(Duration::from_secs(idle_secs));
+    let used = cpu() - before;
+    let pct = used / idle_secs as f64 * 100.0;
+    println!("CPU with the system monitor open over {idle_secs}s: {used:.2}s = {pct:.3}%");
+    assert!(pct < 5.0, "the monitor costs {pct:.3}%");
+    t.send(b"q");
+    std::thread::sleep(Duration::from_millis(500));
+    let before = cpu();
+    std::thread::sleep(Duration::from_secs(idle_secs));
+    let used = cpu() - before;
+    let pct = used / idle_secs as f64 * 100.0;
+    println!("idle CPU with the monitor closed over {idle_secs}s: {used:.2}s = {pct:.3}%");
+    assert!(pct < 1.0, "idle CPU after the monitor {pct:.3}% exceeds 1%");
+    drop(t);
+
+    // A WASM widget configured: what the engine costs (D-051). The sample
+    // does not tick until clicked, so it costs no CPU at rest.
+    let wasm = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../termos-shell/tests/fixtures/pomodoro.wasm"
+    );
+    let w = Termos::start(&format!("[widgets.pomodoro]\npath = '{wasm}'\n"));
+    w.wait_ready();
+    w.wait_for("the widget", Duration::from_secs(60), |s| s.contains("🍅"));
+    let client = w.child.process_id().expect("pid");
+    let info = w.run(&["msg", "server.info"]);
+    let info: serde_json::Value = serde_json::from_slice(&info.stdout).expect("server.info JSON");
+    let server = info["pid"]
+        .as_u64()
+        .and_then(|p| u32::try_from(p).ok())
+        .expect("server pid");
+    std::thread::sleep(Duration::from_millis(500));
+    let before = cpu_seconds(client) + cpu_seconds(server);
+    std::thread::sleep(Duration::from_secs(idle_secs));
+    let used = cpu_seconds(client) + cpu_seconds(server) - before;
+    let pct = used / idle_secs as f64 * 100.0;
+    println!("idle CPU with a WASM widget over {idle_secs}s: {used:.2}s = {pct:.3}%");
+    assert!(pct < 1.0, "idle CPU with a widget {pct:.3}% exceeds 1%");
+    let (rss_client, rss_server) = (rss_mb(client), rss_mb(server));
+    let rss = rss_client + rss_server;
+    println!(
+        "RSS with a WASM widget: client {rss_client:.1} MB + server {rss_server:.1} MB = {rss:.1} MB"
+    );
+    assert!(rss < 150.0, "RSS with a widget {rss:.1} MB exceeds 150 MB");
 }

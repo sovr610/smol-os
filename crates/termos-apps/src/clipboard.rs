@@ -289,7 +289,10 @@ impl App for ClipboardManager {
                     tui_style(Style::new().bg(c.selection_bg)),
                 );
             }
-            let right = format!("{}  {}", e.source, age(e.at, now));
+            // The source may be cut; the age always shows.
+            let when = age(e.at, now);
+            let source_max = usize::from(area.width / 3).saturating_sub(when.len() + 2);
+            let right = format!("{}  {when}", fit(&e.source.to_string(), source_max));
             let right_w = u16::try_from(UnicodeWidthStr::width(right.as_str()))
                 .unwrap_or(0)
                 .min(area.width / 2);

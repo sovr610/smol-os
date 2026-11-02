@@ -14,13 +14,16 @@ crates/termos-core     event loop, bus, Transport, protocol, App trait, config, 
 crates/termos-term     PTY + VT emulation (alacritty_terminal behind VtBackend)
 crates/termos-wm       window tree, layouts, workspaces, input routing, chrome
 crates/termos-shell    Desktop state, palette, which-key, bar, notifications, plugin host
-crates/termos-apps     built-in apps (App trait + ratatui)
+crates/termos-apps     built-in apps (App trait + ratatui): viewers, files, monitor, clipboard, settings
+crates/termos-hw       CPU/GPU/memory/temperature/disk/network readings (sysinfo + sysfs/NVML)
+crates/termos-plugin   plugin protocol and Rust SDK; wit/ holds the WASM widget world
 crates/termos-devkit   mise toolchains, Neovim/Helix + LSP/DAP, dev rootfs, panels
 crates/termos-ai       providers, agent loop, tools, permissions, sandbox, audit, MCP
 crates/termos-models   HF adapter, hardware fit, inference backends, OpenAI-compatible router
 crates/termos-image    Buildroot external tree, image builds, QEMU boot tests
 crates/termos-cli      the `termos` binary (only binary in the product)
 xtask/                 repo automation (std-only)
+examples/widgets/      sample WASM status-line widget (its own workspace, wasm32-wasip2)
 ```
 Dependency direction is fixed in ARCHITECTURE.md §4. Never add an edge that points upward.
 
@@ -30,6 +33,7 @@ Dependency direction is fixed in ARCHITECTURE.md §4. Never add an edge that poi
 - `cargo xtask check-todos`: work-marker format, ROADMAP sync and SPDX headers.
 - `cargo run -p termos-cli -- <args>`: run `termos`. With no arguments it starts the desktop, which needs a real terminal.
 - `cargo xtask perf [SECS]`: performance budgets on a release build (Linux), with SECS seconds of idle measurement (default 60).
+- `cargo xtask widgets`: rebuild the sample WASM widget and refresh `crates/termos-shell/tests/fixtures/pomodoro.wasm` (needs `rustup target add wasm32-wasip2`). Commit the fixture with the source change; CI rebuilds it and tests the fresh build.
 - `cd fuzz && cargo +nightly fuzz run <target> -- -max_total_time=60`: fuzz a parser. The targets are `vt_advance`, `config_parse`, `keyspec_parse`, `proto_decode`, `caps_reply`, `sixel_decode`, `apc_dcs_intercept` and `markdown_layout`.
 - `INSTA_UPDATE=always cargo test -p <crate>`: write new snapshots; review the `.snap` files before committing.
 - `cargo zigbuild --release -p termos-cli --target aarch64-unknown-linux-gnu.2.31`: cross-build. Needs zig and cargo-zigbuild.

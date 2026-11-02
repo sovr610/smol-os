@@ -308,6 +308,8 @@ impl Source for Sampler {
             .system
             .processes()
             .values()
+            // Linux lists each thread of a process too: count processes.
+            .filter(|p| p.thread_kind() != Some(sysinfo::ThreadKind::Userland))
             .map(|p| ProcessSample {
                 pid: p.pid().as_u32(),
                 name: p.name().to_string_lossy().into_owned(),
@@ -437,6 +439,17 @@ mod tests {
         assert!(a.memory.used <= a.memory.total);
         assert!(a.processes.len() <= TOP_PROCESSES);
         assert!(!a.processes.is_empty(), "this test is a process");
+        // Threads are not listed as processes: this test has several
+        // threads but appears once.
+        let me = std::process::id();
+        let _busy: Vec<_> = (0..3)
+            .map(|_| {
+                std::thread::spawn(|| std::thread::sleep(std::time::Duration::from_millis(300)))
+            })
+            .collect();
+        let b = s.sample();
+        let all = b.processes.iter().filter(|p| p.pid == me).count();
+        assert!(all <= 1, "this process is listed {all} times");
         for c in &a.cpu.cores {
             assert!((0.0..=100.5).contains(c), "{c}");
         }

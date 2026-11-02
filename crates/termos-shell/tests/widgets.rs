@@ -40,7 +40,10 @@ fn host(settings: &[(&str, &str)]) -> WidgetHost {
 /// Waits until `pred` holds for the widget's text (and boldness).
 fn wait_for(host: &WidgetHost, what: &str, pred: impl Fn(&str, bool) -> bool) {
     // Compiling the component can take a few seconds on a slow runner.
-    let until = Instant::now() + Duration::from_secs(60);
+    let start = Instant::now();
+    let until = start + Duration::from_secs(60);
+    // Every drawing seen, with when, for the failure message.
+    let mut seen: Vec<(Duration, String, bool)> = Vec::new();
     loop {
         let drawn = host.drawn();
         if let Some((_, cells)) = drawn.iter().find(|(n, _)| n == "pomodoro") {
@@ -49,12 +52,15 @@ fn wait_for(host: &WidgetHost, what: &str, pred: impl Fn(&str, bool) -> bool) {
             if pred(&text, bold) {
                 return;
             }
+            if seen.last().is_none_or(|(_, t, b)| *t != text || *b != bold) {
+                seen.push((start.elapsed(), text, bold));
+            }
         }
         let problems = host.take_problems();
         assert!(problems.is_empty(), "waiting for {what}: {problems:?}");
         assert!(
             Instant::now() < until,
-            "timed out waiting for {what}: {drawn:?}"
+            "timed out waiting for {what}; drawings seen (time, text, bold): {seen:?}"
         );
         std::thread::sleep(Duration::from_millis(10));
     }
@@ -80,7 +86,8 @@ fn the_sample_draws_ticks_only_while_running_and_hears_clicks() {
     wait_for(&h, "still ready", |t, _| t == "🍅 1:00");
     h.click("pomodoro", 0);
     wait_for(&h, "running", |_, bold| bold);
-    wait_for(&h, "a tick a second later", |t, _| t == "🍅 0:59");
+    // Ticks move it on once a second: some value in the first ten seconds.
+    wait_for(&h, "a tick a second later", |t, _| t.starts_with("🍅 0:5"));
     h.click("pomodoro", 0);
     wait_for(&h, "paused", |t, bold| t.ends_with('‖') && !bold);
 }

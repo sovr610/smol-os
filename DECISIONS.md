@@ -543,6 +543,28 @@ rewrite history.
   - **WASM widgets are in every build:** the `wasm-widgets` feature is on by default. The engine is created only when a widget is configured, so without widgets RAM and CPU are unchanged; the binary grows (measured in M4b).
 - **Alternatives:** our own `/proc` and `/sys` readers (Linux only); `sysinfo` without GPUs; permanent deletion after confirming; reading the desktop clipboard with `arboard` (only works on the same graphical desktop, not over SSH or on bare metal); an opt-in saved history; widgets only in builds made with the feature.
 
+## D-051: WASM widgets: the `termos:widget` world, one thread, bounded calls
+- **Status:** Accepted (lead; the engine is the owner's, D-042, and in every build, D-050) · 2026-11-02
+- **Decision:**
+  - **World:** `termos:widget@0.1.0` in `crates/termos-plugin/wit/widget.wit`. A widget exports `init(settings) -> result<update, string>`, `render(width) -> list<span>`, `tick() -> update` and `on-event(event) -> update` (a click, with the column). Every call returns `update { redraw, next-tick-ms }`: the widget says when it next wants to run, instead of the fixed tick interval first sketched in ARCHITECTURE.md §9, so a widget at rest is never called.
+  - **Imports:** WASI 0.2 only, so any toolchain that targets it works (Rust `wasm32-wasip2`, componentize-py, jco, TinyGo). The context denies network, name lookup, environment and arguments; files only in the folders `[widgets.<name>] dirs` grants, read-only.
+  - **Host:** wasmtime 50 with the component model and cranelift, without its parallel compilation (rayon), GC, profiling or debugging features. One thread runs every widget on its own current-thread tokio runtime with async bindings, so wasmtime-wasi never starts its hidden multi-threaded runtime. The thread and the engine exist only while `[widgets]` names a widget; a config reload restarts the widgets when their config changed.
+  - **Bounds, per call:** fuel (500 M instructions for `init`, 50 M otherwise), 32 MiB of memory, 2 s of wall-clock time, ticks at least 100 ms apart, at most 64 spans and `max-width` columns (default 24), control characters removed. A widget that breaks a bound, traps or fails to load is stopped and a notification says why; the others carry on.
+  - **Status line:** drawings come after the plugin widgets; a click on one goes to it.
+  - **Sample and tests:** `examples/widgets/pomodoro` (Rust, `wasm32-wasip2`, 70 KB) only ticks while it counts down. Its build is kept as `crates/termos-shell/tests/fixtures/pomodoro.wasm`, so the widget tests run on every OS without the WASI target; `cargo xtask widgets` refreshes it, and a CI job rebuilds it from source and runs the same tests against that build.
+  - **Cross-target clippy** (xtask and the CI lint job) runs without default features: wasmtime compiles C for Windows. The native Windows and macOS jobs check and test everything.
+- **Alternatives:** no WASI at all (smaller, but only `no_std` Rust guests could be written); a thread per widget; wasmtime-wasi's synchronous bindings (they start a multi-threaded runtime behind the scenes); a fixed tick interval per widget; building the sample in every test run (every machine would need the WASI target).
+
+## D-052: The M4b apps, and what the App API gained
+- **Status:** Accepted (lead) · 2026-11-02
+- **Decision:**
+  - **App API (termos-core):** `App::deadline` and `on_timer`, which the desktop schedules only while the app is on screen for some client (D-028), so a minimized or background app costs nothing; effects `Copy(text)` and `PasteAndClose(text)`; `AppImage::scroll_top` for pictures scrolled partly out of an app.
+  - **Widgets for apps:** `termos_core::widgets` holds a line chart drawn in braille (`Canvas` in termos-render), a sparkline and a meter in eighth blocks, and an image slot. The theme gains an `error` colour (7:1 in high contrast).
+  - **Clipboard history (D-050):** server-wide, in memory, newest first, without duplicates; `[clipboard] history = 50`, at most 1 MiB per entry and 8 MiB in all; pinned entries survive limits and clearing; `Debug` shows no text. Copy mode, mouse selections, OSC 52 from programs and apps all record into it.
+  - **Apps:** the markdown viewer (pulldown-cmark; local pictures only, nothing is fetched); the file manager (a worker thread for listing, previews and copying; deleting to the trash; `file.open` picks the app by kind, `file.edit` runs `$VISUAL`/`$EDITOR`, else `vi` or Notepad, in a new pane); the system monitor (`termos-hw` on its own thread, once a second, only while on screen); the clipboard manager (prefix `=`, like tmux's choose-buffer); settings (each change written into config.toml with toml_edit, keeping its comments, checked with `Config::parse` before an atomic write, then reloaded).
+  - **Panels:** the palette and which-key take the floats' border style and drop shadow (`[floats] border`, `shadow`).
+- **Alternatives:** apps with timers of their own (they would run while hidden); reading the operating system's clipboard (D-050); a settings app that writes a fresh file (comments lost); syntax highlighting in the markdown viewer (syntect is large; later if wanted).
+
 ---
 
 ## Open questions (the owner will be asked before the milestone that needs each one)

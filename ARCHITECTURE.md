@@ -93,7 +93,7 @@ agents and models. A frontend is only a *client* of the server (D-007).
 | `termos-term` | PTY spawning/resizing, `VtBackend` over alacritty_terminal, blitting VT cells into the grid | M1 |
 | `termos-wm` | Window tree, floating + tiling layouts, workspaces, z-order, hit testing, composition of window chrome | M1 |
 | `termos-shell` | `Desktop` state, the session server (socket, sessions, clients, control API), key tables, command palette, which-key, status bar, copy mode, notifications, tutorial, snapshots, plugin host | M1 |
-| `termos-apps` | Built-in apps on the in-process `App` trait | M4 |
+| `termos-apps` | Built-in apps on the in-process `App` trait: image and markdown viewers, file manager, system monitor, clipboard manager, settings | M4 |
 | `termos-devkit` | mise-backed toolchains, Neovim/Helix + LSP/DAP, dev rootfs, Git/build panels | M5 |
 | `termos-ai` | Providers, agent loop, tools, permission engine, sandbox, audit, MCP, secrets | M6 |
 | `termos-models` | HF adapter, fit estimation, inference backends, OpenAI-compatible router | M7 |
@@ -291,6 +291,9 @@ Window = { id, title, source: Pty | App | Plugin | Agent, state: normal | minimi
 - **Themes (D-044):** semantic tokens such as `fg`, `accent`, `border`, `status-*` and `overlay-bg` from which every style is derived. Presets dark, light and high-contrast; `[theme] base = "auto"` follows each client's terminal background (OSC 11, then `COLORFGBG`). Themes are per client; `theme.select` switches one. Programs asking for default colours (OSC 10/11) get the terminal's.
 - **Motion (D-042, D-045):** `[ui] animations` and `reduced-motion`; never over SSH.
 - **Graphics:** `[graphics] protocol = "auto" | "kitty" | "sixel" | "iterm2" | "blocks"`.
+- **Clipboard:** `[clipboard] history` (entries kept in memory, default 50; 0 keeps none).
+- **Widgets:** `[widgets.<name>]` for WASM status-line widgets (§9, D-051).
+- **Settings app:** writes config.toml itself (toml_edit, comments kept), only after the result parses as a config.
 - **Session persistence (D-011, D-033):**
   - **Where:** snapshots go to `$XDG_STATE_HOME/termos/sessions/<server>/<session>.json`, with a versioned schema, mode 0600, written atomically.
   - **What:** the layout of every workspace and, per pane, the directory, the foreground program, and optionally (`save-scrollback`) the text. Command lines are kept only for allowlisted programs.
@@ -304,9 +307,19 @@ Window = { id, title, source: Pty | App | Plugin | Agent, state: normal | minimi
 ## 9. Apps and plugins (D-013)
 
 - **Built-in apps** (`termos-apps`) implement an in-process trait defined in `termos-core` (agent windows and devkit panels implement it too):
-  `App { title, handle(event) -> effects, render(area, &mut ratatui::Buffer), wants_tick, save_state, restore_state }`.
-  They run on the server loop and push heavy work to tasks.
-- **Images (D-049):** apps report images with `App::images()` (a shared picture fitted into a cell rectangle), shown through the ladder of §5.8. `AppWaker` lets an app ask for a redraw when background work (decoding) finishes. The image viewer (`image.open PATH`) is the first app in `termos-apps`.
+  `App { title, handle_key/handle_mouse -> effect, render(area, &mut ratatui::Buffer, theme), images, set_waker, deadline, on_timer }`.
+  - They run on the server loop and push heavy work to their own threads, asking for a redraw with `AppWaker` when it is done.
+  - **Timers (D-052):** `deadline`/`on_timer` are scheduled only while the app is on screen for some client, so hidden apps cost nothing (D-028).
+  - **Effects:** redraw, close, notify, run a command, `Copy(text)` (clipboard and history), `PasteAndClose(text)`.
+  - **Widgets:** `termos_core::widgets` has a braille line chart, sparklines, meters and an image slot.
+  - Saving and restoring app state with sessions is not done yet; app windows are not part of snapshots.
+- **The apps (D-049, D-052):**
+  - image viewer (`image.open PATH`) and markdown viewer (`markdown.open PATH`, local pictures inline);
+  - file manager (`files.open [DIR]`; `file.open PATH` opens by kind, `file.edit PATH` runs `$VISUAL`/`$EDITOR` in a new pane; deletes to the trash, D-050);
+  - system monitor (`monitor.open`, from `termos-hw`, sampling once a second only while visible);
+  - clipboard manager (`clipboard.open`, prefix `=`): the server-wide history of copies, in memory only (D-050);
+  - settings (`settings.open`): edits config.toml in place, keeping comments, and reloads.
+- **Images (D-049):** apps report images with `App::images()` (a shared picture fitted into a cell rectangle, which may be scrolled partly above the app), shown through the ladder of §5.8.
 - **Plain TUI programs** are first-class without any integration: they run in PTY windows, including the images they print (Kitty graphics, Sixel; D-048) and the Kitty keyboard protocol (D-046).
 - **Out-of-process plugins (D-034):** a directory under `~/.config/termos/plugins/<name>/` with an executable and a `plugin.toml` (name, version, exec, `[permissions] windows/status/commands/notify`). Plugins run only while listed in `[plugins] enabled`.
   - **Launch:** the server launches them with its first session, passing `TERMOS_SOCKET`, `TERMOS_PLUGIN_NAME` and a per-launch `TERMOS_PLUGIN_TOKEN`.
@@ -317,10 +330,11 @@ Window = { id, title, source: Pty | App | Plugin | Agent, state: normal | minimi
   - **Failure:** a plugin that exits or disconnects loses its UI and the user is notified. There's no automatic restart in v1.
   - **Later:** sandboxing launched plugins comes with the agent sandbox (M6).
   - **Languages:** `termos-plugin` is the Rust SDK; other languages speak JSON-RPC directly (the tests include a plain Python plugin).
-- **WASM widgets (M4):** status-bar widgets implementing a WIT world (`render(width) -> styled spans`, `on-event`, tick interval).
-  - The runtime is behind the `wasm-widgets` cargo feature and loads lazily, only when such a widget is configured.
-  - Fuel/epoch and memory limits apply. There's no filesystem or network access unless granted.
-  - The engine is Open (O-8).
+- **WASM widgets (D-051):** status-line widgets as components of the `termos:widget` WIT world (`crates/termos-plugin/wit/widget.wit`): `init(settings)`, `render(width) -> spans`, `tick`, `on-event(click)`; each call returns when the widget next wants to run, so a widget at rest is never called.
+  - **Config:** `[widgets.<name>] path, settings, dirs, max-width`.
+  - **Engine:** wasmtime (O-8, D-042), in every build (`wasm-widgets`, default on; D-050). One thread runs all widgets on a current-thread runtime, and only while some widget is configured.
+  - **Sandbox:** WASI 0.2 without network, environment or files, except `dirs` read-only. Per call: fuel, 32 MiB of memory, 2 s, a bounded drawing. A widget that breaks a bound is stopped and reported.
+  - **Sample:** `examples/widgets/pomodoro` (see [docs/widgets.md](docs/widgets.md)).
 
 ---
 
@@ -439,6 +453,9 @@ Window = { id, title, source: Pty | App | Plugin | Agent, state: normal | minimi
 
 - **Socket:** one server per user, with an owner-checked 0700 socket directory, a 0600 socket and peer-uid checks. On Windows: a named pipe with an owner-only protected DACL, remote clients rejected, the first instance reserved, SID checks in both directions, and anonymous impersonation level for clients (D-036).
 - **Plugins:** they run only when enabled in the config. Each identifies itself with a per-launch token (128 bits from the OS generator, D-040) and gets only the permissions its manifest asks for (D-034).
+- **WASM widgets (D-051):** WASI without network or environment; files only where `dirs` grants, read-only; fuel, memory, time and output bounds on every call.
+- **Clipboard history (D-050):** in the server's memory only; never in logs, `Debug` output or snapshots.
+- **File manager:** deleting moves to the system trash; a permanent delete needs a second confirmation. Previews never run anything; pictures in markdown are read only from local files.
 - **No plaintext secrets** anywhere: config, logs, snapshots or audit records.
   - Scrollback persistence is opt-in.
   - Snapshots keep command lines only for allowlisted programs.
@@ -464,6 +481,8 @@ Window = { id, title, source: Pty | App | Plugin | Agent, state: normal | minimi
 ## 16. Testing strategy
 
 - **Unit tests** in each crate, next to the code.
+- **Apps** are snapshot-tested through a fixture source where the real one would vary (the system monitor) and against temporary folders and files (the file manager, settings).
+- **WASM widgets** are tested with the sample's build kept in `crates/termos-shell/tests/fixtures/`; CI rebuilds it from source and runs the same tests against the fresh build.
 - **Snapshot tests** (`insta`): a `Grid` renders to text plus a style layer. The headless client drives the full desktop: inject input, then snapshot the screen. These cover chrome, layouts, apps and overlays.
 - **Integration tests:** real PTYs (`sh -c …`), client/server over the socket (sessions, detach, snapshots and restore, plugins), the real daemon driven through its CLI, config hot reload, and recorded provider fixtures with mock servers. CI never uses live API keys.
 - **Property tests** (`proptest`) for layout invariants (no overlaps or gaps, sizes sum to the parent), rectangle subtraction and the block raster.
@@ -472,7 +491,8 @@ Window = { id, title, source: Pty | App | Plugin | Agent, state: normal | minimi
   - VT input (M1);
   - config parsing (M2);
   - protocol decoding (`proto_decode`: frames and JSON-RPC);
-  - capability replies (`caps_reply`), Sixel decoding (`sixel_decode`) and the image interceptor (`apc_dcs_intercept`).
+  - capability replies (`caps_reply`), Sixel decoding (`sixel_decode`) and the image interceptor (`apc_dcs_intercept`);
+  - markdown layout (`markdown_layout`).
   
   CI runs a timed smoke pass on every push and longer scheduled runs.
 - **QEMU boot tests** (M8).
@@ -484,9 +504,10 @@ Window = { id, title, source: Pty | App | Plugin | Agent, state: normal | minimi
 
 - **Workspace and tooling:** a pinned toolchain (D-005); `cargo xtask ci` mirrors CI locally (D-020).
 - **CI** (D-016, D-041):
-  - lint: fmt, repo checks, cargo-deny, and clippy for the Windows target from Linux;
+  - lint: fmt, repo checks, cargo-deny, and clippy for the Windows target from Linux (without default features: wasmtime compiles C there); `cargo xtask ci` also runs clippy for macOS arm64 when that target is installed;
   - clippy, tests and a daemon smoke test (`new -d`, `ls`, `msg`, `kill-server`) on x86_64 Linux, aarch64 Linux, macOS arm64 and Windows x86_64;
-  - zigbuild cross-builds; a fuzz smoke pass; the performance budgets.
+  - zigbuild cross-builds; a fuzz smoke pass; the performance budgets;
+  - the sample WASM widget built from source for `wasm32-wasip2`, with the widget tests run against it.
 - **Test builds** on every push (D-041): Linux x86_64/aarch64 (glibc 2.31) and macOS arm64 `.tar.gz`, Windows x86_64 `.zip` (static C runtime), each with a `BUILDINFO.txt`, kept 14 days. The Linux builds are downloaded and smoke-run on matching runners.
 - **Later CI jobs:**
   - QEMU boots (M8);

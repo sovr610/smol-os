@@ -513,6 +513,7 @@ impl Desktop {
                         scrollback,
                     }
                 }
+                // TODO(M9): save and restore app windows (the folder, file or view an app shows) with the session.
                 PaneKind::App(_) => PaneSnapshot {
                     id: p.id.0,
                     kind: SavedKind::App,
@@ -2419,7 +2420,9 @@ impl Desktop {
                         }
                         VtEvent::Reply(bytes) => pty.write(bytes),
                         VtEvent::Clipboard(text) => {
-                            let source = ClipSource::Program(pane.title.clone());
+                            // The program, else the pane's title.
+                            let name = pty.foreground_name().unwrap_or_else(|| pane.title.clone());
+                            let source = ClipSource::Program(name);
                             if let Ok(mut h) = self.opts.clipboard.lock() {
                                 h.push(&text, source);
                             }
