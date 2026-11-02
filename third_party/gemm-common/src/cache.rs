@@ -70,6 +70,10 @@ fn has_amx_impl() -> bool {
     false
 }
 
+// TermOS: on x86_64 macOS the Apple branch returns before the CPUID one,
+// which the compiler then calls unreachable; as a path dependency this
+// crate's warnings are not capped, so `-D warnings` failed the build.
+#[allow(unreachable_code)]
 fn cache_info() -> Option<[CacheInfo; 3]> {
     if !cfg!(miri) {
         #[cfg(feature = "std")]

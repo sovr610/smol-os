@@ -13,11 +13,13 @@ name: Release
 on:
   push:
     tags: ["v*"]
-    # Paths are not checked for tags.
+    # Paths are not checked for tags. Patched crates (third_party/) are
+    # rehearsed too: every release target compiles them.
     branches: ["**"]
     paths:
       - ".github/workflows/release.yml"
       - ".github/scripts/buildinfo.sh"
+      - "third_party/**"
   workflow_dispatch:
     inputs:
       images:

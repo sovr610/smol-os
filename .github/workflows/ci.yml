@@ -92,6 +92,13 @@ jobs:
         run: cargo test --workspace --all-features --locked --no-fail-fast
       - name: smoke
         run: cargo run --locked -p termos-cli -- --version
+      # Releases also ship Intel macOS (release.yml), whose cfg combinations
+      # (Apple and x86_64, in candle's matrix code too) nothing else compiles.
+      - name: Intel macOS check
+        if: runner.os == 'macOS'
+        run: |
+          rustup target add x86_64-apple-darwin
+          cargo check --locked -p termos-cli --target x86_64-apple-darwin
       # The real daemon, started and driven by the CLI the way a user would.
       - name: daemon smoke
         shell: bash

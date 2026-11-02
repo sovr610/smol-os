@@ -74,9 +74,10 @@ only bundles made with them.
 ## Rehearsing
 
 The workflow can also be run by hand (Actions → Release → Run workflow),
-and runs by itself when a push changes it on any branch. It builds and packages the same files, named `…-<version>-rehearsal…`,
-and keeps them as the run's artifact for a week instead of making a
-release; nothing is attested. The images (about an hour and a half) are
+and runs by itself when a push changes it or a patched crate
+(`third_party/`) on any branch. It builds and packages the same files,
+named `…-<version>-rehearsal…`, and keeps them as the run's artifact for a
+week instead of making a release; nothing is attested. The images (about an hour and a half) are
 built only when the run asks for them, and without the signing secrets
 they trust development keys.
 
