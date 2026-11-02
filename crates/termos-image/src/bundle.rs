@@ -127,11 +127,13 @@ pub fn make(p: &Paths, t: &Target, keys: &Keys, variant: &Variant) -> Result<Pat
         file_name(t, &version)
     });
     let _ = std::fs::remove_file(&out);
+    // No --keyring: RAUC would check the new signature with OpenSSL's
+    // default purpose (S/MIME), which a code-signing certificate does not
+    // have; the images check it with `check-purpose=codesign`.
     run(Command::new(host.join("rauc"))
         .arg("bundle")
         .arg(format!("--cert={}", keys.cert.display()))
         .arg(format!("--key={}", keys.key.display()))
-        .arg(format!("--keyring={}", keys.keyring.display()))
         .arg(&content)
         .arg(&out))?;
     let _ = std::fs::remove_dir_all(&work);
