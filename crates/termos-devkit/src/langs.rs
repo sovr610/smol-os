@@ -38,14 +38,21 @@ pub struct Server {
     pub tool: Option<Tool>,
     /// Its command when `tool` is `None`.
     pub cmd: &'static [&'static str],
+    /// Start only inside a project (one of the root markers found), for
+    /// servers that share files with another (vtsls and Deno's).
+    pub needs_root: bool,
 }
 
 /// A debug adapter (DAP), for nvim-dap.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Debugger {
-    /// nvim-dap's adapter name.
+    /// nvim-dap's adapter name (also the launch type).
     pub name: &'static str,
+    /// `{install}` in its command is the tool's install folder.
     pub tool: Tool,
+    /// For adapters that listen on a port: the arguments after the
+    /// command (`${port}` is nvim-dap's). `None`: it talks on stdio.
+    pub port_args: Option<&'static [&'static str]>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -63,6 +70,8 @@ pub struct Language {
     pub debugger: Option<Debugger>,
     /// Neovim filetypes.
     pub filetypes: &'static [&'static str],
+    /// Helix language names.
+    pub helix: &'static [&'static str],
     /// Files that mark a project's root.
     pub root_markers: &'static [&'static str],
     /// Platforms (`os-arch`) where something above has no build, with
@@ -95,21 +104,31 @@ const NODE: Tool = Tool {
 const UV: Tool = tool("uv", &["uv"]);
 const CODELLDB: Debugger = Debugger {
     name: "codelldb",
-    tool: tool("github:vadimcn/codelldb", &["codelldb"]),
+    tool: tool(
+        "github:vadimcn/codelldb",
+        &["{install}/extension/adapter/codelldb"],
+    ),
+    port_args: Some(&["--port", "${port}"]),
 };
 const JS_DEBUG: Debugger = Debugger {
-    name: "js-debug",
-    tool: tool("github:microsoft/vscode-js-debug", &["js-debug"]),
+    name: "pwa-node",
+    tool: tool(
+        "github:microsoft/vscode-js-debug",
+        &["node", "{install}/js-debug/src/dapDebugServer.js"],
+    ),
+    port_args: Some(&["${port}", "127.0.0.1"]),
 };
 const VTSLS: Server = Server {
     name: "vtsls",
     tool: Some(tool("npm:@vtsls/language-server", &["vtsls", "--stdio"])),
     cmd: &[],
+    needs_root: true,
 };
 const CLANGD: Server = Server {
     name: "clangd",
     tool: Some(tool("github:clangd/clangd", &["clangd"])),
     cmd: &[],
+    needs_root: false,
 };
 const C_LIMITS: &[(&str, &str)] = &[(
     "linux-aarch64",
@@ -131,9 +150,11 @@ pub const LANGUAGES: &[Language] = &[
             name: "rust_analyzer",
             tool: Some(tool("rust-analyzer", &["rust-analyzer"])),
             cmd: &[],
+            needs_root: false,
         }],
         debugger: Some(CODELLDB),
         filetypes: &["rust"],
+        helix: &["rust"],
         root_markers: &["Cargo.toml"],
         limits: &[],
     },
@@ -146,6 +167,7 @@ pub const LANGUAGES: &[Language] = &[
         servers: &[CLANGD],
         debugger: Some(CODELLDB),
         filetypes: &["c"],
+        helix: &["c"],
         root_markers: &["CMakeLists.txt", "compile_commands.json", "Makefile"],
         limits: C_LIMITS,
     },
@@ -158,6 +180,7 @@ pub const LANGUAGES: &[Language] = &[
         servers: &[CLANGD],
         debugger: Some(CODELLDB),
         filetypes: &["cpp"],
+        helix: &["cpp"],
         root_markers: &["CMakeLists.txt", "compile_commands.json", "Makefile"],
         limits: C_LIMITS,
     },
@@ -171,9 +194,11 @@ pub const LANGUAGES: &[Language] = &[
             name: "zls",
             tool: Some(tool("zls", &["zls"])),
             cmd: &[],
+            needs_root: false,
         }],
         debugger: Some(CODELLDB),
         filetypes: &["zig"],
+        helix: &["zig"],
         root_markers: &["build.zig"],
         limits: &[],
     },
@@ -187,12 +212,15 @@ pub const LANGUAGES: &[Language] = &[
             name: "gopls",
             tool: Some(tool("go:golang.org/x/tools/gopls", &["gopls"])),
             cmd: &[],
+            needs_root: false,
         }],
         debugger: Some(Debugger {
             name: "delve",
-            tool: tool("go:github.com/go-delve/delve/cmd/dlv", &["dlv", "dap"]),
+            tool: tool("go:github.com/go-delve/delve/cmd/dlv", &["dlv"]),
+            port_args: Some(&["dap", "-l", "127.0.0.1:${port}"]),
         }),
         filetypes: &["go", "gomod"],
+        helix: &["go"],
         root_markers: &["go.mod"],
         limits: &[],
     },
@@ -210,18 +238,22 @@ pub const LANGUAGES: &[Language] = &[
                     &["basedpyright-langserver", "--stdio"],
                 )),
                 cmd: &[],
+                needs_root: false,
             },
             Server {
                 name: "ruff",
                 tool: Some(tool("ruff", &["ruff", "server"])),
                 cmd: &[],
+                needs_root: false,
             },
         ],
         debugger: Some(Debugger {
             name: "debugpy",
             tool: tool("pipx:debugpy", &["debugpy-adapter"]),
+            port_args: None,
         }),
         filetypes: &["python"],
+        helix: &["python"],
         root_markers: &["pyproject.toml", "setup.py", "requirements.txt"],
         limits: &[],
     },
@@ -234,18 +266,21 @@ pub const LANGUAGES: &[Language] = &[
             version: "temurin-21",
             cmd: &["java"],
         }),
-        helpers: &[],
+        // jdtls starts through a Python script.
+        helpers: &[tool("python", &["python3"])],
         servers: &[Server {
             name: "jdtls",
             tool: Some(Tool {
                 spec: "http:jdtls[url=https://download.eclipse.org/jdtls/snapshots/jdt-language-server-latest.tar.gz]",
                 version: "latest",
-                cmd: &["jdtls"],
+                cmd: &["python3", "{install}/bin/jdtls"],
             }),
             cmd: &[],
+            needs_root: false,
         }],
         debugger: None,
         filetypes: &["java"],
+        helix: &["java"],
         root_markers: &[
             "pom.xml",
             "build.gradle",
@@ -271,9 +306,11 @@ pub const LANGUAGES: &[Language] = &[
                 &["kotlin-language-server"],
             )),
             cmd: &[],
+            needs_root: false,
         }],
         debugger: None,
         filetypes: &["kotlin"],
+        helix: &["kotlin"],
         root_markers: &["build.gradle.kts", "build.gradle", "settings.gradle.kts"],
         limits: &[],
     },
@@ -287,6 +324,7 @@ pub const LANGUAGES: &[Language] = &[
             name: "csharp_ls",
             tool: Some(tool("dotnet:csharp-ls", &["csharp-ls"])),
             cmd: &[],
+            needs_root: false,
         }],
         debugger: Some(Debugger {
             name: "netcoredbg",
@@ -294,8 +332,10 @@ pub const LANGUAGES: &[Language] = &[
                 "github:Samsung/netcoredbg",
                 &["netcoredbg", "--interpreter=vscode"],
             ),
+            port_args: None,
         }),
         filetypes: &["cs"],
+        helix: &["c-sharp"],
         root_markers: &["*.sln", "*.csproj"],
         limits: &[],
     },
@@ -313,6 +353,7 @@ pub const LANGUAGES: &[Language] = &[
             "typescript",
             "typescriptreact",
         ],
+        helix: &["javascript", "typescript", "tsx", "jsx"],
         root_markers: &["package.json", "tsconfig.json"],
         limits: &[],
     },
@@ -325,6 +366,7 @@ pub const LANGUAGES: &[Language] = &[
         servers: &[VTSLS],
         debugger: Some(JS_DEBUG),
         filetypes: &["javascript", "typescript"],
+        helix: &["javascript", "typescript"],
         root_markers: &["bun.lock", "bun.lockb", "package.json"],
         limits: &[],
     },
@@ -338,9 +380,11 @@ pub const LANGUAGES: &[Language] = &[
             name: "denols",
             tool: None,
             cmd: &["deno", "lsp"],
+            needs_root: true,
         }],
         debugger: None,
         filetypes: &["javascript", "typescript"],
+        helix: &["javascript", "typescript"],
         root_markers: &["deno.json", "deno.jsonc"],
         limits: &[],
     },
@@ -358,6 +402,7 @@ pub const LANGUAGES: &[Language] = &[
                     &["vscode-html-language-server", "--stdio"],
                 )),
                 cmd: &[],
+                needs_root: false,
             },
             Server {
                 name: "cssls",
@@ -366,10 +411,12 @@ pub const LANGUAGES: &[Language] = &[
                     &["vscode-css-language-server", "--stdio"],
                 )),
                 cmd: &[],
+                needs_root: false,
             },
         ],
         debugger: None,
         filetypes: &["html", "css", "scss"],
+        helix: &["html", "css", "scss"],
         root_markers: &["index.html", "package.json"],
         limits: &[],
     },
@@ -383,9 +430,11 @@ pub const LANGUAGES: &[Language] = &[
             name: "lua_ls",
             tool: Some(tool("lua-language-server", &["lua-language-server"])),
             cmd: &[],
+            needs_root: false,
         }],
         debugger: None,
         filetypes: &["lua"],
+        helix: &["lua"],
         root_markers: &[".luarc.json", "init.lua"],
         limits: &[],
     },
@@ -402,9 +451,11 @@ pub const LANGUAGES: &[Language] = &[
                 &["bash-language-server", "start"],
             )),
             cmd: &[],
+            needs_root: false,
         }],
         debugger: None,
         filetypes: &["sh", "bash"],
+        helix: &["bash"],
         root_markers: &[".git"],
         limits: &[],
     },

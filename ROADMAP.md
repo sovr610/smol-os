@@ -575,7 +575,7 @@ Generated from the `TODO(M<n>)` markers in the code. Don't edit by hand; run `ca
 | Milestone | Where | What |
 | --- | --- | --- |
 | M5 | `crates/termos-apps/src/lib.rs` | package manager UI over mise, the dev rootfs and the host package manager. |
-| M5 | `crates/termos-devkit/src/lib.rs` | managed Neovim and Helix configs, project templates, build/run/test panels, Git UI. |
+| M5 | `crates/termos-devkit/src/lib.rs` | project templates, build/run/test panels, Git UI. |
 | M5 | `crates/termos-devkit/src/lib.rs` | dev rootfs, Podman and the package manager UI (M5b). |
 | M6 | `crates/termos-ai/src/lib.rs` | providers, streaming agent windows, sandboxed tools, permission engine, audit log, MCP, secrets. |
 | M6 | `crates/termos-shell/src/plugins.rs` | run launched plugins under the agent sandbox (bwrap + landlock). |

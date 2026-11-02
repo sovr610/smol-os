@@ -895,6 +895,25 @@ impl Desktop {
         self.layout_changed = true;
     }
 
+    /// The program `file.edit` runs (before the file): `$VISUAL` or
+    /// `$EDITOR`, or `termos edit`, which sets up TermOS's Neovim or Helix
+    /// (`[dev] editor`, D-054).
+    fn edit_command(&self) -> (String, Vec<String>) {
+        use termos_core::config::EditorChoice;
+        let env = |k: &str| std::env::var(k).ok();
+        let has_env = ["VISUAL", "EDITOR"]
+            .iter()
+            .any(|k| env(k).is_some_and(|v| !v.trim().is_empty()));
+        match self.config.dev.editor {
+            EditorChoice::Env => editor_command(env),
+            EditorChoice::Auto if has_env => editor_command(env),
+            _ => match std::env::current_exe() {
+                Ok(exe) => (exe.display().to_string(), vec!["edit".to_owned()]),
+                Err(_) => editor_command(env),
+            },
+        }
+    }
+
     /// A path typed for a command: relative to the focused pane's
     /// directory, like in a shell; `~` is the home directory.
     fn resolve_path(&self, text: &str) -> PathBuf {
@@ -1793,7 +1812,7 @@ impl Desktop {
             }
             Command::FileEdit(path) => {
                 let path = self.resolve_path(&path);
-                let (program, mut args) = editor_command(|k| std::env::var(k).ok());
+                let (program, mut args) = self.edit_command();
                 args.push(path.display().to_string());
                 let cwd = path.parent().map(PathBuf::from);
                 let estimate = (area.w / 2, area.h);

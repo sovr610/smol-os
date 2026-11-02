@@ -162,3 +162,50 @@ fn lang_commands_drive_mise() {
     assert!(!out.status.success());
     assert!(String::from_utf8_lossy(&out.stderr).contains("no language \"cobol\""));
 }
+
+/// `termos edit` sets up TermOS's Neovim (config written, the pinned
+/// version through mise) and becomes it: here the stand-in mise.
+#[cfg(unix)]
+#[test]
+fn edit_starts_termos_neovim_through_mise() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let log = dir.path().join("calls.log");
+    let fake = dir.path().join("mise");
+    std::fs::write(
+        &fake,
+        format!(
+            "#!/bin/sh\n\
+             case \"$1\" in\n\
+             --version) echo '2026.10.14 linux-x64';;\n\
+             ls) echo '{{\"neovim\": [{{\"version\": \"0.12.6\", \"install_path\": \"/m/nvim\"}}]}}';;\n\
+             *) echo \"NVIM_APPNAME=$NVIM_APPNAME $*\" >> '{}';;\n\
+             esac\n",
+            log.display()
+        ),
+    )
+    .expect("write");
+    std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+    let cfg = dir.path().join("cfg");
+    let out = Command::new(env!("CARGO_BIN_EXE_termos"))
+        .args(["edit", "main.go"])
+        .env("TERMOS_MISE", &fake)
+        .env("XDG_CONFIG_HOME", &cfg)
+        .env("XDG_DATA_HOME", dir.path().join("data"))
+        .env_remove("VISUAL")
+        .env_remove("EDITOR")
+        .output()
+        .expect("runs");
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let calls = std::fs::read_to_string(&log).expect("mise ran the editor");
+    assert_eq!(
+        calls.trim(),
+        "NVIM_APPNAME=termos-nvim exec neovim@0.12.6 -- nvim main.go"
+    );
+    assert!(cfg.join("termos-nvim/init.lua").is_file());
+    assert!(cfg.join("termos-nvim/lua/termos/generated.lua").is_file());
+}

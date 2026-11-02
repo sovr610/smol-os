@@ -1,0 +1,4 @@
+-- Your own Neovim settings for TermOS's Neovim. TermOS created this file
+-- once and never changes it. For example:
+--   vim.opt.relativenumber = true
+--   vim.cmd.colorscheme("habamax")

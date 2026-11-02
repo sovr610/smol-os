@@ -44,6 +44,7 @@ pub struct Config {
     pub clipboard: ClipboardConfig,
     /// WASM status-line widgets by name (D-013, D-051).
     pub widgets: std::collections::BTreeMap<String, WidgetConfig>,
+    pub dev: DevConfig,
 }
 
 impl Default for Config {
@@ -66,6 +67,7 @@ impl Default for Config {
             plugins: PluginsConfig::default(),
             clipboard: ClipboardConfig::default(),
             widgets: std::collections::BTreeMap::new(),
+            dev: DevConfig::default(),
         }
     }
 }
@@ -302,6 +304,28 @@ impl Default for ClipboardConfig {
     }
 }
 
+/// The developer environment (M5a, D-054).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(default, deny_unknown_fields, rename_all = "kebab-case")]
+pub struct DevConfig {
+    /// The editor `file.edit` and `termos edit` start.
+    pub editor: EditorChoice,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum EditorChoice {
+    /// `$VISUAL` or `$EDITOR` when set, else TermOS's Neovim.
+    #[default]
+    Auto,
+    /// TermOS's Neovim, with the language servers `termos lang` installed.
+    TermosNvim,
+    /// Helix, with the same servers.
+    Helix,
+    /// Always `$VISUAL` or `$EDITOR`.
+    Env,
+}
+
 /// One WASM status-line widget (`[widgets.<name>]`).
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
@@ -494,6 +518,15 @@ enabled = []             # plugin directory names under ~/.config/termos/plugins
 # Copies remembered for the clipboard manager (prefix =), newest first.
 # Kept in memory only: never written to disk. 0 remembers none.
 history = 50
+
+[dev]
+# The editor for files opened from TermOS (Files, `termos edit`):
+#   auto        $VISUAL or $EDITOR when set, else TermOS's Neovim
+#   termos-nvim TermOS's Neovim, with the language servers `termos lang`
+#               installed (your ~/.config/nvim is not touched)
+#   helix       Helix, with the same servers
+#   env         always $VISUAL or $EDITOR
+editor = "auto"
 
 # WASM status-line widgets (see docs/widgets.md). Each runs sandboxed: no
 # network, no files except the folders in `dirs` (read-only).

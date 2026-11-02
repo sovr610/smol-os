@@ -119,6 +119,9 @@ enum Cmd {
         #[command(subcommand)]
         action: ConfigCmd,
     },
+    /// Edit files with the editor `[dev] editor` names (TermOS's Neovim by
+    /// default, set up with the installed language servers).
+    Edit { files: Vec<String> },
     /// Programming languages, through mise: runtimes, language servers,
     /// debuggers.
     Lang {
@@ -243,6 +246,7 @@ fn main() -> ExitCode {
     let result = match &cli.command {
         Some(Cmd::Config { action }) => config_command(action, &config_path),
         Some(Cmd::Lang { action }) => lang_command(action, &paths),
+        Some(Cmd::Edit { files }) => edit_command(files, &paths, &config_path),
         Some(Cmd::Debug {
             what: DebugCmd::Caps { raw },
         }) => debug_caps(*raw),
@@ -355,7 +359,9 @@ fn run(cli: &Cli, paths: &Paths, config_path: &Path, t: &Target) -> anyhow::Resu
             }
         }
         Some(Cmd::Server) => run_server(paths, config_path, t),
-        Some(Cmd::Config { .. } | Cmd::Debug { .. } | Cmd::Lang { .. }) => Ok(ExitCode::SUCCESS),
+        Some(Cmd::Config { .. } | Cmd::Debug { .. } | Cmd::Lang { .. } | Cmd::Edit { .. }) => {
+            Ok(ExitCode::SUCCESS)
+        }
     }
 }
 
@@ -401,6 +407,71 @@ fn pane_path(paths: &Paths) -> Option<(String, String)> {
     let path = std::env::var_os(&key);
     let value = termos_devkit::mise::pane_path(&get, &paths.data_dir, path.as_ref())?;
     Some((key, value.to_string_lossy().into_owned()))
+}
+
+/// `$VISUAL`, else `$EDITOR`, split into a program and its arguments.
+fn env_editor() -> Option<(String, Vec<String>)> {
+    ["VISUAL", "EDITOR"].into_iter().find_map(|k| {
+        let v = std::env::var(k).ok()?;
+        let mut words = v.split_whitespace().map(str::to_owned);
+        let program = words.next()?;
+        Some((program, words.collect()))
+    })
+}
+
+/// `termos edit [FILE]…`: the editor `[dev] editor` names.
+fn edit_command(files: &[String], paths: &Paths, config_path: &Path) -> anyhow::Result<ExitCode> {
+    use termos_core::config::EditorChoice;
+    use termos_devkit::editor;
+    let choice = Config::load(config_path)
+        .map(|c| c.dev.editor)
+        .unwrap_or_default();
+    let launch = match (choice, env_editor()) {
+        (EditorChoice::Env | EditorChoice::Auto, Some((program, mut args))) => {
+            args.extend(files.iter().cloned());
+            editor::Launch {
+                program: program.into(),
+                args,
+                env: Vec::new(),
+            }
+        }
+        (EditorChoice::Env, None) => {
+            bail!("[dev] editor = \"env\", but neither VISUAL nor EDITOR is set")
+        }
+        (choice, _) => {
+            let mise = termos_devkit::mise::ensure(&paths.data_dir, &mut |m| println!("{m}"))?;
+            let path = mise.path.clone();
+            let mut runner = termos_devkit::lang::MiseRunner { mise };
+            let get = |k: &str| std::env::var(k).ok();
+            let mut say = |m: &str| println!("{m}");
+            if choice == EditorChoice::Helix {
+                editor::prepare_helix(&path, &mut runner, &get, files, &mut say)?
+            } else {
+                editor::prepare_nvim(&path, &mut runner, &get, files, &mut say)?
+            }
+        }
+    };
+    let mut cmd = std::process::Command::new(&launch.program);
+    cmd.args(&launch.args)
+        .envs(launch.env.iter().map(|(k, v)| (k, v)));
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        // Become the editor: the terminal and signals are its.
+        let err = cmd.exec();
+        bail!("cannot start {}: {err}", launch.program.display())
+    }
+    #[cfg(not(unix))]
+    {
+        let status = cmd
+            .status()
+            .with_context(|| format!("cannot start {}", launch.program.display()))?;
+        Ok(if status.success() {
+            ExitCode::SUCCESS
+        } else {
+            ExitCode::FAILURE
+        })
+    }
 }
 
 /// `termos lang …`.
@@ -462,6 +533,10 @@ fn lang_command(action: &LangCmd, paths: &Paths) -> anyhow::Result<ExitCode> {
                     eprintln!("termos: {}: {what} ({spec}) did not install", l.name);
                 }
             }
+            // Editors TermOS set up learn about the new servers.
+            let path = runner.mise.path.clone();
+            let get = |k: &str| std::env::var(k).ok();
+            termos_devkit::editor::refresh(&path, &mut runner, &get)?;
             Ok(if ok {
                 ExitCode::SUCCESS
             } else {

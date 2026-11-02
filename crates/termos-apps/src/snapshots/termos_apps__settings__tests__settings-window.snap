@@ -2,9 +2,6 @@
 source: crates/termos-apps/src/settings.rs
 expression: snap
 ---
- Appearance
-   Theme                      dark
-   Window borders             rounded
    Drop shadows               on
    Animations                 on
    Reduced motion             off
@@ -22,6 +19,9 @@ expression: snap
  Sessions
    Restore after a crash      ask
    Save scrollback            off
+
+ Developer
+   Editor                     auto
 
  Clipboard
    History entries          ‹ 0 ›  kept in memory only; 0 keeps none

@@ -162,6 +162,14 @@ const SETTINGS: &[Setting] = &[
         Kind::Bool,
     ),
     s(
+        "Developer",
+        "dev",
+        "editor",
+        "Editor",
+        "auto: $VISUAL/$EDITOR, else TermOS's Neovim",
+        Kind::Choice(&["auto", "termos-nvim", "helix", "env"]),
+    ),
+    s(
         "Clipboard",
         "clipboard",
         "history",

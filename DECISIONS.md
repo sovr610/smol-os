@@ -574,6 +574,17 @@ rewrite history.
   - **Language CI (owner):** the full matrix (every listed language on x86_64 and aarch64: install with mise, build and run a hello-world, a headless Neovim language-server handshake) runs nightly and on pushes that change the developer environment; other pushes run a quick subset (Rust, Python, Go).
 - **Alternatives:** gitui, or our own Git panel on gitoxide; one M5; requiring mise to be installed, or bundling it in every download; the full matrix on every push, or nightly only.
 
+## D-054: How `termos lang` and the editors use mise; `[dev] editor`
+- **Status:** Accepted (lead) · 2026-11-02
+- **Decision:**
+  - **Languages:** `termos lang install` makes the runtime the global default (`mise use --global`), so TermOS panes, which get mise's shims at the front of `PATH`, run it in any shell. Language servers and debuggers are installed without becoming defaults (`mise install`), and editors start them through `mise exec` with the exact versions installed: editors need nothing on `PATH`, and starting one never triggers an install. A server that fails to install is reported and the command exits non-zero, but the language stays installed.
+  - **Downloads:** TermOS fetches only mise itself (D-053), with the system's `curl`, so it links no TLS stack; everything else is mise's job.
+  - **Neovim (D-012):** `NVIM_APPNAME=termos-nvim`. TermOS writes `init.lua` and `lua/termos/` (static files embedded in the binary) and `lua/termos/generated.lua` (servers and debuggers with their exact commands); `lua/user.lua` is the user's, created once and never touched. Neovim 0.12.6, through mise; plugins (nvim-dap, nvim-dap-ui, nvim-nio) through Neovim's own `vim.pack`, pinned to exact commits. Servers use Neovim's built-in `vim.lsp.config`/`enable`; vtsls and Deno's server start only inside their own kind of project, so they never both attach.
+  - **Helix:** TermOS writes `languages.toml` when there is none (or it is TermOS's); otherwise `languages.termos.toml` beside it, for the user to merge.
+  - **`[dev] editor = "auto" | "termos-nvim" | "helix" | "env"`:** auto means `$VISUAL`/`$EDITOR` when set, else TermOS's Neovim. `termos edit [FILE]…` starts it; the file manager's `file.edit` runs `termos edit` unless the choice is the environment's editor.
+  - **Debuggers:** delve (Go), codelldb (Rust, C, C++, Zig), debugpy (Python), js-debug (Node, Bun), netcoredbg (.NET). Java, Kotlin, Lua and shell have none yet.
+- **Alternatives:** runtimes only per project (panes would find nothing outside projects); servers on `PATH` through shims (needs every server in the global config); a plugin manager such as lazy.nvim (one more moving part now that Neovim has `vim.pack`); always TermOS's Neovim (ignoring a user's `$EDITOR`).
+
 ---
 
 ## Open questions (the owner will be asked before the milestone that needs each one)
