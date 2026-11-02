@@ -48,7 +48,7 @@ impl TerminalGuard {
         crossterm::execute!(out, EnterAlternateScreen, EnableMouseCapture)?;
         // The Windows console delivers input as key events, so pastes
         // arrive as typed keys there.
-        // TODO(M9): VT input mode on Windows, for bracketed paste and the Kitty keyboard protocol.
+        // TODO(M9b): VT input mode on Windows, for bracketed paste and the Kitty keyboard protocol.
         if cfg!(not(windows)) {
             crossterm::execute!(out, EnableBracketedPaste)?;
         }

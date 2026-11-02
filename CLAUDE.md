@@ -52,7 +52,7 @@ Dependency direction is fixed in ARCHITECTURE.md §4. Never add an edge that poi
 - **SPDX header:** the first line of every `.rs` file is `// SPDX-License-Identifier: GPL-3.0-or-later`. The license is GPL-3.0-or-later (D-003).
 - **No silent stubs** (D-018):
   - `todo!`, `unimplemented!` and `dbg!` are denied by clippy.
-  - Unfinished work is a comment `TODO(M<n>): <what>`, naming a milestone with a `## M<n>` section in ROADMAP.md.
+  - Unfinished work is a comment `TODO(M<n>): <what>`, naming a milestone with a `## M<n>` section in ROADMAP.md (a split milestone adds its letter: `TODO(M9b)`).
   - The `FIXME` tag is rejected.
   - Never ship code that pretends to work.
 - **Unsafe code:** denied workspace-wide. Where it's unavoidable (FFI, ioctls), add `#[allow(unsafe_code)]` on the narrowest item and a `// SAFETY:` comment on every block. Prefer safe wrappers such as `rustix`.
@@ -66,7 +66,7 @@ Dependency direction is fixed in ARCHITECTURE.md §4. Never add an edge that poi
 - **Platforms:** hosted mode must build and pass tests on Linux (x86_64, aarch64), macOS and Windows x86_64 (Tier 2, D-035).
   - Gate Linux-only code with `cfg(target_os = "linux")` and Unix-only code with `cfg(unix)`, and give it a clear runtime error elsewhere.
   - Local IPC goes through `termos_core::local` (D-036); the plugin SDK, a leaf crate, has its own `Conn` seam (D-040). Don't use Unix sockets or named pipes directly anywhere else.
-  - A Windows gap that isn't fixed yet is a `TODO(M9)` marker, not a silent no-op.
+  - A Windows gap that isn't fixed yet is a `TODO(M9b)` marker, not a silent no-op (D-077).
   - Tests that drive a shell use the helpers in `tests/common/` (`cmd.exe` on Windows, `/bin/sh` elsewhere).
 - **Dependencies:** prefer mature crates. Add versions to `[workspace.dependencies]` and inherit them with `dep.workspace = true`. The license must pass `deny.toml`: no OpenSSL (use rustls), and no git dependencies.
 - **Idle cost:** no polling loops, and no timers while idle. Rendering is event-driven (ARCHITECTURE.md §5.5).

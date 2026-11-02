@@ -311,5 +311,5 @@ not see your other credentials. `termos agent presets` lists them.
 - Conversations are not compacted: a very long one eventually exceeds the
   model's context; start a new one.
 - The agent sees text, not images.
-- On Windows there is no sandbox yet (milestone M9); on macOS commands are
+- On Windows there is no sandbox yet (milestone M9b); on macOS commands are
   confirm-only.

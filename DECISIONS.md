@@ -778,6 +778,43 @@ rewrite history.
   3. `MemTotal − MemAvailable`, reported by the image after it settles, is under 150 MB (D-019). QEMU asks for that report through `fw_cfg` (`opt/termos/boottest`, the seconds to wait), so test runs use the same image as everyone else.
 - **Not covered:** latency on a Pi 4 (measured on hardware by the owner); input in the image beyond the console starting.
 
+## D-077: M9 is split; updates only on request; checksums and attestations; whole-disk installs
+- **Status:** Accepted (owner) · 2026-11-02
+- **Decision:**
+  - **Split:** M9 becomes **M9, release** (A/B updates, the live ISO and installer, growing the data partition, the network settings page, the release pipeline with static musl builds, user docs, accessibility, the Pi latency work) and **M9b, platform gaps** (the Windows agent sandbox; VT input, images from programs in panes and saving at logoff on Windows; program names and directories for snapshots on macOS and Windows; GPU sensors on macOS and for non-NVIDIA GPUs on Windows; Kitty keyboard flags 2 and 4; app windows saved with sessions; the KMS console's own clipboard, bell and pixel images). Platform gaps are `TODO(M9b)` markers from now on; this supersedes the `TODO(M9)` convention of D-035.
+  - **Updates on request only:** `termos update` and the Settings app check GitHub Releases for a newer bundle for this board, download it and install it into the other slot; the machine restarts when you say. Nothing checks, downloads or calls out in the background.
+  - **Signing:** releases carry `SHA256SUMS` and GitHub's build provenance attestations (Sigstore, keyless; checked with `gh attestation verify`). No Apple or Windows code signing yet, so the quarantine and SmartScreen steps stay documented (D-041). Update bundles are signed with the owner's key, kept as CI secrets (D-078).
+  - **Installer:** whole disks only.
+- **Alternatives:** one M9; a check at every boot with a notification; bundle files only, without GitHub Releases; Developer ID notarization and Authenticode (a paid Apple account and a certificate); a minisign key; installing next to another system.
+
+## D-078: A/B updates with RAUC (resolves O-12)
+- **Status:** Accepted (owner: RAUC; lead: how it is wired) · 2026-11-02
+- **Decision:**
+  - **RAUC 1.15** (Buildroot's package) with its D-Bus service. Bundles use RAUC's `verity` format (dm-verity in the kernel) and are signed (X.509 CMS); an image accepts only bundles whose signature chains to its keyring and whose `compatible` is `termos-<target>`. TermOS downloads a bundle itself (rustls) to the data partition and hands RAUC the file, so RAUC needs no network support.
+  - **Keys:** release builds sign with the owner's certificate and key (CI secrets) and put the owner's CA in the image's keyring. Without them, `cargo xtask image` makes a development CA, certificate and key in `target/image/keys/` (never committed); images built that way accept only bundles signed by that development key. `cargo xtask image bundle <target>` makes a target's bundle with Buildroot's host RAUC.
+  - **Slots:** `rootfs.0` (boot name `A`) is partition 2 and `rootfs.1` (`B`) is partition 3, each a raw squashfs. **The kernel moves into the root file system** (`/boot`), the option D-075 put off, so an update replaces the kernel and the system together; the boot partition keeps the boot loader, its configuration and its state.
+  - **GRUB (x86_64 and aarch64 UEFI):** RAUC's GRUB backend. `grub.cfg` is RAUC's documented selection script (`ORDER`, `A_OK`/`A_TRY`, `B_OK`/`B_TRY` in a `grubenv` on the boot partition, written on the system with `grub-editenv`); it loads the kernel from the chosen slot's squashfs and passes `rauc.slot=`. A slot that fails is tried once; then the other one boots.
+  - **Raspberry Pi:** RAUC's custom backend over the firmware's tryboot. Each slot's kernel and device trees are on the boot partition under `slot-a/` and `slot-b/` (the firmware's `os_prefix`); a new slot is tried once through `tryboot.txt` (`reboot "0 tryboot"`) and becomes the default in `config.txt` when it is marked good. QEMU cannot run the Pi firmware, so this path is unit-tested only until the owner tries it on a board.
+  - **Good or bad:** a boot script marks the booted slot good once the console's first frame is up (the console leaves a marker in its runtime folder). If that does not happen within five minutes, it marks the slot bad and restarts, and the boot loader falls back. The kernel restarts on a panic (`panic=10`).
+  - **Privileges:** the desktop's user reaches root only through `termos system`, which sudo runs with one rule. It does a fixed set of things, with checked arguments: install a downloaded bundle, mark a slot good or bad, restart, power off, install to a disk (D-080), grow the data partition, add or forget a Wi-Fi network.
+- **Tests:** in QEMU (x86_64): N+1 is installed from a local HTTP server and the machine restarts into slot B, running N+1; a broken bundle (a root file system without init) is tried once and the machine comes back on slot A.
+- **Alternatives:** SWUpdate; RAUC's HTTP streaming (needs nbd and libcurl on the device); a D-Bus policy or a root daemon instead of sudo; kernels on the boot partition with per-slot names.
+
+## D-079: Hosted Linux binaries in two flavours: glibc and static musl (resolves O-13)
+- **Status:** Accepted (owner) · 2026-11-02
+- **Decision:** test builds and releases add static `x86_64-unknown-linux-musl` and `aarch64-unknown-linux-musl` binaries (cargo-zigbuild) next to the glibc 2.31 ones (D-015), as long as the musl build keeps the performance budgets (D-019), measured in CI with `cargo xtask perf` against it. If musl's allocator makes it miss one, the musl build gets another global allocator; the measurements and the choice are recorded when that happens. A static binary cannot load libraries, so NVIDIA readings (NVML, loaded at run time) are missing there; the docs say so.
+- **Alternatives:** glibc only.
+
+## D-080: The live ISO and the installer; the data partition grows on first boot
+- **Status:** Accepted (owner: whole disks; lead: how) · 2026-11-02
+- **Decision:**
+  - **The x86_64 ISO** is a hybrid image (CD, USB stick or virtual machine; BIOS and UEFI) that runs the same system from memory: the root file system as an initramfs, with the data in memory (`S11termos-data`'s fallback). It also carries the disk image (zstd). It is made by `xorriso` after the disk image, because Buildroot's own ISO step runs before the image exists.
+  - **`termos install`** lists the disks it may use (never the one it booted from), asks you to type the disk's name, writes the disk image to it (streamed through zstd, through `termos system`) and asks you to restart without the ISO. `--erase <disk>` does it without asking, for automation.
+  - **Growing:** on the first boot of any image (installed, written with `dd` or Raspberry Pi Imager, or a virtual disk made bigger), the data partition is grown to the end of the disk, and its file system with it, before it is mounted.
+  - The aarch64 UEFI and Pi images are written to their disk or SD card directly.
+- **Tests:** in QEMU: the ISO boots with an empty 8 GB disk, installs onto it with `--erase`, and the disk then boots alone to `TERMOS-READY` with its data partition grown.
+- **Alternatives:** the live system from a squashfs on the ISO (a second, smaller initramfs to find and mount it); `dd` instructions instead of an installer.
+
 ---
 
 ## Open questions (the owner will be asked before the milestone that needs each one)
@@ -795,6 +832,6 @@ rewrite history.
 | O-9 | KMS font rasterizer: swash or fontdue? | M8 | **Resolved by D-072:** swash. |
 | O-10 | Init system: BusyBox init, s6, or systemd? | M8 | **Resolved by D-072:** BusyBox init. |
 | O-11 | Network management: connman, NetworkManager, or iwd + a small DHCP client? | M8 | **Resolved by D-072:** iwd + dhcpcd, with a TermOS settings page. |
-| O-12 | A/B updates: RAUC or SWUpdate? | M9 | RAUC (Buildroot package, Pi tryboot support). |
-| O-13 | Hosted Linux binaries: glibc 2.31 floor only, or also static musl? | M9 | Both if musl doesn't hurt performance. |
+| O-12 | A/B updates: RAUC or SWUpdate? | M9 | **Resolved by D-078:** RAUC. |
+| O-13 | Hosted Linux binaries: glibc 2.31 floor only, or also static musl? | M9 | **Resolved by D-079:** both, while musl keeps the budgets. |
 | O-14 | Bootloader for generic aarch64 UEFI: GRUB2 or systemd-boot? | M8 | **Resolved by D-072:** GRUB2, shared with x86_64. |

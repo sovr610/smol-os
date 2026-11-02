@@ -95,7 +95,7 @@ pub fn probe(helper: Option<&Path>) -> &'static Capabilities {
 /// Probes without caching.
 pub fn probe_now(helper: Option<&Path>) -> Capabilities {
     // macOS runs agent commands confirm-only by design (ARCHITECTURE.md §11).
-    // TODO(M9): a Windows sandbox for agent commands (an AppContainer or a restricted token); until then every command asks.
+    // TODO(M9b): a Windows sandbox for agent commands (an AppContainer or a restricted token); until then every command asks.
     if !cfg!(target_os = "linux") {
         return Capabilities::none();
     }

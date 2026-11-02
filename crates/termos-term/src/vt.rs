@@ -59,7 +59,7 @@ pub struct VtModes {
 /// Kitty keyboard flags TermOS implements for programs in panes:
 /// disambiguate (1), report all keys as escape codes (8), report
 /// associated text (16).
-// TODO(M9): Kitty keyboard release events (flag 2) and alternate keys (flag 4) for programs in panes.
+// TODO(M9b): Kitty keyboard release events (flag 2) and alternate keys (flag 4) for programs in panes.
 pub const KITTY_FLAGS_SUPPORTED: u8 = 1 | 8 | 16;
 
 /// The URI scheme of the hidden links that anchor images to text.

@@ -522,7 +522,7 @@ impl Desktop {
                         scrollback,
                     }
                 }
-                // TODO(M9): save and restore app windows (the folder, file or view an app shows) with the session.
+                // TODO(M9b): save and restore app windows (the folder, file or view an app shows) with the session.
                 PaneKind::App(_) => PaneSnapshot {
                     id: p.id.0,
                     kind: SavedKind::App,

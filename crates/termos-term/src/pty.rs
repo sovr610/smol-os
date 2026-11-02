@@ -258,7 +258,7 @@ impl PtyPane {
     }
 
     /// Name of the foreground program (Linux; `None` elsewhere).
-    // TODO(M9): foreground program name, directory and command line on macOS (libproc) and Windows (process snapshot APIs), so snapshots there name and restore programs too.
+    // TODO(M9b): foreground program name, directory and command line on macOS (libproc) and Windows (process snapshot APIs), so snapshots there name and restore programs too.
     pub fn foreground_name(&self) -> Option<String> {
         let pid = self.foreground_pid()?;
         proc_comm(pid)

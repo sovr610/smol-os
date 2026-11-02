@@ -2344,7 +2344,7 @@ impl Signals {
     }
 
     async fn recv(&mut self) -> &'static str {
-        // TODO(M9): a hidden window for WM_ENDSESSION, so logoff and shutdown always save.
+        // TODO(M9b): a hidden window for WM_ENDSESSION, so logoff and shutdown always save.
         tokio::select! {
             _ = self.c.recv() => "Ctrl+C",
             _ = self.brk.recv() => "Ctrl+Break",

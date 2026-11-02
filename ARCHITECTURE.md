@@ -401,7 +401,7 @@ termos-ai holds all of it; the CLI hands the server a launcher for its windows (
 - **Sandbox (D-061):**
   - Commands run under bubblewrap: new mount/pid/ipc/uts/net namespaces, the system bound read-only, the workspace read-write, a private `/tmp`, credentials and the runtime folder hidden, and no network unless granted.
   - Landlock adds defence in depth from inside, through `termos sandbox-exec` (writes, TCP, signal and abstract-socket scopes), which also drops credential-like environment variables. Landlock alone counts as partial (every command asks). seccomp is planned (after 1.0).
-  - On macOS hosted mode the sandbox degrades to confirm-only, with an explicit warning; on Windows too, until M9.
+  - On macOS hosted mode the sandbox degrades to confirm-only, with an explicit warning; on Windows too, until M9b (D-077).
 - **Audit (D-062):** an append-only JSONL file per agent session in `$XDG_STATE_HOME/termos/audit/`. Entries are hash-chained (SHA-256 of the previous line; the conversation keeps the last hash) and record the tool, redacted arguments, the decision and why, a redacted result summary and timestamps. `termos audit verify` checks them; the viewer app (`audit.open`) lists them.
 - **MCP (D-063):** an `rmcp` client over stdio and streamable HTTP. Each server must be listed by the profile; local servers launch inside the sandbox.
 - **External CLI agents (D-063):** Claude Code, Codex CLI, Gemini CLI, aider and opencode have launcher presets (`agent.external NAME`) that open them in PTY windows, optionally under the sandbox.
@@ -432,7 +432,7 @@ termos-ai holds all of it; the CLI hands the server a launcher for its windows (
 
 ---
 
-## 13. Bare-metal image (M8–M9; D-072, D-074–D-076)
+## 13. Bare-metal image (M8–M9; D-072, D-074–D-080)
 
 - **Build (D-074):** Buildroot 2026.02.1 (pinned, checksum-checked) with the `BR2_EXTERNAL` tree in `crates/termos-image/br2-external/`. Each target is one of Buildroot's board defconfigs plus TermOS fragments (the Bootlin glibc toolchain, D-014; packages; overlay; layout); every fragment setting is checked after `olddefconfig`. `termos` (with `kms`) is built by cargo with the pinned Rust, linked by Buildroot's GCC against the image's sysroot, and installed by a small package. `cargo xtask image list|build|boot`.
 - **Targets:**
@@ -447,7 +447,7 @@ termos-ai holds all of it; the CLI hands the server a launcher for its windows (
   4. eudev, D-Bus, iwd, dhcpcd, seatd;
   5. `termos --kms` on tty1 as the user `termos`, respawned if it stops;
   6. first-run setup (the tutorial).
-- **Partitions (MBR):** boot, rootfs A, rootfs B, data (label `termos-data`). The data partition holds home, Wi-Fi networks, and later the dev rootfs, models and containers. Updates (M9) are atomic A/B (O-12), with signed bundles and bootloader fallback (GRUB environment, Pi tryboot).
+- **Partitions (MBR):** boot, rootfs A, rootfs B, data (label `termos-data`). The data partition holds home, Wi-Fi networks, and later the dev rootfs, models and containers. Updates (M9) are atomic A/B with RAUC (D-078): signed bundles, the kernel inside each slot, and boot-loader fallback (GRUB's environment; the Pi's tryboot).
 - **QEMU boot tests (D-076):** x86_64 (OVMF and SeaBIOS) and aarch64 virt (AAVMF) with virtio-gpu as the only display.
   - TermOS prints `TERMOS-READY` on the serial console after its first frame.
   - The harness takes a QMP `screendump` and checks the desktop's structure: not blank, and the status bar row present.
@@ -538,7 +538,7 @@ termos-ai holds all of it; the CLI hands the server a launcher for its windows (
 | x86_64 Linux | Tier 1 | Tier 1 (UEFI + BIOS) | |
 | aarch64 Linux | Tier 1 | Tier 1 (generic UEFI) | |
 | macOS (arm64, x86_64) | Tier 1 | — | Agent sandbox is confirm-only (§11) |
-| Windows 10 1809+ / 11 (x86_64, native) | Tier 2 | — | Windows Terminal or another VT console; named pipes and ConPTY. Agent sandbox confirm-only for now. Gaps tracked as `TODO(M9)` (D-035) |
+| Windows 10 1809+ / 11 (x86_64, native) | Tier 2 | — | Windows Terminal or another VT console; named pipes and ConPTY. Agent sandbox confirm-only for now. Gaps tracked as `TODO(M9b)` (D-035, D-077) |
 | WSL2 | Tier 2 | — | |
 | Raspberry Pi 5 / 4 | Tier 2 (on Pi OS) | Tier 1 images | Latency budget 33 ms on Pi 4 |
 | Raspberry Pi 3 / Zero 2 W | Best effort | Best effort | 512 MB–1 GB RAM limits dev tools and local models |

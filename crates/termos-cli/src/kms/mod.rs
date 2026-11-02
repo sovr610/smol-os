@@ -313,7 +313,7 @@ impl Console {
             }
             ServerMsg::Exit { reason } => return Ok(Some(Ended::Exited(reason))),
             ServerMsg::Detached { session } => return Ok(Some(Ended::Detached(session))),
-            // TODO(M9): the console's own clipboard and visual bell; images drawn as pixels rather than as blocks.
+            // TODO(M9b): the console's own clipboard and visual bell; images drawn as pixels rather than as blocks.
             ServerMsg::Clipboard(_)
             | ServerMsg::Bell
             | ServerMsg::Title(_)

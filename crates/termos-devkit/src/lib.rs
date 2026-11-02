@@ -20,4 +20,4 @@ pub mod mise;
 pub mod tasks;
 pub mod templates;
 
-// TODO(M5): dev rootfs, Podman and the package manager UI (M5b).
+// TODO(M5b): dev rootfs, Podman and the package manager UI.

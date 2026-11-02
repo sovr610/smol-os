@@ -30,7 +30,7 @@ pub use markdown::MarkdownViewer;
 pub use monitor::SystemMonitor;
 pub use settings::Settings;
 
-// TODO(M5): package manager UI over mise, the dev rootfs and the host package manager.
+// TODO(M5b): package manager UI over mise, the dev rootfs and the host package manager.
 
 /// Drawing apps in tests: the text of an app rendered at a size.
 #[cfg(test)]

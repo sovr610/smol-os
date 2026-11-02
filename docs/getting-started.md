@@ -251,7 +251,7 @@ known gaps listed below).
 - **Closing the terminal** leaves the server and its sessions running, as on
   Linux: `termos` brings them back. The server runs without a window; stop
   it with `termos kill-server`.
-- **Not there yet on Windows** (planned for M9):
+- **Not there yet on Windows** (planned for M9b):
   - bracketed paste: a pasted block arrives as typed keys;
   - the Kitty keyboard protocol from the outer terminal;
   - saving at logoff or shutdown is best effort: `termos kill-server` first

@@ -63,7 +63,7 @@ That checks the latency, idle-CPU and memory budgets on a release build
 - [docs/bare-metal.md](docs/bare-metal.md): the bare-metal images: building, booting in QEMU, the console.
 - [docs/models.md](docs/models.md): local models: Hugging Face downloads, what fits your machine, llama.cpp, the model router.
 - [ARCHITECTURE.md](ARCHITECTURE.md): how the system is put together.
-- [ROADMAP.md](ROADMAP.md): milestones M0–M9 and open work.
+- [ROADMAP.md](ROADMAP.md): milestones M0–M9b and open work.
 - [DECISIONS.md](DECISIONS.md): the decision log and open questions.
 - [CLAUDE.md](CLAUDE.md): contributor conventions.
 

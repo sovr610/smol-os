@@ -24,7 +24,7 @@ pub mod sysfs;
 
 pub use gpu::GpuVendor;
 
-// TODO(M9): GPU temperature and power on macOS (SMC), and for non-NVIDIA GPUs on Windows.
+// TODO(M9b): GPU temperature and power on macOS (SMC), and for non-NVIDIA GPUs on Windows.
 
 /// The machine, as it is at start: what local models (M7) and the system
 /// monitor's header need.
