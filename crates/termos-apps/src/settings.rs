@@ -470,7 +470,14 @@ impl App for Settings {
                 vx,
                 y,
                 &value,
-                tui_style(base.fg(c.accent).attrs(Attrs::BOLD)),
+                tui_style(
+                    if selected {
+                        c.selected(base)
+                    } else {
+                        base.fg(c.accent)
+                    }
+                    .attrs(Attrs::BOLD),
+                ),
             );
             if selected && !s.help.is_empty() {
                 let hx =
@@ -481,7 +488,7 @@ impl App for Settings {
                         y,
                         s.help,
                         usize::from(area.right() - hx),
-                        tui_style(base.fg(c.muted)),
+                        tui_style(c.selected(base).attrs(Attrs::ITALIC)),
                     );
                 }
             }

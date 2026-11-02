@@ -1,9 +1,16 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-3.0-or-later
-# Prints the BUILDINFO.txt shipped with CI test builds. $1 is the target.
+# Prints the BUILDINFO.txt shipped with CI test builds and releases. $1 is
+# the target.
 set -euo pipefail
+# TERMOS_RELEASE (a version) marks a release build.
+if [ -n "${TERMOS_RELEASE:-}" ]; then
+	what="TermOS $TERMOS_RELEASE"
+else
+	what="TermOS test build (not a release)"
+fi
 cat <<INFO
-TermOS test build (not a release)
+$what
 
 target:  $1
 commit:  ${GITHUB_SHA:-unknown}

@@ -408,11 +408,16 @@ impl App for NetworkPage {
                 }
                 for (i, n) in w.networks.iter().enumerate() {
                     let selected = i == self.selected;
-                    let base = if selected {
-                        Style::new().bg(c.selection_bg)
-                    } else {
-                        Style::new()
+                    // Selected: everything in the text colour (D-081, the
+                    // contrast review).
+                    let paint = |colour| {
+                        if selected {
+                            c.selected(Style::new())
+                        } else {
+                            Style::new().fg(colour)
+                        }
                     };
+                    let base = paint(c.fg);
                     if selected && y < bottom {
                         buf.set_style(TuiRect::new(area.x, y, area.width, 1), tui_style(base));
                     }
@@ -429,10 +434,10 @@ impl App for NetworkPage {
                     } else {
                         ""
                     };
-                    line(buf, &mut y, 3, &n.ssid, base.fg(c.fg));
-                    line(buf, &mut y, 29, security, base.fg(c.muted));
-                    line(buf, &mut y, 37, bars(n.signal_dbm), base.fg(c.accent));
-                    line(buf, &mut y, 43, status, base.fg(c.accent));
+                    line(buf, &mut y, 3, &n.ssid, base);
+                    line(buf, &mut y, 29, security, paint(c.muted));
+                    line(buf, &mut y, 37, bars(n.signal_dbm), paint(c.accent));
+                    line(buf, &mut y, 43, status, paint(c.accent));
                     y += 1;
                 }
             }

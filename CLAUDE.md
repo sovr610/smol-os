@@ -32,7 +32,7 @@ Dependency direction is fixed in ARCHITECTURE.md §4. Never add an edge that poi
 - `cargo xtask todos --write`: regenerate the ROADMAP open-work table after adding or removing work markers.
 - `cargo xtask check-todos`: work-marker format, ROADMAP sync and SPDX headers.
 - `cargo run -p termos-cli -- <args>`: run `termos`. With no arguments it starts the desktop, which needs a real terminal.
-- `cargo xtask perf [SECS]`: performance budgets on a release build (Linux), with SECS seconds of idle measurement (default 60).
+- `cargo xtask perf [SECS] [--target T]`: performance budgets on a release build (Linux), with SECS seconds of idle measurement (default 60); `--target x86_64-unknown-linux-musl` measures the static musl build (D-079; needs `musl-tools`).
 - `termos lang check <lang>`: one language from install to the DAP handshake (D-056). It downloads mise and the language's tools, so CI runs it (`.github/workflows/languages.yml`, run on demand with workflow_dispatch); local tests use a stand-in mise through `TERMOS_MISE`.
 - `cargo xtask image list|build <target>|boot <target>`: bare-metal images with Buildroot and their QEMU boot test (Linux; docs/bare-metal.md). Builds take about an hour, so the `images` workflow runs them in CI; `build` needs Buildroot's host tools and the Rust target for the board.
 - `cargo xtask widgets`: rebuild the sample WASM widget and refresh `crates/termos-shell/tests/fixtures/pomodoro.wasm` (needs `rustup target add wasm32-wasip2`). Commit the fixture with the source change; CI rebuilds it and tests the fresh build.

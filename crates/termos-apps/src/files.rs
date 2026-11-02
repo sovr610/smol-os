@@ -887,7 +887,7 @@ impl FileManager {
                 Style::new().fg(c.fg)
             };
             if selected {
-                style = style.bg(c.selection_bg);
+                style = c.selected(style);
                 let row = TuiRect::new(area.x, y, area.width, 1);
                 buf.set_style(row, tui_style(Style::new().bg(c.selection_bg)));
             }
@@ -907,7 +907,7 @@ impl FileManager {
                     .saturating_sub(u16::try_from(s.len()).unwrap_or(0) + 1);
                 let mut st = Style::new().fg(c.muted);
                 if selected {
-                    st = st.bg(c.selection_bg);
+                    st = c.selected(st);
                 }
                 buf.set_string(x, y, &s, tui_style(st));
             }

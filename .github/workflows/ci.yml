@@ -110,6 +110,9 @@ jobs:
         target:
           - aarch64-unknown-linux-gnu
           - x86_64-unknown-linux-gnu
+          # Static builds that run on any Linux (D-079).
+          - aarch64-unknown-linux-musl
+          - x86_64-unknown-linux-musl
     steps:
       - uses: actions/checkout@v5
       - uses: actions-rust-lang/setup-rust-toolchain@v1
@@ -125,9 +128,10 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-zigbuild
-      # The .2.31 suffix pins the glibc floor of the produced binary.
+      # The .2.31 suffix pins the glibc floor of the produced binary; musl
+      # builds are static.
       - name: Build termos
-        run: cargo zigbuild --release --locked -p termos-cli --target ${{ matrix.target }}.2.31
+        run: cargo zigbuild --release --locked -p termos-cli --target ${{ matrix.target }}${{ endsWith(matrix.target, '-gnu') && '.2.31' || '' }}
       - name: Inspect binary
         run: file target/${{ matrix.target }}/release/termos
       # Test builds: a tar keeps the executable bit, which zip would lose.
@@ -136,10 +140,14 @@ jobs:
         shell: bash
         run: |
           arch="${{ matrix.target }}"; arch="${arch%%-*}"
-          name="termos-${GITHUB_SHA::7}-linux-${arch}"
+          case "${{ matrix.target }}" in
+          *-musl) flavour="-musl"; needs="static: any Linux" ;;
+          *) flavour=""; needs="glibc 2.31 or newer" ;;
+          esac
+          name="termos-${GITHUB_SHA::7}-linux-${arch}${flavour}"
           mkdir -p "dist/$name"
           cp "target/${{ matrix.target }}/release/termos" "dist/$name/"
-          ./.github/scripts/buildinfo.sh "${{ matrix.target }} (glibc 2.31 or newer)" > "dist/$name/BUILDINFO.txt"
+          ./.github/scripts/buildinfo.sh "${{ matrix.target }} ($needs)" > "dist/$name/BUILDINFO.txt"
           tar -C dist -czf "dist/$name.tar.gz" "$name"
           echo "name=$name" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@v4
@@ -166,6 +174,10 @@ jobs:
             os: ubuntu-24.04
           - arch: aarch64
             os: ubuntu-24.04-arm
+          - arch: x86_64-musl
+            os: ubuntu-24.04
+          - arch: aarch64-musl
+            os: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v5
       - uses: actions/download-artifact@v4
@@ -180,6 +192,7 @@ jobs:
           bin=$(echo dist/termos-*-linux-${{ matrix.arch }}/termos)
           "$bin" --version
           cat dist/termos-*-linux-${{ matrix.arch }}/BUILDINFO.txt
+          case "${{ matrix.arch }}" in *-musl) file "$bin" | grep -Eq 'static(ally|-pie) linked' ;; esac
           TERMOS_BIN="$bin" ./.github/scripts/daemon-smoke.sh
 
   package-macos:
@@ -283,6 +296,22 @@ jobs:
       - uses: actions-rust-lang/setup-rust-toolchain@v1
       - name: Latency, idle CPU, memory, flood throughput
         run: cargo xtask perf 30
+
+  # The static musl build must keep the same budgets (D-079).
+  perf-musl:
+    name: Performance budgets (release, static musl)
+    runs-on: ubuntu-24.04
+    # A hang must not hold a runner for the default six hours.
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          target: x86_64-unknown-linux-musl
+      - name: musl's C compiler
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq musl-tools
+      - name: Latency, idle CPU, memory, flood throughput
+        run: cargo xtask perf 30 --target x86_64-unknown-linux-musl
 
   # Every language, on both architectures, runs nightly and when the
   # developer environment changes (languages.yml); this quick subset runs

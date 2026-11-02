@@ -1,0 +1,244 @@
+name: Release
+
+# A `v<version>` tag (D-077): every hosted build and image, checksums and
+# build attestations, in a draft GitHub release for the owner to publish.
+# The tag must match the workspace version, and update bundles are signed
+# with the owner's keys (D-078), so the release stops without them.
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  version:
+    name: Version
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - uses: actions/checkout@v5
+      - id: v
+        name: The tag and the workspace agree
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          ws=$(sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"/\1/p' Cargo.toml)
+          if [ "$tag" != "$ws" ]; then
+            echo "::error::the tag says $tag, Cargo.toml says $ws"
+            exit 1
+          fi
+          echo "version=$tag" >> "$GITHUB_OUTPUT"
+
+  linux:
+    name: Linux (${{ matrix.target }})
+    needs: version
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      matrix:
+        target:
+          - x86_64-unknown-linux-gnu
+          - aarch64-unknown-linux-gnu
+          - x86_64-unknown-linux-musl
+          - aarch64-unknown-linux-musl
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          target: ${{ matrix.target }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python3 -m pip install ziglang==0.17.0
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-zigbuild
+      - name: Build
+        run: cargo zigbuild --release --locked -p termos-cli --target ${{ matrix.target }}${{ endsWith(matrix.target, '-gnu') && '.2.31' || '' }}
+      - name: Package
+        shell: bash
+        env:
+          TERMOS_RELEASE: ${{ needs.version.outputs.version }}
+        run: |
+          arch="${{ matrix.target }}"; arch="${arch%%-*}"
+          case "${{ matrix.target }}" in
+          *-musl) flavour="-musl"; needs="static: any Linux" ;;
+          *) flavour=""; needs="glibc 2.31 or newer" ;;
+          esac
+          name="termos-$TERMOS_RELEASE-linux-${arch}${flavour}"
+          mkdir -p "dist/$name" out
+          cp "target/${{ matrix.target }}/release/termos" LICENSE "dist/$name/"
+          ./.github/scripts/buildinfo.sh "${{ matrix.target }} ($needs)" > "dist/$name/BUILDINFO.txt"
+          tar -C dist -czf "out/$name.tar.gz" "$name"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-linux-${{ matrix.target }}
+          path: out/
+          if-no-files-found: error
+
+  macos:
+    name: macOS (${{ matrix.target }})
+    needs: version
+    runs-on: macos-latest
+    timeout-minutes: 60
+    strategy:
+      matrix:
+        target: [aarch64-apple-darwin, x86_64-apple-darwin]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          target: ${{ matrix.target }}
+      - name: Build
+        run: cargo build --release --locked -p termos-cli --target ${{ matrix.target }}
+      - name: Package
+        shell: bash
+        env:
+          TERMOS_RELEASE: ${{ needs.version.outputs.version }}
+        run: |
+          arch=$([ "${{ matrix.target }}" = aarch64-apple-darwin ] && echo arm64 || echo x86_64)
+          name="termos-$TERMOS_RELEASE-macos-$arch"
+          mkdir -p "dist/$name" out
+          cp "target/${{ matrix.target }}/release/termos" LICENSE "dist/$name/"
+          ./.github/scripts/buildinfo.sh "${{ matrix.target }} (macOS 11 or newer)" > "dist/$name/BUILDINFO.txt"
+          tar -C dist -czf "out/$name.tar.gz" "$name"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-macos-${{ matrix.target }}
+          path: out/
+          if-no-files-found: error
+
+  windows:
+    name: Windows (x86_64)
+    needs: version
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - name: Build
+        env:
+          RUSTFLAGS: -D warnings -C target-feature=+crt-static
+        run: cargo build --release --locked -p termos-cli
+      - name: Package
+        shell: bash
+        env:
+          TERMOS_RELEASE: ${{ needs.version.outputs.version }}
+        run: |
+          name="termos-$TERMOS_RELEASE-windows-x86_64"
+          mkdir -p "dist/$name" out
+          cp target/release/termos.exe LICENSE "dist/$name/"
+          ./.github/scripts/buildinfo.sh "x86_64-pc-windows-msvc (Windows 10 1809 or newer)" > "dist/$name/BUILDINFO.txt"
+          (cd dist && 7z a -tzip "../out/$name.zip" "$name" > /dev/null)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-windows
+          path: out/
+          if-no-files-found: error
+
+  images:
+    name: Image (${{ matrix.target }})
+    needs: version
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [x86_64, aarch64-virt, rpi5, rpi4, rpi3, rpi-zero2w]
+    steps:
+      - uses: actions/checkout@v5
+      - name: Free disk space
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          target: aarch64-unknown-linux-gnu
+      - name: Buildroot's host tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq build-essential rsync bc cpio unzip file wget python3
+      - name: The owner's signing keys (D-078)
+        env:
+          CA: ${{ secrets.TERMOS_RAUC_CA }}
+          CERT: ${{ secrets.TERMOS_RAUC_CERT }}
+          KEY: ${{ secrets.TERMOS_RAUC_KEY }}
+        run: |
+          if [ -z "$CA" ] || [ -z "$CERT" ] || [ -z "$KEY" ]; then
+            echo "::error::set the TERMOS_RAUC_CA, TERMOS_RAUC_CERT and TERMOS_RAUC_KEY secrets (docs/releasing.md)"
+            exit 1
+          fi
+          d="$RUNNER_TEMP/keys"
+          mkdir -m 0700 "$d"
+          printf '%s\n' "$CA" > "$d/ca.pem"
+          printf '%s\n' "$CERT" > "$d/signing.pem"
+          (umask 077 && printf '%s\n' "$KEY" > "$d/signing.key")
+          {
+            echo "TERMOS_RAUC_KEYRING=$d/ca.pem"
+            echo "TERMOS_RAUC_CERT=$d/signing.pem"
+            echo "TERMOS_RAUC_KEY=$d/signing.key"
+          } >> "$GITHUB_ENV"
+      - name: Build
+        env:
+          TERMOS_IMAGE_VERSION: ${{ needs.version.outputs.version }}
+        run: cargo xtask image build ${{ matrix.target }} --legal-info
+      - name: Package
+        env:
+          V: ${{ needs.version.outputs.version }}
+          T: ${{ matrix.target }}
+        run: |
+          mkdir -p out
+          images="target/image/$T/images"
+          zstd -q -T0 -19 "$images/disk.img" -o "out/termos-$V-$T.img.zst"
+          cp "$images/termos-$T-$V.raucb" out/
+          if [ -f "$images/termos-$T.iso" ]; then cp "$images/termos-$T.iso" "out/termos-$V-$T.iso"; fi
+          tar -C "target/image/$T" -cJf "out/termos-$V-$T-legal-info.tar.xz" \
+            --exclude=legal-info/sources --exclude=legal-info/host-sources legal-info
+          rm -rf "$RUNNER_TEMP/keys"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-image-${{ matrix.target }}
+          path: out/
+          if-no-files-found: error
+
+  publish:
+    name: Draft release
+    needs: [version, linux, macos, windows, images]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          path: out
+          merge-multiple: true
+      - name: Checksums
+        run: cd out && sha256sum * > SHA256SUMS && cat SHA256SUMS
+      - uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: out/*
+      - name: The draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          V: ${{ needs.version.outputs.version }}
+        run: |
+          cat > notes.md <<NOTES
+          TermOS $V. Check a download against \`SHA256SUMS\`, and where it was built with
+          \`gh attestation verify <file> --repo ${{ github.repository }}\`.
+
+          - **In a terminal:** \`termos-$V-<system>\` (Linux: glibc 2.31+ or the static \`-musl\` build; macOS; Windows).
+          - **On a PC:** \`termos-$V-x86_64.iso\` (try it, then \`termos install\`), or the disk image \`.img.zst\`.
+          - **Arm machines and Raspberry Pis:** the \`.img.zst\` for the board, written to a disk or SD card.
+          - **Updates:** \`termos update install\` on a TermOS machine fetches its \`.raucb\` bundle.
+
+          See docs/bare-metal.md and docs/getting-started.md.
+          NOTES
+          gh release create "$GITHUB_REF_NAME" out/* --draft --title "TermOS $V" --notes-file notes.md

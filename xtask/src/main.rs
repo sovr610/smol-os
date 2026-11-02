@@ -30,8 +30,10 @@ Commands:
   ci              Run fmt, clippy, tests, check-todos and cargo-deny (as CI does)
   check-todos     Check work-marker format, ROADMAP.md sync and SPDX headers
   todos [--write] Print the open-work table; --write updates ROADMAP.md
-  perf [SECS]     Check the performance budgets on a release build (Linux);
-                  idle CPU is measured over SECS seconds (default 60)
+  perf [SECS] [--target T]
+                  Check the performance budgets on a release build (Linux);
+                  idle CPU is measured over SECS seconds (default 60);
+                  --target measures another build (the static musl one)
   widgets         Build the sample WASM widget (needs the wasm32-wasip2
                   target) and refresh its test fixture
   image build TARGET [--legal-info]
@@ -49,7 +51,7 @@ fn main() -> ExitCode {
         Some("ci") => ci(),
         Some("check-todos") => check_repo(),
         Some("todos") => todos(&args[1..]),
-        Some("perf") => perf(args.get(1).map(String::as_str)),
+        Some("perf") => perf(&args[1..]),
         Some("widgets") => widgets(),
         Some("image") => image(&args[1..]),
         Some("help" | "-h" | "--help") | None => {
@@ -261,30 +263,34 @@ fn todos(args: &[String]) -> Result<()> {
     Ok(())
 }
 
-/// The performance budgets (DECISIONS.md D-019) on an optimized build.
-fn perf(idle_secs: Option<&str>) -> Result<()> {
-    let secs = idle_secs.unwrap_or("60");
+/// The performance budgets (DECISIONS.md D-019) on an optimized build;
+/// `--target <triple>` measures another build of it (the static musl one,
+/// D-079).
+fn perf(rest: &[String]) -> Result<()> {
+    let mut secs = "60";
+    let mut target = None;
+    let mut it = rest.iter();
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "--target" => target = Some(it.next().ok_or("--target needs a target triple")?),
+            s => secs = s,
+        }
+    }
     if secs.parse::<u64>().map_or(true, |s| s == 0) {
         return Err(format!("`{secs}` is not a number of seconds").into());
     }
     let root = repo::root();
-    let args = [
-        "test",
-        "--release",
-        "--locked",
-        "-p",
-        "termos-cli",
-        "--test",
-        "perf",
-        "--",
-        "--nocapture",
-    ];
+    let mut args = vec!["test", "--release", "--locked", "-p", "termos-cli"];
+    if let Some(t) = target {
+        args.extend(["--target", t.as_str()]);
+    }
+    args.extend(["--test", "perf", "--", "--nocapture"]);
     println!(
         "xtask: $ TERMOS_PERF_IDLE_SECS={secs} cargo {}",
         args.join(" ")
     );
     let status = Command::new(cargo())
-        .args(args)
+        .args(&args)
         .env("TERMOS_PERF_IDLE_SECS", secs)
         .current_dir(root)
         .status()?;

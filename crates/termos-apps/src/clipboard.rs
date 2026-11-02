@@ -282,7 +282,7 @@ impl App for ClipboardManager {
         for (i, e) in self.shown.iter().enumerate().skip(self.top).take(rows) {
             let y = area.y + u16::try_from(i - self.top).unwrap_or(0);
             let selected = i == self.selected;
-            let bg = |s: Style| if selected { s.bg(c.selection_bg) } else { s };
+            let bg = |s: Style| if selected { c.selected(s) } else { s };
             if selected {
                 buf.set_style(
                     TuiRect::new(area.x, y, area.width, 1),

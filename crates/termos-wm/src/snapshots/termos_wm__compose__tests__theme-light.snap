@@ -29,8 +29,8 @@ aaaaaaaaaaaaaaaaaaaa│ccccccccccccccccccc
 ....................a
 --- legend
 a: fg=#b0b8c1 bg=default
-b: fg=#0969da bg=default
-c: fg=#0969da bg=default Attrs(BOLD)
+b: fg=#0860ca bg=default
+c: fg=#0860ca bg=default Attrs(BOLD)
 d: fg=#171a1e bg=#bfbfbf
 e: fg=#848a91 bg=#bfbfbf
 f: fg=#111417 bg=#8f8f8f

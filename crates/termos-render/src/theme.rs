@@ -41,12 +41,19 @@ impl Default for ThemeColors {
 }
 
 impl ThemeColors {
+    /// A selected row's style: the text in `fg` whatever its colour was
+    /// (accents, muted text and warnings lose contrast on the selection),
+    /// on `selection_bg`.
+    pub fn selected(&self, style: crate::cell::Style) -> crate::cell::Style {
+        style.fg(self.fg).bg(self.selection_bg)
+    }
+
     /// The dark preset.
     pub const fn dark() -> Self {
         Self {
             accent: Color::rgb(0x6c, 0xb6, 0xff),
             fg: Color::rgb(0xd0, 0xd7, 0xe2),
-            muted: Color::rgb(0x7d, 0x85, 0x90),
+            muted: Color::rgb(0x8b, 0x94, 0x9e),
             border: Color::rgb(0x44, 0x4c, 0x56),
             status_bg: Color::rgb(0x1c, 0x21, 0x28),
             status_fg: Color::rgb(0xad, 0xba, 0xc7),
@@ -60,7 +67,7 @@ impl ThemeColors {
     /// The light preset, for terminals with a light background.
     pub const fn light() -> Self {
         Self {
-            accent: Color::rgb(0x09, 0x69, 0xda),
+            accent: Color::rgb(0x08, 0x60, 0xca),
             fg: Color::rgb(0x1f, 0x23, 0x28),
             muted: Color::rgb(0x59, 0x63, 0x6e),
             border: Color::rgb(0xb0, 0xb8, 0xc1),
@@ -68,13 +75,15 @@ impl ThemeColors {
             status_fg: Color::rgb(0x1f, 0x23, 0x28),
             overlay_bg: Color::rgb(0xf6, 0xf8, 0xfa),
             selection_bg: Color::rgb(0xb6, 0xe3, 0xff),
-            warn: Color::rgb(0x9a, 0x67, 0x00),
+            warn: Color::rgb(0x8a, 0x5c, 0x00),
             error: Color::rgb(0xcf, 0x22, 0x2e),
         }
     }
 
     /// The high-contrast preset: white and black with saturated accents,
     /// every text colour at least 7:1 against its background (WCAG AAA).
+    /// Selected rows draw their text in `fg` ([`ThemeColors::selected`]),
+    /// the one colour that keeps 7:1 on a visible selection.
     pub const fn high_contrast() -> Self {
         Self {
             accent: Color::rgb(0xff, 0xd7, 0x00),
@@ -393,10 +402,34 @@ mod tests {
         ] {
             assert!(contrast(fg, bg) >= 7.0, "{what}: {:.1}", contrast(fg, bg));
         }
-        // The other presets meet AA for their main text.
-        for c in [ThemeColors::dark(), ThemeColors::light()] {
-            assert!(contrast(c.fg, c.overlay_bg) >= 4.5);
-            assert!(contrast(c.status_fg, c.status_bg) >= 4.5);
+    }
+
+    /// Every text colour on every background it is drawn on: 7:1 (AAA) in
+    /// the high-contrast preset, 4.5:1 (AA) in the others; selected rows
+    /// use `fg` (M9's accessibility review).
+    #[test]
+    fn every_preset_meets_its_level() {
+        for (name, c, level) in [
+            ("dark", ThemeColors::dark(), 4.5),
+            ("light", ThemeColors::light(), 4.5),
+            ("high-contrast", ThemeColors::high_contrast(), 7.0),
+        ] {
+            for (fg, what) in [
+                (c.fg, "text"),
+                (c.muted, "muted text"),
+                (c.accent, "accent"),
+                (c.warn, "warnings"),
+                (c.error, "errors"),
+                (c.status_fg, "status text"),
+            ] {
+                for (bg, on) in [(c.overlay_bg, "overlays"), (c.status_bg, "the status line")] {
+                    let r = contrast(fg, bg);
+                    assert!(r >= level, "{name}: {what} on {on}: {r:.2}");
+                }
+            }
+            let sel = c.selected(crate::cell::Style::new().fg(c.error));
+            let r = contrast(sel.fg, sel.bg);
+            assert!(r >= level, "{name}: selected rows: {r:.2}");
         }
     }
 }
