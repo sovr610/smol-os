@@ -35,9 +35,46 @@ pub fn memory(log: &str) -> Option<Memory> {
     })
 }
 
+/// The last `n` lines of a log, for a report: firmware and boot-loader
+/// escape sequences and other control characters left out.
+pub fn tail(log: &str, n: usize) -> String {
+    let mut plain = String::with_capacity(log.len());
+    let mut chars = log.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '\x1b' => {
+                // CSI: parameters, then a final byte. Others: intermediate
+                // bytes, then a final byte.
+                if chars.next_if_eq(&'[').is_some() {
+                    while chars
+                        .next()
+                        .is_some_and(|c| !('\x40'..='\x7e').contains(&c))
+                    {}
+                } else {
+                    while chars.next_if(|c| (' '..='/').contains(c)).is_some() {}
+                    chars.next();
+                }
+            }
+            '\n' | '\t' => plain.push(c),
+            c if c.is_control() => {}
+            c => plain.push(c),
+        }
+    }
+    let lines: Vec<&str> = plain.lines().filter(|l| !l.trim().is_empty()).collect();
+    lines[lines.len().saturating_sub(n)..].join("\n")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tails_are_plain_text() {
+        let log = "\x1b[2J\x1b[01;01HBdsDxe: loading\r\n\r\n\x1b(Bone\r\ntwo\x07\r\nthree\r\n";
+        assert_eq!(tail(log, 2), "two\nthree");
+        assert_eq!(tail(log, 10), "BdsDxe: loading\none\ntwo\nthree");
+        assert_eq!(tail("", 3), "");
+    }
 
     #[test]
     fn markers() {

@@ -8,3 +8,6 @@ BR2_TARGET_GRUB2_X86_64_EFI=y
 BR2_TARGET_GRUB2_BOOT_PARTITION="hd0,msdos1"
 BR2_TARGET_GRUB2_BUILTIN_MODULES_PC="boot linux ext2 fat squash4 part_msdos part_gpt normal biosdisk echo configfile"
 BR2_TARGET_GRUB2_BUILTIN_MODULES_EFI="boot linux ext2 fat squash4 part_msdos part_gpt normal efi_gop echo configfile"
+# The base configuration's network manager: iwd and dhcpcd do its work
+# here (D-072).
+# BR2_PACKAGE_CONNMAN is not set

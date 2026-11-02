@@ -343,7 +343,14 @@ fn image(args: &[String]) -> Result<()> {
             let dir = paths.work.join(format!("{}-boot", t.name));
             let mut failed = Vec::new();
             for f in firmwares {
-                let r = boot::boot(&paths.images(t), t, f, &dir)?;
+                // Each firmware gets its turn even when another failed.
+                let r = match boot::boot(&paths.images(t), t, f, &dir) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        failed.push(format!("{} ({}): {e}", t.name, f.name()));
+                        continue;
+                    }
+                };
                 println!(
                     "xtask: {} ({}): ready after {:.1}s; screen: {} colours, status bar {:?}; {} MiB of {} MiB in use",
                     t.name,

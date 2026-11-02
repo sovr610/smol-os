@@ -17,6 +17,9 @@ x86_64)
 	cp "$BOARD_DIR/grub.cfg" "$ESP/EFI/BOOT/grub.cfg"
 	cp "$BOARD_DIR/grub.cfg" "$ESP/boot/grub/grub.cfg"
 	cp "$BINARIES_DIR/bzImage" "$ESP/"
+	# GRUB's BIOS first stage, for the MBR; the package leaves it in its
+	# build folder (its core image, grub.img, is in the images already).
+	cp "$BUILD_DIR"/grub2-*/build-i386-pc/grub-core/boot.img "$BINARIES_DIR/boot.img"
 	;;
 aarch64-virt)
 	mkdir -p "$ESP/EFI/BOOT"

@@ -62,14 +62,23 @@ jobs:
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm || true
-      - name: Download cache
-        uses: actions/cache@v4
+      # Buildroot's downloads (the toolchain, the kernel, the packages):
+      # restored from the last run and saved even when the build fails, so
+      # the next attempt does not fetch them again.
+      - name: Restore downloads
+        uses: actions/cache/restore@v4
         with:
           path: target/image/dl
-          key: buildroot-dl-${{ matrix.target }}-${{ hashFiles('crates/termos-image/src/build.rs', 'crates/termos-image/br2-external/configs/**') }}
+          key: buildroot-dl-${{ matrix.target }}-${{ github.run_id }}
           restore-keys: buildroot-dl-${{ matrix.target }}-
       - name: Build
         run: cargo xtask image build ${{ matrix.target }} --legal-info
+      - name: Save downloads
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: target/image/dl
+          key: buildroot-dl-${{ matrix.target }}-${{ github.run_id }}-${{ github.run_attempt }}
       - name: Boot in QEMU
         if: matrix.target == 'x86_64' || matrix.target == 'aarch64-virt'
         run: cargo xtask image boot ${{ matrix.target }} --firmware all

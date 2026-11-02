@@ -1,6 +1,7 @@
 #!/bin/sh
-# The data partition (D-075): homes, iwd's networks, and later the dev
-# rootfs, models and containers. The root file system is read-only.
+# The data partition (D-075): homes, iwd's networks, D-Bus's machine ID,
+# dhcpcd's leases, and later the dev rootfs, models and containers. The
+# root file system is read-only.
 
 DATA_LABEL=termos-data
 
@@ -15,11 +16,14 @@ start() {
 		echo "termos: no $DATA_LABEL partition: nothing will be kept"
 		mount -t tmpfs -o mode=0755 data /data
 	fi
-	mkdir -p /data/home/termos /data/iwd /data/dev-rootfs /data/models /data/containers
+	mkdir -p /data/home/termos /data/iwd /data/dbus /data/dhcpcd \
+		/data/dev-rootfs /data/models /data/containers
 	chown termos:termos /data/home/termos
 	chmod 0700 /data/home/termos
 	mount --bind /data/home /home
 	mount --bind /data/iwd /var/lib/iwd
+	mount --bind /data/dbus /var/lib/dbus
+	mount --bind /data/dhcpcd /var/db/dhcpcd
 }
 
 case "$1" in

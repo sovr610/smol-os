@@ -224,26 +224,33 @@ pub fn configure(p: &Paths, t: &Target) -> Result<(), String> {
     }
 }
 
-/// The cross compiler Buildroot made: `<out>/host/bin/<tuple>-gcc`.
-pub fn cross_gcc(p: &Paths, t: &Target) -> Result<PathBuf, String> {
-    let bin = p.out(t).join("host/bin");
-    let arch = t.rust.split('-').next().unwrap_or("");
-    let mut found: Vec<PathBuf> = std::fs::read_dir(&bin)
-        .map_err(|e| format!("{}: {e}", bin.display()))?
-        .flatten()
-        .map(|e| e.path())
-        .filter(|f| {
-            f.file_name().is_some_and(|n| {
-                let n = n.to_string_lossy();
-                n.starts_with(arch) && n.ends_with("-linux-gnu-gcc")
-            })
-        })
-        .collect();
-    found.sort();
-    found
-        .into_iter()
-        .next()
-        .ok_or_else(|| format!("no {arch} cross compiler in {}", bin.display()))
+/// The prefix of the cross tools Buildroot made, e.g.
+/// `<out>/host/bin/x86_64-linux-`, as Buildroot itself names them
+/// (`TARGET_CROSS`): Bootlin's toolchains and Buildroot's own differ.
+pub fn cross_prefix(p: &Paths, t: &Target) -> Result<String, String> {
+    let out = output(make(p, t).args([
+        "-s",
+        "--no-print-directory",
+        "printvars",
+        "VARS=TARGET_CROSS",
+    ]))?;
+    let prefix =
+        parse_cross(&out).ok_or_else(|| format!("Buildroot named no TARGET_CROSS: {out}"))?;
+    let gcc = PathBuf::from(format!("{prefix}gcc"));
+    if gcc.is_file() {
+        Ok(prefix)
+    } else {
+        Err(format!("no cross compiler at {}", gcc.display()))
+    }
+}
+
+/// `TARGET_CROSS` from `make printvars`.
+fn parse_cross(printvars: &str) -> Option<String> {
+    printvars
+        .lines()
+        .find_map(|l| l.trim().strip_prefix("TARGET_CROSS="))
+        .map(|v| v.trim().trim_matches('\'').to_owned())
+        .filter(|v| !v.is_empty())
 }
 
 /// The environment cargo builds `termos` for the image with.
@@ -257,19 +264,19 @@ pub fn cross_gcc(p: &Paths, t: &Target) -> Result<PathBuf, String> {
 pub fn cargo_env(
     p: &Paths,
     t: &Target,
-    gcc: &Path,
+    cross: &str,
     inherited: Option<&str>,
 ) -> Vec<(String, String)> {
-    let tool = |suffix: &str| gcc.to_string_lossy().trim_end_matches("gcc").to_owned() + suffix;
+    let tool = |name: &str| format!("{cross}{name}");
     let cc = t.cc_suffix();
-    let linker = format!("-C linker={}", gcc.display());
+    let linker = format!("-C linker={}", tool("gcc"));
     let rustflags = match inherited.map(str::trim).filter(|f| !f.is_empty()) {
         Some(f) => format!("{f} {linker}"),
         None => linker,
     };
     vec![
         ("RUSTFLAGS".into(), rustflags),
-        (format!("CC_{cc}"), gcc.display().to_string()),
+        (format!("CC_{cc}"), tool("gcc")),
         (format!("CXX_{cc}"), tool("g++")),
         (format!("AR_{cc}"), tool("ar")),
         (
@@ -285,7 +292,7 @@ pub fn build(p: &Paths, t: &Target, legal_info: bool) -> Result<PathBuf, String>
     fetch(p)?;
     configure(p, t)?;
     run(make(p, t).arg("termos-depends"))?;
-    let gcc = cross_gcc(p, t)?;
+    let cross = cross_prefix(p, t)?;
     let mut cargo = Command::new(std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into()));
     cargo
         .current_dir(&p.repo)
@@ -303,7 +310,7 @@ pub fn build(p: &Paths, t: &Target, legal_info: bool) -> Result<PathBuf, String>
         .envs(cargo_env(
             p,
             t,
-            &gcc,
+            &cross,
             std::env::var("RUSTFLAGS").ok().as_deref(),
         ));
     run(&mut cargo)?;
@@ -328,6 +335,20 @@ mod tests {
     use crate::targets::find;
 
     #[test]
+    fn buildroots_tool_prefix_is_read_from_printvars() {
+        assert_eq!(
+            parse_cross("TARGET_CROSS=/o/host/bin/x86_64-linux-\n").as_deref(),
+            Some("/o/host/bin/x86_64-linux-")
+        );
+        assert_eq!(
+            parse_cross("noise\nTARGET_CROSS='/o/host/bin/aarch64-linux-'\n").as_deref(),
+            Some("/o/host/bin/aarch64-linux-")
+        );
+        assert_eq!(parse_cross("TARGET_CROSS=\n"), None);
+        assert_eq!(parse_cross(""), None);
+    }
+
+    #[test]
     fn cargo_uses_buildroots_compiler_and_sysroot() {
         let p = Paths {
             repo: PathBuf::from("/r"),
@@ -335,21 +356,18 @@ mod tests {
             dl: PathBuf::from("/dl"),
         };
         let t = find("aarch64-virt").expect("target");
-        let gcc =
-            PathBuf::from("/r/target/image/aarch64-virt/host/bin/aarch64-buildroot-linux-gnu-gcc");
-        let env = cargo_env(&p, t, &gcc, Some("-D warnings"));
+        let cross = "/r/target/image/aarch64-virt/host/bin/aarch64-linux-";
+        let env = cargo_env(&p, t, cross, Some("-D warnings"));
         let get = |k: &str| env.iter().find(|(n, _)| n == k).map(|(_, v)| v.as_str());
         assert_eq!(
             get("RUSTFLAGS"),
-            Some(
-                "-D warnings -C linker=/r/target/image/aarch64-virt/host/bin/aarch64-buildroot-linux-gnu-gcc"
-            )
+            Some("-D warnings -C linker=/r/target/image/aarch64-virt/host/bin/aarch64-linux-gcc")
         );
         assert!(
             !env.iter().any(|(k, _)| k.ends_with("_LINKER")),
             "the build scripts keep the build machine's linker"
         );
-        let plain = cargo_env(&p, t, &gcc, None);
+        let plain = cargo_env(&p, t, cross, None);
         assert!(
             plain
                 .iter()
@@ -357,7 +375,11 @@ mod tests {
         );
         assert_eq!(
             get("CXX_aarch64_unknown_linux_gnu"),
-            Some("/r/target/image/aarch64-virt/host/bin/aarch64-buildroot-linux-gnu-g++")
+            Some("/r/target/image/aarch64-virt/host/bin/aarch64-linux-g++")
+        );
+        assert_eq!(
+            get("AR_aarch64_unknown_linux_gnu"),
+            Some("/r/target/image/aarch64-virt/host/bin/aarch64-linux-ar")
         );
         assert_eq!(
             get("PKG_CONFIG"),

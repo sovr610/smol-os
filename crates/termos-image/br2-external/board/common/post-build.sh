@@ -3,5 +3,7 @@
 set -eu
 TARGET_DIR=$1
 
-# Mount points for the data partition and what is bound from it.
-mkdir -p "$TARGET_DIR/data" "$TARGET_DIR/var/lib/iwd"
+# Mount points for the data partition and what is bound from it: iwd's
+# networks, D-Bus's machine ID, dhcpcd's leases and DUID.
+mkdir -p "$TARGET_DIR/data" "$TARGET_DIR/var/lib/iwd" "$TARGET_DIR/var/lib/dbus" \
+	"$TARGET_DIR/var/db/dhcpcd"

@@ -60,6 +60,7 @@ pub fn qemu_args(
     q: &Qemu,
     firmware: Option<&Path>,
     disk: &Path,
+    serial_log: &Path,
     dir: &Path,
     settle_secs: u32,
     kvm: bool,
@@ -96,7 +97,7 @@ pub fn qemu_args(
         "-display".into(),
         "none".into(),
         "-serial".into(),
-        format!("file:{}", dir.join("serial.log").display()),
+        format!("file:{}", serial_log.display()),
         "-qmp".into(),
         format!("unix:{},server=on,wait=off", dir.join("qmp.sock").display()),
         "-fw_cfg".into(),
@@ -157,6 +158,21 @@ fn wait_for<T>(
     }
 }
 
+/// Takes a screenshot through QMP: `screen-<name>.png` in `dir`.
+fn screenshot(dir: &Path, name: &str) -> Result<screen::Picture, String> {
+    let mut qmp = Qmp::connect(&dir.join("qmp.sock"))?;
+    let ppm = dir.join(format!("screen-{name}.ppm"));
+    qmp.run("screendump", &[("filename", &ppm.display().to_string())])?;
+    let picture = screen::parse_ppm(&std::fs::read(&ppm).map_err(|e| e.to_string())?)?;
+    let _ = std::fs::remove_file(&ppm);
+    std::fs::write(
+        dir.join(format!("screen-{name}.png")),
+        screen::png(&picture),
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(picture)
+}
+
 /// Boots `t`'s image with `firmware`; artifacts (serial log, screenshot)
 /// go to `dir`.
 pub fn boot(images: &Path, t: &Target, firmware: Firmware, dir: &Path) -> Result<Report, String> {
@@ -172,13 +188,14 @@ pub fn boot(images: &Path, t: &Target, firmware: Firmware, dir: &Path) -> Result
         ));
     }
     std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-    let _ = std::fs::remove_file(dir.join("serial.log"));
+    let log = dir.join(format!("serial-{}.log", firmware.name()));
+    let _ = std::fs::remove_file(&log);
     let _ = std::fs::remove_file(dir.join("qmp.sock"));
     let fw = firmware_file(&q, firmware)?;
     let kvm = kvm_usable(&q);
     // Emulated (no KVM) boots are slower: give the desktop longer to settle.
     let (settle, ready_timeout) = if kvm { (30, 180) } else { (60, 600) };
-    let args = qemu_args(&q, fw.as_deref(), &disk, dir, settle, kvm);
+    let args = qemu_args(&q, fw.as_deref(), &disk, &log, dir, settle, kvm);
     println!("image: {} {}", q.system, args.join(" "));
     let started = Instant::now();
     let mut vm = Vm(Command::new(q.system)
@@ -188,41 +205,45 @@ pub fn boot(images: &Path, t: &Target, firmware: Firmware, dir: &Path) -> Result
         .stderr(Stdio::inherit())
         .spawn()
         .map_err(|e| format!("cannot start {}: {e}", q.system))?);
-    let log = dir.join("serial.log");
     let read_log = || {
         std::fs::read(&log)
             .map(|b| String::from_utf8_lossy(&b).into_owned())
             .unwrap_or_default()
+    };
+    // Whatever goes wrong, the end of the serial log says the most, and
+    // the screen shows what the machine got to.
+    let failed = |e: String| {
+        let shown = match screenshot(dir, &format!("{}-failed", firmware.name())) {
+            Ok(_) => format!("screen-{}-failed.png", firmware.name()),
+            Err(s) => format!("no screenshot: {s}"),
+        };
+        format!(
+            "{e}\n({shown}; the serial log ends with:)\n{}",
+            serial::tail(&read_log(), 60)
+        )
     };
     wait_for(
         "TERMOS-READY on the serial console",
         Duration::from_secs(ready_timeout),
         &mut vm,
         || serial::ready(&read_log()),
-    )?;
+    )
+    .map_err(failed)?;
     let ready_after = started.elapsed();
     // A moment for the frames after the first.
     std::thread::sleep(Duration::from_secs(5));
-    let mut qmp = Qmp::connect(&dir.join("qmp.sock"))?;
-    let ppm = dir.join(format!("screen-{}.ppm", firmware.name()));
-    qmp.run("screendump", &[("filename", &ppm.display().to_string())])?;
-    let picture = screen::parse_ppm(&std::fs::read(&ppm).map_err(|e| e.to_string())?)?;
-    std::fs::write(
-        dir.join(format!("screen-{}.png", firmware.name())),
-        screen::png(&picture),
-    )
-    .map_err(|e| e.to_string())?;
-    let _ = std::fs::remove_file(&ppm);
+    let picture = screenshot(dir, firmware.name()).map_err(failed)?;
     let findings = screen::inspect(&picture);
     let memory = wait_for(
         "TERMOS-MEM report",
         Duration::from_secs(u64::from(settle) + 120),
         &mut vm,
         || serial::memory(&read_log()),
-    )?;
-    let _ = qmp.run("quit", &[]);
-    std::fs::copy(&log, dir.join(format!("serial-{}.log", firmware.name())))
-        .map_err(|e| e.to_string())?;
+    )
+    .map_err(failed)?;
+    if let Ok(mut qmp) = Qmp::connect(&dir.join("qmp.sock")) {
+        let _ = qmp.run("quit", &[]);
+    }
     Ok(Report {
         firmware,
         ready_after,
@@ -258,6 +279,7 @@ mod tests {
             &q,
             Some(Path::new("/fw/QEMU_EFI.fd")),
             Path::new("/i/disk.img"),
+            Path::new("/w/serial-uefi.log"),
             Path::new("/w"),
             60,
             false,
@@ -270,17 +292,28 @@ mod tests {
             "{s}"
         );
         assert!(s.contains("-vga none -device virtio-gpu-pci"), "{s}");
+        assert!(s.contains("-serial file:/w/serial-uefi.log"), "{s}");
         assert!(
             s.contains("-fw_cfg name=opt/termos/boottest,string=60"),
             "{s}"
         );
         assert!(!s.contains("kvm"));
         let x = find("x86_64").expect("t").qemu.expect("qemu");
-        let b = qemu_args(&x, None, Path::new("/d"), Path::new("/w"), 30, true).join(" ");
-        assert!(
-            b.contains("-cpu host") && b.contains("-accel kvm") && !b.contains("-bios"),
-            "{b}"
+        let b = qemu_args(
+            &x,
+            None,
+            Path::new("/d"),
+            Path::new("/w/serial-bios.log"),
+            Path::new("/w"),
+            30,
+            true,
         );
+        let bs = b.join(" ");
+        assert!(
+            bs.contains("-cpu host") && bs.contains("-accel kvm"),
+            "{bs}"
+        );
+        assert!(!b.iter().any(|a| a == "-bios"), "SeaBIOS is the default");
         assert_eq!(firmware_file(&x, Firmware::Bios), Ok(None));
     }
 }
