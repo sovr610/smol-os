@@ -74,7 +74,8 @@ fn ci() -> Result<()> {
         &root,
         &["test", "--workspace", "--all-features", "--locked"],
     )?;
-    windows_clippy(&root)?;
+    cross_clippy(&root, WINDOWS_TARGET, cfg!(windows))?;
+    cross_clippy(&root, MACOS_TARGET, cfg!(target_os = "macos"))?;
     check_repo()?;
     if cargo_subcommand_available(&root, "deny") {
         run_cargo(&root, &["deny", "check"])?;
@@ -88,31 +89,34 @@ fn ci() -> Result<()> {
     Ok(())
 }
 
-/// The Windows target CI type-checks from Linux (see the lint job).
 const WINDOWS_TARGET: &str = "x86_64-pc-windows-msvc";
+const MACOS_TARGET: &str = "aarch64-apple-darwin";
 
-/// Crates whose tests build for Windows without a C toolchain for it
-/// (criterion's dependencies compile C), so their tests are linted too.
-const WINDOWS_TEST_CRATES: &[&str] = &[
+/// Crates whose tests are also checked for the other targets. The rest
+/// would pull in benchmark dependencies that need a C compiler for that
+/// target.
+const CROSS_TEST_CRATES: &[&str] = &[
     "termos-core",
+    "termos-hw",
     "termos-term",
     "termos-wm",
     "termos-plugin",
+    "termos-apps",
     "termos-shell",
     "termos-cli",
 ];
 
-/// Clippy for the Windows target, when its standard library is installed,
-/// so Windows-only code is checked without a Windows machine.
-fn windows_clippy(root: &Path) -> Result<()> {
-    if cfg!(windows) {
-        // The plain clippy run above already covers it.
+/// Clippy for another platform's target, when its standard library is
+/// installed, so code for Windows or macOS is checked without such a
+/// machine. `native` skips it where the plain clippy run covers it.
+fn cross_clippy(root: &Path, target: &str, native: bool) -> Result<()> {
+    if native {
         return Ok(());
     }
-    if !target_installed(WINDOWS_TARGET) {
+    if !target_installed(target) {
         println!(
-            "xtask: SKIPPED clippy for {WINDOWS_TARGET}: the target is not installed \
-             (CI runs it; install with `rustup target add {WINDOWS_TARGET}`)"
+            "xtask: SKIPPED clippy for {target}: the target is not installed \
+             (CI runs it; install with `rustup target add {target}`)"
         );
         return Ok(());
     }
@@ -120,7 +124,7 @@ fn windows_clippy(root: &Path) -> Result<()> {
         "--all-features",
         "--locked",
         "--target",
-        WINDOWS_TARGET,
+        target,
         "--",
         "-D",
         "warnings",
@@ -129,7 +133,7 @@ fn windows_clippy(root: &Path) -> Result<()> {
     args.extend(common);
     run_cargo(root, &args)?;
     let mut args = vec!["clippy"];
-    for krate in WINDOWS_TEST_CRATES {
+    for krate in CROSS_TEST_CRATES {
         args.extend(["-p", krate]);
     }
     args.push("--all-targets");

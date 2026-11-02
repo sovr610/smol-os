@@ -25,7 +25,7 @@ xtask/                 repo automation (std-only)
 Dependency direction is fixed in ARCHITECTURE.md §4. Never add an edge that points upward.
 
 ## Commands
-- `cargo xtask ci`: fmt check, clippy `-D warnings`, tests, clippy for the Windows target, repo checks and cargo-deny. **Must pass before every commit.** Install the Windows target once with `rustup target add x86_64-pc-windows-msvc`; without it that check is skipped (CI still runs it).
+- `cargo xtask ci`: fmt check, clippy `-D warnings`, tests, clippy for the Windows and macOS targets, repo checks and cargo-deny. **Must pass before every commit.** Install the targets once with `rustup target add x86_64-pc-windows-msvc aarch64-apple-darwin`; without one, its check is skipped (CI still runs it).
 - `cargo xtask todos --write`: regenerate the ROADMAP open-work table after adding or removing work markers.
 - `cargo xtask check-todos`: work-marker format, ROADMAP sync and SPDX headers.
 - `cargo run -p termos-cli -- <args>`: run `termos`. With no arguments it starts the desktop, which needs a real terminal.

@@ -224,6 +224,8 @@ impl Sampler {
                 });
             }
         }
+        // Only Linux and Windows add readings of their own.
+        #[cfg_attr(not(any(target_os = "linux", windows)), allow(unused_mut))]
         let mut probes: Vec<gpu::Probe> = out;
         #[cfg(target_os = "linux")]
         gpu::merge_sysfs(&mut probes, &sysfs::drm_cards(std::path::Path::new("/")));

@@ -90,11 +90,14 @@ impl fmt::Display for GpuVendor {
 /// A GPU reading with the PCI slot it was found at, for matching.
 #[derive(Debug, Clone)]
 pub(crate) struct Probe {
+    /// For matching sysfs and NVML readings (Linux and Windows).
+    #[cfg_attr(not(any(target_os = "linux", windows)), allow(dead_code))]
     pub pci: Option<String>,
     pub sample: GpuSample,
 }
 
 /// `0000:03:00.0` and `00000000:03:00.0` are the same slot.
+#[cfg_attr(not(any(target_os = "linux", windows)), allow(dead_code))]
 pub(crate) fn same_slot(a: &str, b: &str) -> bool {
     fn parts(s: &str) -> Option<(u32, u32, u32, u32)> {
         let (domain, rest) = s.split_once(':')?;
@@ -238,6 +241,7 @@ fn apply(s: &mut GpuSample, r: &NvReading) {
 mod tests {
     use super::*;
 
+    #[cfg(any(target_os = "linux", windows))]
     fn probe(pci: Option<&str>, vendor: GpuVendor) -> Probe {
         Probe {
             pci: pci.map(str::to_owned),
