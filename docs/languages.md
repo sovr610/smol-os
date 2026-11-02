@@ -50,7 +50,7 @@ new servers.
 | Go | `go` | go | gopls | delve | `go-cli` |
 | Python | `python` | python, plus uv | basedpyright, ruff | debugpy | `python-cli` |
 | Java | `java` | Temurin 25, plus Python for jdtls's launcher | jdtls (needs Java 25) | none yet | `java-cli` |
-| Kotlin | `kotlin` | kotlin, plus Temurin 25 | kotlin-language-server | none yet | `kotlin-cli` |
+| Kotlin | `kotlin` | kotlin, plus Temurin 21 (kotlin-language-server cannot run on 25) | kotlin-language-server | none yet | `kotlin-cli` |
 | C# / .NET | `csharp` | dotnet | csharp-ls | netcoredbg | `csharp-cli` |
 | JavaScript / TypeScript (Node) | `node` | node (LTS) | vtsls | js-debug | `node-cli` |
 | JavaScript / TypeScript (Bun) | `bun` | bun, plus node | vtsls | js-debug | `bun-cli` |
@@ -136,8 +136,9 @@ lives in `~/.config/termos-nvim/` (`%LOCALAPPDATA%\termos-nvim\` on Windows):
 
 Language servers start through mise with the exact versions installed, so the
 editor needs nothing on `PATH`. A server that needs a particular runtime gets
-the one TermOS installed for it (jdtls gets Java 25 even if your default Java
-is older). The debugging plugins (nvim-dap, nvim-dap-ui
+the one TermOS installed for it: jdtls gets Java 25 and kotlin-language-server
+Java 21, whatever your default Java is. A runtime a language needs (Kotlin's
+Java, Node for some servers) becomes your default only if you have none yet. The debugging plugins (nvim-dap, nvim-dap-ui
 and nvim-nio) are installed by Neovim's own plugin manager, pinned to exact
 commits, the first time Neovim starts.
 

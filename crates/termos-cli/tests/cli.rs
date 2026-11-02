@@ -268,7 +268,7 @@ fn lang_check_runs_every_step() {
         "✓ create: shell-script",
         "✓ run: `sh main.sh` printed \"Hello from hello!\"",
         "✓ test: shellcheck main.sh",
-        "✓ editor: bashls initialized in Neovim",
+        "✓ editor: the language servers for main.sh initialized in Neovim",
         "- debugger: TermOS sets up no debugger for Shell",
         "Shell works on",
     ] {

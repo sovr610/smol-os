@@ -283,11 +283,11 @@ fn editor_step(
         Err(e) => return Step::new("editor", Outcome::Failed(e.to_string())),
     };
     let names: Vec<&str> = mine.iter().map(|r| r.name.as_str()).collect();
-    let script_path = c
-        .dir
-        .parent()
-        .unwrap_or(c.dir)
-        .join(format!("termos-check-{}.lua", lang.name));
+    let script_path = std::env::temp_dir().join(format!(
+        "termos-check-{}-{}.lua",
+        lang.name,
+        std::process::id()
+    ));
     if let Err(e) = std::fs::write(&script_path, lsp_script(&names, c.timeout)) {
         return Step::new("editor", Outcome::Failed(e.to_string()));
     }
@@ -307,10 +307,15 @@ fn editor_step(
     let limit = c.timeout + Duration::from_secs(120);
     let outcome = match cmd.spawn() {
         Ok(child) => match wait_for(child, limit) {
-            Ok(true) => Outcome::Passed(format!("{} initialized in Neovim", names.join(", "))),
+            // The script checks the servers for the file's filetype and
+            // printed each one above.
+            Ok(true) => Outcome::Passed(format!(
+                "the language servers for {} initialized in Neovim",
+                template.main
+            )),
             Ok(false) => Outcome::Failed(format!(
-                "{} did not complete the LSP handshake (Neovim's output is above)",
-                names.join(", ")
+                "a language server for {} did not complete the LSP handshake (Neovim's output is above)",
+                template.main
             )),
             Err(e) => Outcome::Failed(e.to_string()),
         },
@@ -339,11 +344,14 @@ fn wait_for(mut child: Child, limit: Duration) -> io::Result<bool> {
     }
 }
 
-/// Run before Neovim's config (`--cmd`): notes each server that attaches.
-const ATTACH_HOOK: &str = "lua _G.termos_check_attached = {}; \
+/// Run before Neovim's config (`--cmd`): notes each server that attaches,
+/// and counts servers that exit (one that dies before it has initialized
+/// is never listed as a client).
+const ATTACH_HOOK: &str = "lua _G.termos_check_attached = {}; _G.termos_check_exits = 0; \
 vim.api.nvim_create_autocmd('LspAttach', { callback = function(a) \
 local c = vim.lsp.get_client_by_id(a.data.client_id); \
-if c then _G.termos_check_attached[c.name] = true end end })";
+if c then _G.termos_check_attached[c.name] = true end end }); \
+vim.lsp.config('*', { on_exit = function() _G.termos_check_exits = _G.termos_check_exits + 1 end })";
 
 /// The Lua run after the file is open (`-S`): waits until every server in
 /// `names` that serves the buffer's filetype has initialized, prints what
@@ -375,23 +383,19 @@ local function ready(name)
   end
   return false
 end
--- A server that started and is gone has quit: stop waiting for it.
-local seen, quit = {{}}, nil
+-- A server that exits before every server is ready has failed: stop
+-- waiting (the hook counts exits).
+local quit = false
 local ok = vim.wait(timeout, function()
   for _, name in ipairs(want) do
-    if #vim.lsp.get_clients({{ name = name }}) > 0 then
-      seen[name] = true
-    elseif seen[name] and not ready(name) then
-      quit = name
-      return true
+    if not ready(name) then
+      quit = (_G.termos_check_exits or 0) > 0
+      return quit
     end
-  end
-  for _, name in ipairs(want) do
-    if not ready(name) then return false end
   end
   return true
 end, 200) and not quit
-if quit then out("termos check: " .. quit .. " quit before it finished starting") end
+if quit then out("termos check: a language server quit before it finished starting") end
 for _, name in ipairs(want) do
   local clients = vim.lsp.get_clients({{ name = name }})
   local c = clients[1]

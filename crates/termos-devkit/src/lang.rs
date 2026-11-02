@@ -114,9 +114,27 @@ pub fn install(
     for limit in lang.limits_on(platform) {
         report.skipped.push((limit.tool.to_owned(), limit.why));
     }
+    // A helper becomes a default only where there is none yet: installing
+    // Kotlin must not replace the Java someone already uses. Servers get
+    // the helper version they need either way (they start with exact
+    // versions).
+    let active: Vec<String> = if lang.helpers.is_empty() {
+        Vec::new()
+    } else {
+        installed(mise)?
+            .into_iter()
+            .filter(|(_, v)| v.iter().any(|i| i.active))
+            .map(|(k, _)| k)
+            .collect()
+    };
     for h in lang.helpers {
         let at = spec_at(h, None);
-        if mise.run(&s(&["use", "--global", &at]), None)? {
+        let args = if active.iter().any(|k| k == h.spec) {
+            s(&["install", &at])
+        } else {
+            s(&["use", "--global", &at])
+        };
+        if mise.run(&args, None)? {
             report.done.push(at);
         } else {
             report
@@ -383,8 +401,9 @@ pub(crate) mod tests {
             &mut m,
         )
         .expect("installs");
-        assert_eq!(m.calls[0], "use --global uv@latest");
-        assert_eq!(m.calls[1], "use --global python@latest");
+        assert_eq!(m.calls[0], "ls --installed --json");
+        assert_eq!(m.calls[1], "use --global uv@latest");
+        assert_eq!(m.calls[2], "use --global python@latest");
         assert_eq!(
             r.failed,
             [("pipx:basedpyright@latest".to_owned(), "the language server")]
@@ -406,6 +425,24 @@ pub(crate) mod tests {
             r.done.contains(&"github:clangd/clangd@latest".to_owned()),
             "{r:?}"
         );
+        // A helper someone already has a default for is only installed:
+        // Kotlin's Java does not replace the user's.
+        let mut m = Fake {
+            ls:
+                r#"{"java": [{"version": "temurin-25.0.1", "install_path": "/j", "active": true}]}"#
+                    .to_owned(),
+            ..Fake::default()
+        };
+        install(
+            find("kotlin").expect("kotlin"),
+            None,
+            "linux-x86_64",
+            &mut m,
+        )
+        .expect("installs");
+        let java = m.calls.iter().find(|c| c.contains("java@")).expect("java");
+        assert!(java.starts_with("install java@"), "{:?}", m.calls);
+        assert!(m.calls.contains(&"use --global kotlin@latest".to_owned()));
         // Where clangd has no build it is not tried, and the report says
         // why.
         let mut m = Fake::default();

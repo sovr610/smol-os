@@ -33,6 +33,7 @@ Dependency direction is fixed in ARCHITECTURE.md §4. Never add an edge that poi
 - `cargo xtask check-todos`: work-marker format, ROADMAP sync and SPDX headers.
 - `cargo run -p termos-cli -- <args>`: run `termos`. With no arguments it starts the desktop, which needs a real terminal.
 - `cargo xtask perf [SECS]`: performance budgets on a release build (Linux), with SECS seconds of idle measurement (default 60).
+- `termos lang check <lang>`: one language from install to the DAP handshake (D-056). It downloads mise and the language's tools, so CI runs it (`.github/workflows/languages.yml`, run on demand with workflow_dispatch); local tests use a stand-in mise through `TERMOS_MISE`.
 - `cargo xtask widgets`: rebuild the sample WASM widget and refresh `crates/termos-shell/tests/fixtures/pomodoro.wasm` (needs `rustup target add wasm32-wasip2`). Commit the fixture with the source change; CI rebuilds it and tests the fresh build.
 - `cd fuzz && cargo +nightly fuzz run <target> -- -max_total_time=60`: fuzz a parser. The targets are `vt_advance`, `config_parse`, `keyspec_parse`, `proto_decode`, `caps_reply`, `sixel_decode`, `apc_dcs_intercept` and `markdown_layout`.
 - `INSTA_UPDATE=always cargo test -p <crate>`: write new snapshots; review the `.snap` files before committing.

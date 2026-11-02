@@ -603,6 +603,16 @@ rewrite history.
   - **Neovim:** each part of TermOS's config (plugins, servers, debuggers) loads on its own, so one failing leaves the others working; root markers that are patterns (`*.csproj`) are found by a `root_dir` function, since `root_markers` takes names literally.
 - **Alternatives:** shell scripts in the workflow (users could not run the check, and it would drift from the product); checking servers by starting them outside an editor (it would not test the editor config users get); the full matrix on every push (about 30 jobs of downloads per push).
 
+## D-057: Servers start with the runtime they were installed for; helpers never replace a default
+- **Status:** Accepted (lead) · 2026-11-02
+- **Context:** the language CI found that jdtls 1.63.0 needs Java 25 (its bundles require JavaSE-25, although its launcher checks for 21), and that a language's helper runtime (Kotlin's Java) replaced whatever default the user had.
+- **Decision:**
+  - **Java** installs Temurin 25, the current LTS. Kotlin keeps Temurin 21: kotlin-language-server 1.3.13 embeds Kotlin 2.1.0, which cannot parse Java 25's version string and exits.
+  - **Servers** start with the newest installed version on the line the registry pins for their runtime and helpers (`temurin-25`, `temurin-21`, `1.63.0`); only floating versions (`latest`, `lts`, `stable`) follow the user's default. A user's or project's older Java cannot break jdtls.
+  - **Helpers** become the global default only when the user has none for that tool; otherwise they are only installed. Installing Kotlin no longer changes which `java` a shell runs.
+  - **jdtls** is pinned by its milestone URL; TermOS moves the pin.
+- **Alternatives:** one Java for every language (jdtls would force Java 25 on kotlin-language-server); a separate tool list per server (more registry for the same result).
+
 ---
 
 ## Open questions (the owner will be asked before the milestone that needs each one)

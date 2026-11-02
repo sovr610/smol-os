@@ -325,9 +325,11 @@ pub const LANGUAGES: &[Language] = &[
         aliases: &["kt"],
         title: "Kotlin",
         runtime: Some(tool("kotlin", &["kotlinc"])),
+        // kotlin-language-server 1.3.13 embeds Kotlin 2.1.0, which cannot
+        // read Java 25's version: it runs on Java 21.
         helpers: &[Tool {
             spec: "java",
-            version: "temurin-25",
+            version: "temurin-21",
             cmd: &["java"],
         }],
         servers: &[Server {
