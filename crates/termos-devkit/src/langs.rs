@@ -292,7 +292,7 @@ pub const LANGUAGES: &[Language] = &[
         title: "Java",
         runtime: Some(Tool {
             spec: "java",
-            version: "temurin-21",
+            version: "temurin-25",
             cmd: &["java"],
         }),
         // jdtls starts through a Python script.
@@ -327,7 +327,7 @@ pub const LANGUAGES: &[Language] = &[
         runtime: Some(tool("kotlin", &["kotlinc"])),
         helpers: &[Tool {
             spec: "java",
-            version: "temurin-21",
+            version: "temurin-25",
             cmd: &["java"],
         }],
         servers: &[Server {

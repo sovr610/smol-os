@@ -338,35 +338,39 @@ Window = { id, title, source: Pty | App | Plugin | Agent, state: normal | minimi
 
 ---
 
-## 10. Developer environment (M5; D-004, D-012)
+## 10. Developer environment (M5; D-004, D-012, D-053–D-056)
 
-- **Toolchains:** `termos lang install|use|list|remove <lang>[@version]` wraps mise. Project versions come from `mise.toml` or `.tool-versions`, and TermOS shells activate mise.
-- **Dev rootfs (bare metal):** a Debian rootfs on the data partition, entered through bubblewrap with user namespaces. It binds `$HOME`, the project and `/dev/pts`. Compilers and system packages are installed there with apt, and mise also works inside it. Podman is available where the hardware allows. Hosted mode doesn't need a dev rootfs.
-- **Editor:** Neovim, managed under `NVIM_APPNAME=termos-nvim`, with the built-in LSP client, nvim-dap and pinned plugins. Helix is selectable.
-- **Planned LSP/DAP coverage** (verified per architecture in M5):
+termos-devkit holds all of it; the CLI wires it in, and the desktop reaches it by running `termos` subcommands in panes, so termos-shell never depends on termos-devkit (§4).
+
+- **mise (D-053):** the `mise` on `PATH` when it is 2025.10.0 or newer (or `TERMOS_MISE`), else a pinned release (2026.10.14) fetched with the system's `curl` into `<data>/mise/<version>/` and checked against SHA-256 sums compiled into TermOS. TermOS itself links no TLS stack. Panes get mise's shims (and a fetched mise) at the front of `PATH`.
+- **Toolchains (D-054):** `termos lang install|use|list|remove|check <lang>[@version]`. The runtime and its helpers become global defaults (`mise use --global`); language servers and debuggers are only installed (`mise install`), and editors start them through `mise exec` with their exact versions. Projects pin versions in `mise.toml` (or `.tool-versions`).
+- **Registry (`langs`):** per language: the runtime, helpers, servers (mise spec, command, filetypes, root markers, whether a project root is required), the debugger (with port arguments for adapters that listen on a socket), Helix names, and platform limits naming the tool that has no build there (`termos lang install` leaves it out and says why).
+- **Coverage** (each row checked on Linux x86_64 and aarch64 by the language CI):
 
   | Language | LSP | DAP |
   | --- | --- | --- |
-  | Rust | rust-analyzer | codelldb / lldb-dap |
-  | C, C++ | clangd | codelldb / lldb-dap |
-  | Zig | zls | codelldb / lldb-dap |
+  | Rust | rust-analyzer | codelldb |
+  | C, C++ | clangd (none on aarch64 Linux) | codelldb |
+  | Zig | zls | codelldb |
   | Go | gopls | delve |
-  | Python | basedpyright (+ ruff) | debugpy |
-  | Java | jdtls | java-debug |
-  | Kotlin | kotlin-lsp | kotlin-debug-adapter |
-  | C#/.NET | csharp-ls or Roslyn LSP | netcoredbg |
-  | JS/TS (Node, Bun) | vtsls / typescript-language-server | js-debug |
-  | Deno | `deno lsp` | js-debug |
+  | Python | basedpyright + ruff | debugpy |
+  | Java | jdtls (pinned milestone) | — |
+  | Kotlin | kotlin-language-server | — |
+  | C#/.NET | csharp-ls | netcoredbg |
+  | JS/TS (Node, Bun) | vtsls | js-debug |
+  | Deno | `deno lsp` | — |
   | HTML/CSS | vscode-html/css-language-server | — |
-  | Lua | lua-language-server | local-lua-debugger |
-  | Shell | bash-language-server + shellcheck | bash-debug-adapter |
+  | Lua | lua-language-server | — |
+  | Shell | bash-language-server (+ shellcheck) | — |
 
-  Servers are installed through mise backends (aqua, npm, pipx, cargo, go, github) wherever possible.
-- **Panels:**
-  - A Git UI (O-3).
-  - `termos new <template>` project templates.
-  - Build, run and test panels driven by project detection (`Cargo.toml`, `package.json`, `go.mod`, `pyproject.toml`, `CMakeLists.txt`, `*.csproj`, Gradle/Maven, `build.zig`) and overridable through `[tasks]` in a project `termos.toml`.
-- **Architecture limits:** published in `docs/languages.md` (M5). Known up front: on a Pi 3 or Zero 2 W (512 MB–1 GB RAM), jdtls, kotlin-lsp, Roslyn and Podman are impractical.
+  Servers come from mise backends: the registry, `npm:`, `pipx:` (through uv), `go:`, `dotnet:`, `github:` and `http:`.
+- **Editors (D-012, D-054):** Neovim 0.12.6 under `NVIM_APPNAME=termos-nvim`: `init.lua` and `lua/termos/` are embedded and rewritten on setup, `lua/termos/generated.lua` lists the installed servers and debuggers with their commands, and `lua/user.lua` belongs to the user. Servers use Neovim's own `vim.lsp.config`/`enable`; nvim-dap, nvim-dap-ui and nvim-nio come through `vim.pack`, pinned to commits. Each part loads on its own. Helix gets a `languages.toml` (or `languages.termos.toml` beside the user's). `[dev] editor = auto | termos-nvim | helix | env` picks what `termos edit` and the file manager open.
+- **Projects (D-055):** `termos create <template> [dir]`: embedded templates, one per language (Zig and .NET through their generators), with a `mise.toml` pinning the installed version, marked trusted for mise (D-056).
+- **Tasks (D-055):** build, run and test from the project's files in the nearest folder up (Cargo, Go, Deno, npm/Bun, Python, CMake, .NET, Gradle, Maven, Zig, single-file Java and Kotlin, Lua, shell), overridden and extended by `[tasks]` in a `termos.toml`. `task.build|run|test` and `task NAME` open a bottom panel running `termos task NAME --wait`; a task's next run replaces its panel.
+- **Git UI (O-3 → D-053):** `git.open` (prefix `g`) opens `termos git`, lazygit through mise, in a float.
+- **Acceptance (D-056):** `termos lang check <lang>`: install, create the template, build, run (output checked) and test through `mise exec`, headless Neovim until every server for the main file has completed LSP `initialize`, then the debugger's DAP `initialize`. CI runs it per language and architecture (§17).
+- **Dev rootfs (bare metal, M5b):** a Debian rootfs on the data partition, entered through bubblewrap with user namespaces. It binds `$HOME`, the project and `/dev/pts`. Compilers and system packages are installed there with apt, and mise also works inside it. Podman is available where the hardware allows. Hosted mode doesn't need a dev rootfs.
+- **Architecture limits:** `docs/languages.md`. On a Pi 3 or Zero 2 W (512 MB–1 GB RAM), jdtls, kotlin-language-server and Podman are impractical.
 
 ---
 
@@ -463,6 +467,7 @@ Window = { id, title, source: Pty | App | Plugin | Agent, state: normal | minimi
 - **Agents and plugins:** least privilege, sandboxing, confirmation for destructive or network actions, and a tamper-evident audit log.
 - **Listeners:** nothing listens on the network by default. The model router binds localhost or a Unix socket and needs a token.
 - **Supply chain:** cargo-deny checks licenses, advisories and sources (crates.io only); `Cargo.lock` is committed; Actions are pinned to major versions (SHA pinning to be reconsidered in M9).
+- **Developer tools (D-053, D-056):** the only download TermOS makes itself is mise, over HTTPS only (`curl --proto =https --tlsv1.2`), checked against SHA-256 sums compiled in before it is used. Everything else is mise's to download and verify. The `mise.toml` files TermOS writes list only tools and are marked trusted; TermOS never trusts a project's own mise config for you. Neovim plugins are pinned to commits.
 - **Bare metal:** a read-only root with signed A/B updates.
 
 ---
@@ -485,6 +490,7 @@ Window = { id, title, source: Pty | App | Plugin | Agent, state: normal | minimi
 - **WASM widgets** are tested with the sample's build kept in `crates/termos-shell/tests/fixtures/`; CI rebuilds it from source and runs the same tests against the fresh build.
 - **Snapshot tests** (`insta`): a `Grid` renders to text plus a style layer. The headless client drives the full desktop: inject input, then snapshot the screen. These cover chrome, layouts, apps and overlays.
 - **Integration tests:** real PTYs (`sh -c …`), client/server over the socket (sessions, detach, snapshots and restore, plugins), the real daemon driven through its CLI, config hot reload, and recorded provider fixtures with mock servers. CI never uses live API keys.
+- **Developer environment:** `termos lang`, `edit`, `create`, `task` and `lang check` are tested against a stand-in mise script (`TERMOS_MISE`) that logs its arguments and runs what follows `exec --`; DAP framing against in-memory and socket adapters. Real installs, builds, LSP and DAP handshakes run in the language CI (§17).
 - **Property tests** (`proptest`) for layout invariants (no overlaps or gaps, sizes sum to the parent), rectangle subtraction and the block raster.
 - **Golden bytes** for the Kitty, Sixel and iTerm2 encoders and the Kitty keyboard protocol table, and a Sixel round trip.
 - **Fuzzing** with `cargo-fuzz` (on a nightly toolchain, separate from the pinned one):
@@ -507,7 +513,8 @@ Window = { id, title, source: Pty | App | Plugin | Agent, state: normal | minimi
   - lint: fmt, repo checks, cargo-deny, and clippy for the Windows target from Linux (without default features: wasmtime compiles C there); `cargo xtask ci` also runs clippy for macOS arm64 when that target is installed;
   - clippy, tests and a daemon smoke test (`new -d`, `ls`, `msg`, `kill-server`) on x86_64 Linux, aarch64 Linux, macOS arm64 and Windows x86_64;
   - zigbuild cross-builds; a fuzz smoke pass; the performance budgets;
-  - the sample WASM widget built from source for `wasm32-wasip2`, with the widget tests run against it.
+  - the sample WASM widget built from source for `wasm32-wasip2`, with the widget tests run against it;
+  - the language CI (D-053, D-056, `languages.yml`): `termos lang check` for every language on ubuntu-24.04 and ubuntu-24.04-arm, nightly, on developer-environment changes and on demand; Rust, Python and Go on x86_64 on every push.
 - **Test builds** on every push (D-041): Linux x86_64/aarch64 (glibc 2.31) and macOS arm64 `.tar.gz`, Windows x86_64 `.zip` (static C runtime), each with a `BUILDINFO.txt`, kept 14 days. The Linux builds are downloaded and smoke-run on matching runners.
 - **Later CI jobs:**
   - QEMU boots (M8);

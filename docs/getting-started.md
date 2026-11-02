@@ -183,7 +183,9 @@ Every command name, such as `pane.zoom`, `layout.select tiled` or
 Images, the image viewer, themes and animations are described in
 [graphics.md](graphics.md). The file manager, system monitor, clipboard
 history, settings and markdown viewer are in [apps.md](apps.md), and
-status-line widgets in WebAssembly in [widgets.md](widgets.md).
+status-line widgets in WebAssembly in [widgets.md](widgets.md). Languages,
+editors, project templates, build/run/test panels and the Git UI are in
+[languages.md](languages.md).
 
 ## Test builds
 

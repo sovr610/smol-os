@@ -375,12 +375,23 @@ local function ready(name)
   end
   return false
 end
+-- A server that started and is gone has quit: stop waiting for it.
+local seen, quit = {{}}, nil
 local ok = vim.wait(timeout, function()
+  for _, name in ipairs(want) do
+    if #vim.lsp.get_clients({{ name = name }}) > 0 then
+      seen[name] = true
+    elseif seen[name] and not ready(name) then
+      quit = name
+      return true
+    end
+  end
   for _, name in ipairs(want) do
     if not ready(name) then return false end
   end
   return true
-end, 200)
+end, 200) and not quit
+if quit then out("termos check: " .. quit .. " quit before it finished starting") end
 for _, name in ipairs(want) do
   local clients = vim.lsp.get_clients({{ name = name }})
   local c = clients[1]

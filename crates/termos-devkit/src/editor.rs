@@ -73,11 +73,25 @@ pub struct Resolved {
     pub needs_root: bool,
 }
 
-/// The installed version of `spec` to use: the active one, else the
-/// newest installed.
-fn pick<'a>(installed: &'a BTreeMap<String, Vec<Installed>>, spec: &str) -> Option<&'a Installed> {
+/// The installed version of `tool` to start a server with. When the
+/// registry pins a line (`temurin-25`, `1.63.0`), the newest installed
+/// version on it, so a server keeps the runtime it needs whatever the
+/// user's default is; otherwise the active one, else the newest.
+fn pick<'a>(installed: &'a BTreeMap<String, Vec<Installed>>, tool: &Tool) -> Option<&'a Installed> {
+    let spec = tool.spec;
     let key = spec.split('[').next().unwrap_or(spec);
     let list = installed.get(key).or_else(|| installed.get(spec))?;
+    let floating = matches!(tool.version, "latest" | "lts" | "stable");
+    if !floating
+        && let Some(i) = list.iter().rev().find(|i| {
+            i.version == tool.version
+                || i.version
+                    .strip_prefix(tool.version)
+                    .is_some_and(|rest| rest.starts_with(['.', '+', '-']))
+        })
+    {
+        return Some(i);
+    }
     list.iter().find(|i| i.active).or_else(|| list.last())
 }
 
@@ -114,20 +128,20 @@ pub fn resolve(
         // helpers, when installed.
         let mut base: Vec<(&Tool, &Installed)> = Vec::new();
         if let Some(rt) = &lang.runtime {
-            match pick(installed, rt.spec) {
+            match pick(installed, rt) {
                 Some(i) => base.push((rt, i)),
                 None => continue,
             }
         }
         for h in lang.helpers {
-            if let Some(i) = pick(installed, h.spec) {
+            if let Some(i) = pick(installed, h) {
                 base.push((h, i));
             }
         }
         for srv in lang.servers {
             let cmd = match &srv.tool {
                 Some(t) => {
-                    let Some(i) = pick(installed, t.spec) else {
+                    let Some(i) = pick(installed, t) else {
                         continue;
                     };
                     with_tool(mise, &base, t, i, t.cmd)
@@ -162,7 +176,7 @@ pub fn resolve(
             }
         }
         if let Some(d) = &lang.debugger
-            && let Some(i) = pick(installed, d.tool.spec)
+            && let Some(i) = pick(installed, &d.tool)
         {
             match debuggers.iter_mut().find(|x| x.name == d.name) {
                 Some(existing) => {
@@ -516,6 +530,51 @@ mod tests {
             "deno": [{"version": "2.0.0", "install_path": "/m/deno", "active": true}]
         }"#,
         )
+    }
+
+    #[test]
+    fn servers_get_the_runtime_line_they_were_installed_with() {
+        // The user's default Java is 21; jdtls is set up with Java 25.
+        let have = parse_ls(
+            r#"{
+            "java": [
+                {"version": "temurin-21.0.13+9.0.LTS", "install_path": "/m/j21", "active": true},
+                {"version": "temurin-25.0.1+8.0.LTS", "install_path": "/m/j25"}
+            ],
+            "python": [{"version": "3.15.2", "install_path": "/m/py", "active": true}],
+            "http:jdtls": [{"version": "1.63.0", "install_path": "/m/jdtls"}]
+        }"#,
+        );
+        let (servers, _) = resolve(Path::new("/bin/mise"), &have);
+        let jdtls = servers.iter().find(|s| s.name == "jdtls").expect("jdtls");
+        assert!(
+            jdtls
+                .cmd
+                .contains(&"java@temurin-25.0.1+8.0.LTS".to_owned()),
+            "{:?}",
+            jdtls.cmd
+        );
+        assert!(
+            jdtls
+                .cmd
+                .ends_with(&["python3".to_owned(), "/m/jdtls/bin/jdtls".to_owned()])
+        );
+        // Floating versions (`latest`, `lts`) take the active one.
+        let java = crate::langs::find("java").expect("java");
+        let python = &java.helpers[0];
+        assert_eq!(
+            pick(&have, python).map(|i| i.version.as_str()),
+            Some("3.15.2")
+        );
+        // A pinned line that is not installed falls back the same way.
+        let only21 = parse_ls(
+            r#"{"java": [{"version": "temurin-21.0.13+9.0.LTS", "install_path": "/m/j21", "active": true}]}"#,
+        );
+        let rt = java.runtime.expect("runtime");
+        assert_eq!(
+            pick(&only21, &rt).map(|i| i.version.as_str()),
+            Some("temurin-21.0.13+9.0.LTS")
+        );
     }
 
     #[test]
