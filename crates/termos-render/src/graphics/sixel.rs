@@ -291,7 +291,7 @@ pub fn decode(data: &[u8], max_side: u32, max_pixels: u64) -> Result<Picture, Gr
                 let end = x.saturating_add(count);
                 if bits != 0 {
                     if end > max_side || y.saturating_add(6) > max_side.saturating_add(5) {
-                        return Err(too_large(end, y + 6));
+                        return Err(too_large(end, y.saturating_add(6)));
                     }
                     for dy in 0..6u32 {
                         if bits & (1 << dy) == 0 {
@@ -353,7 +353,8 @@ pub fn decode(data: &[u8], max_side: u32, max_pixels: u64) -> Result<Picture, Gr
 /// DEC's HLS (hue 0 is blue, 120 red, 240 green; lightness and saturation
 /// in percent) to RGB.
 fn hls(h: u32, l: u32, s: u32) -> Rgb {
-    let h = f64::from((h + 240) % 360) / 360.0;
+    // A program can send any hue; reduce it before turning it.
+    let h = f64::from((h % 360 + 240) % 360) / 360.0;
     let (l, s) = (f64::from(l.min(100)) / 100.0, f64::from(s.min(100)) / 100.0);
     let q = if l < 0.5 {
         l * (1.0 + s)
@@ -472,5 +473,8 @@ mod tests {
         assert_eq!(hls(120, 50, 100), Rgb::new(255, 0, 0));
         assert_eq!(hls(240, 50, 100), Rgb::new(0, 255, 0));
         assert_eq!(hls(0, 100, 0), Rgb::new(255, 255, 255));
+        // Found by the fuzzer: a hue near u32::MAX overflowed.
+        assert_eq!(hls(u32::MAX, 50, 100), hls(u32::MAX % 360, 50, 100));
+        assert_eq!(hls(360 + 120, 50, 100), Rgb::new(255, 0, 0));
     }
 }
