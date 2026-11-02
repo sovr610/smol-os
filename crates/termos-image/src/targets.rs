@@ -116,15 +116,6 @@ pub fn find(name: &str) -> Result<&'static Target, String> {
 }
 
 impl Target {
-    /// The environment variable cargo reads the linker from, e.g.
-    /// `CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER`.
-    pub fn cargo_linker_var(&self) -> String {
-        format!(
-            "CARGO_TARGET_{}_LINKER",
-            self.rust.to_ascii_uppercase().replace('-', "_")
-        )
-    }
-
     /// The suffix the `cc` crate looks for, e.g. `aarch64_unknown_linux_gnu`.
     pub fn cc_suffix(&self) -> String {
         self.rust.replace('-', "_")
@@ -138,10 +129,6 @@ mod tests {
     #[test]
     fn targets_and_names() {
         let t = find("aarch64-virt").expect("target");
-        assert_eq!(
-            t.cargo_linker_var(),
-            "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER"
-        );
         assert_eq!(t.cc_suffix(), "aarch64_unknown_linux_gnu");
         assert!(
             find("x86_64")

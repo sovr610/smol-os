@@ -20,10 +20,11 @@ use crate::targets::Target;
 /// The Buildroot release images are built with (an LTS line, D-074).
 pub const BUILDROOT_VERSION: &str = "2026.02.1";
 
-/// SHA-256 of `buildroot-<BUILDROOT_VERSION>.tar.xz`. `None` until it is
-/// pinned from a first download checked against buildroot.org's signed
-/// list (the build stops and prints both).
-pub const BUILDROOT_SHA256: Option<&str> = None;
+/// SHA-256 of `buildroot-<BUILDROOT_VERSION>.tar.xz`, as buildroot.org's
+/// signed list gives it (and the first download in CI had). `None` would
+/// stop the build and print both, to pin a new release.
+pub const BUILDROOT_SHA256: Option<&str> =
+    Some("a2216fdc46b5e81e529acb9077324f7b4a9403366922f350bf7be67f46231b66");
 
 /// Where everything goes.
 #[derive(Debug, Clone)]
@@ -156,7 +157,10 @@ fn make(p: &Paths, t: &Target) -> Command {
         .arg(p.buildroot())
         .arg(format!("O={}", p.out(t).display()))
         .arg(format!("BR2_EXTERNAL={}", p.external().display()))
-        .env("BR2_DL_DIR", &p.dl);
+        .env("BR2_DL_DIR", &p.dl)
+        // `cargo xtask` runs with cargo's library path, which Buildroot's
+        // sanity checks refuse.
+        .env_remove("LD_LIBRARY_PATH");
     c
 }
 
@@ -243,11 +247,28 @@ pub fn cross_gcc(p: &Paths, t: &Target) -> Result<PathBuf, String> {
 }
 
 /// The environment cargo builds `termos` for the image with.
-pub fn cargo_env(p: &Paths, t: &Target, gcc: &Path) -> Vec<(String, String)> {
+///
+/// The linker is given in `RUSTFLAGS` rather than `CARGO_TARGET_<T>_LINKER`:
+/// with `--target`, `RUSTFLAGS` reach only what is built for the image,
+/// while the linker variable would also link the build scripts with
+/// Buildroot's compiler when the image's CPU is the build machine's
+/// (x86_64), and they could not run here. `inherited` is the caller's
+/// `RUSTFLAGS` (CI's `-D warnings`).
+pub fn cargo_env(
+    p: &Paths,
+    t: &Target,
+    gcc: &Path,
+    inherited: Option<&str>,
+) -> Vec<(String, String)> {
     let tool = |suffix: &str| gcc.to_string_lossy().trim_end_matches("gcc").to_owned() + suffix;
     let cc = t.cc_suffix();
+    let linker = format!("-C linker={}", gcc.display());
+    let rustflags = match inherited.map(str::trim).filter(|f| !f.is_empty()) {
+        Some(f) => format!("{f} {linker}"),
+        None => linker,
+    };
     vec![
-        (t.cargo_linker_var(), gcc.display().to_string()),
+        ("RUSTFLAGS".into(), rustflags),
         (format!("CC_{cc}"), gcc.display().to_string()),
         (format!("CXX_{cc}"), tool("g++")),
         (format!("AR_{cc}"), tool("ar")),
@@ -279,7 +300,12 @@ pub fn build(p: &Paths, t: &Target, legal_info: bool) -> Result<PathBuf, String>
             "--target",
             t.rust,
         ])
-        .envs(cargo_env(p, t, &gcc));
+        .envs(cargo_env(
+            p,
+            t,
+            &gcc,
+            std::env::var("RUSTFLAGS").ok().as_deref(),
+        ));
     run(&mut cargo)?;
     let dir = prebuilt(p, t);
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
@@ -311,11 +337,23 @@ mod tests {
         let t = find("aarch64-virt").expect("target");
         let gcc =
             PathBuf::from("/r/target/image/aarch64-virt/host/bin/aarch64-buildroot-linux-gnu-gcc");
-        let env = cargo_env(&p, t, &gcc);
+        let env = cargo_env(&p, t, &gcc, Some("-D warnings"));
         let get = |k: &str| env.iter().find(|(n, _)| n == k).map(|(_, v)| v.as_str());
         assert_eq!(
-            get("CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER"),
-            Some(gcc.to_str().expect("utf8"))
+            get("RUSTFLAGS"),
+            Some(
+                "-D warnings -C linker=/r/target/image/aarch64-virt/host/bin/aarch64-buildroot-linux-gnu-gcc"
+            )
+        );
+        assert!(
+            !env.iter().any(|(k, _)| k.ends_with("_LINKER")),
+            "the build scripts keep the build machine's linker"
+        );
+        let plain = cargo_env(&p, t, &gcc, None);
+        assert!(
+            plain
+                .iter()
+                .any(|(k, v)| k == "RUSTFLAGS" && v.starts_with("-C linker="))
         );
         assert_eq!(
             get("CXX_aarch64_unknown_linux_gnu"),
