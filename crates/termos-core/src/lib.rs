@@ -22,6 +22,7 @@
 //! see `ARCHITECTURE.md` §3 and §7.
 
 pub mod app;
+pub mod clipboard;
 pub mod config;
 pub mod ids;
 pub mod input;
@@ -31,4 +32,5 @@ pub mod paths;
 pub mod proto;
 pub mod transport;
 pub mod watch;
+pub mod widgets;
 pub mod wire;

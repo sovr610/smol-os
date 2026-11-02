@@ -8,6 +8,7 @@
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Instant;
 
 use ratatui_core::buffer::{Buffer, CellDiffOption};
 use ratatui_core::layout::Rect as TuiRect;
@@ -34,6 +35,12 @@ pub enum AppEffect {
     Notify(String),
     /// Run a named desktop command (as if chosen in the palette).
     Command(String),
+    /// Put text on the clipboard (every client's terminal, through OSC
+    /// 52) and in the clipboard history.
+    Copy(String),
+    /// Close the app's window, then paste text into the pane that gets
+    /// the focus (as if typed with bracketed paste).
+    PasteAndClose(String),
 }
 
 /// An image an app shows. The desktop draws it for each client the best
@@ -50,6 +57,10 @@ pub struct AppImage {
     pub rect: Rect,
     /// Fit larger than the picture's own pixel size.
     pub upscale: bool,
+    /// Rows of `rect` scrolled above the app's area: `rect` then starts
+    /// this many rows higher, and only its lower part shows (a picture in
+    /// a document scrolled partly out of view).
+    pub scroll_top: u16,
 }
 
 /// A fresh key for an [`AppImage`].
@@ -102,6 +113,17 @@ pub trait App: Send {
     /// the window opens).
     fn set_waker(&mut self, waker: AppWaker) {
         let _ = waker;
+    }
+    /// When the app next wants [`App::on_timer`] (a monitor's next
+    /// sample). The desktop asks only while the app is on screen for some
+    /// client, so hidden apps cost nothing (D-028).
+    fn deadline(&self) -> Option<Instant> {
+        None
+    }
+    /// The deadline passed (or the app came back on screen after it did).
+    fn on_timer(&mut self, now: Instant) -> AppEffect {
+        let _ = now;
+        AppEffect::None
     }
 }
 

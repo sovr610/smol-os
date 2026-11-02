@@ -1,0 +1,5 @@
+---
+source: crates/termos-core/src/widgets.rs
+expression: "render(m, 24, 1)"
+---
+CPU  ████▌·········· 30%

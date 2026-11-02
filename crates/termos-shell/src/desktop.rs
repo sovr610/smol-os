@@ -11,6 +11,7 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use termos_core::app::{App, AppEffect, AppWaker, render_app};
+use termos_core::clipboard::{ClipSource, SharedClipboard};
 use termos_core::config::{Config, StatusPosition, WindowSize};
 use termos_core::ids::{ClientId, PaneId, PaneIds};
 use termos_core::input::{KeyEvent, Mods, MouseButton, MouseEvent, MouseKind};
@@ -44,6 +45,7 @@ use crate::plugins::{Cells, PluginCommand};
 use crate::prompt::{Confirmed, Prompt, PromptAction, PromptKind};
 use crate::snapshot::{self, PaneSnapshot, Relaunch, SNAPSHOT_VERSION, SavedKind, SessionSnapshot};
 use crate::status::{self, StatusInfo, StatusRegions, TabInfo};
+use crate::ui::Chrome;
 use crate::whichkey;
 
 /// What a pane shows.
@@ -120,6 +122,8 @@ pub struct DesktopOptions {
     pub pane_env: Vec<(String, String)>,
     /// Where the first shell starts (default: the server's directory).
     pub cwd: Option<PathBuf>,
+    /// Server-wide clipboard history (D-050), shared by every session.
+    pub clipboard: SharedClipboard,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -928,12 +932,20 @@ impl Desktop {
         }
     }
 
-    fn copy_text(&mut self, text: String) {
+    fn copy_text(&mut self, text: String, source: ClipSource) {
         let n = text.chars().count();
+        self.remember_copy(&text, source);
         self.outbox
             .push((self.current, ServerMsg::Clipboard(text.clone())));
         self.paste_buffer = Some(text);
         self.notify(Level::Info, format!("copied {n} characters"));
+    }
+
+    /// Adds a copy to the clipboard history.
+    fn remember_copy(&self, text: &str, source: ClipSource) {
+        if let Ok(mut h) = self.opts.clipboard.lock() {
+            h.push(text, source);
+        }
     }
 
     fn exit_copy_mode(&mut self) {
@@ -1306,7 +1318,7 @@ impl Desktop {
             Some((CopyAction::Exit, _)) | None => self.exit_copy_mode(),
             Some((CopyAction::Copy(text), _)) => {
                 self.exit_copy_mode();
-                self.copy_text(text);
+                self.copy_text(text, ClipSource::Selection);
             }
         }
     }
@@ -1321,6 +1333,18 @@ impl Desktop {
                 Ok(c) => self.run(c),
                 Err(e) => self.notify(Level::Error, e.to_string()),
             },
+            AppEffect::Copy(text) => {
+                let title = self
+                    .panes
+                    .get(&id)
+                    .map(Pane::display_name)
+                    .unwrap_or_default();
+                self.copy_text(text, ClipSource::App(title));
+            }
+            AppEffect::PasteAndClose(text) => {
+                self.close_pane(id);
+                self.on_paste(&text);
+            }
         }
     }
 
@@ -1828,6 +1852,9 @@ impl Desktop {
                 if !config.status.clock {
                     self.clock_deadline = None;
                 }
+                if let Ok(mut h) = self.opts.clipboard.lock() {
+                    h.set_limit(config.clipboard.history);
+                }
                 self.config = config;
                 self.refresh_themes();
                 self.ui.key_state = KeyState::Normal;
@@ -2147,7 +2174,7 @@ impl Desktop {
                 };
                 self.exit_copy_mode();
                 if let Some(t) = text.filter(|t| !t.is_empty()) {
-                    self.copy_text(t);
+                    self.copy_text(t, ClipSource::Selection);
                 }
             }
             _ => {}
@@ -2244,6 +2271,10 @@ impl Desktop {
                         }
                         VtEvent::Reply(bytes) => pty.write(bytes),
                         VtEvent::Clipboard(text) => {
+                            let source = ClipSource::Program(pane.title.clone());
+                            if let Ok(mut h) = self.opts.clipboard.lock() {
+                                h.push(&text, source);
+                            }
                             self.outbox.push((None, ServerMsg::Clipboard(text.clone())));
                             self.paste_buffer = Some(text);
                         }
@@ -2295,6 +2326,7 @@ impl Desktop {
         if let Some(d) = self.anim.deadline() {
             t.push(d);
         }
+        t.extend(self.app_deadlines().into_iter().map(|(_, d)| d));
         for p in self.panes.values() {
             if let PaneKind::Term { vt, .. } = &p.kind
                 && let Some(d) = vt.sync_deadline()
@@ -2305,8 +2337,41 @@ impl Desktop {
         t.into_iter().min()
     }
 
+    /// The deadlines of apps on screen; hidden apps get no timers.
+    fn app_deadlines(&self) -> Vec<(PaneId, Instant)> {
+        let timed: Vec<(PaneId, Instant)> = self
+            .panes
+            .iter()
+            .filter_map(|(id, p)| match &p.kind {
+                PaneKind::App(app) => app.deadline().map(|d| (*id, d)),
+                PaneKind::Term { .. } => None,
+            })
+            .collect();
+        if timed.is_empty() {
+            return timed;
+        }
+        let visible = self.placement().visible();
+        timed
+            .into_iter()
+            .filter(|(id, _)| visible.contains(id))
+            .collect()
+    }
+
     pub fn on_timer(&mut self, now: Instant) {
         self.leave();
+        for (id, d) in self.app_deadlines() {
+            if d > now {
+                continue;
+            }
+            let effect = match self.panes.get_mut(&id) {
+                Some(Pane {
+                    kind: PaneKind::App(app),
+                    ..
+                }) => app.on_timer(now),
+                _ => continue,
+            };
+            self.app_effect(id, effect);
+        }
         for ui in self.clients.values_mut() {
             if ui.whichkey_deadline.is_some_and(|d| d <= now) {
                 ui.whichkey_deadline = None;
@@ -2591,31 +2656,35 @@ impl Desktop {
                         PaneKind::App(app) => {
                             render_app(app.as_mut(), theme, g, rect);
                             for img in app.images() {
-                                let area = Rect::new(
-                                    rect.x.saturating_add(img.rect.x),
-                                    rect.y.saturating_add(img.rect.y),
-                                    img.rect.w,
+                                // The box may start above the app (a
+                                // picture scrolled partly out); only its
+                                // width is clipped, so it keeps its size.
+                                let x = i32::from(rect.x) + i32::from(img.rect.x);
+                                let y = i32::from(rect.y) + i32::from(img.rect.y)
+                                    - i32::from(img.scroll_top);
+                                let w = img.rect.w.min(rect.w.saturating_sub(img.rect.x));
+                                let place = images::fit_place(
+                                    x,
+                                    y,
+                                    w,
                                     img.rect.h,
-                                )
-                                .intersect(&rect);
-                                if area.is_empty() {
+                                    &img.picture,
+                                    cell,
+                                    img.upscale,
+                                );
+                                if place.visible(rect).is_empty() {
                                     continue;
                                 }
-                                let target = images::fit(area, &img.picture, cell, img.upscale);
                                 if protocol == ImageProtocol::Blocks {
-                                    let cells = block_cache.get(
-                                        img.key,
-                                        &img.picture,
-                                        Place::of(target),
-                                        image_bg,
-                                    );
-                                    images::draw_blocks(g, &cells, Place::of(target), &[rect]);
+                                    let cells =
+                                        block_cache.get(img.key, &img.picture, place, image_bg);
+                                    images::draw_blocks(g, &cells, place, &[rect]);
                                 } else {
                                     candidates.push(Candidate {
                                         pane: id,
                                         key: img.key,
                                         picture: img.picture,
-                                        place: Place::of(target),
+                                        place,
                                         clip: rect,
                                     });
                                 }
@@ -2647,6 +2716,7 @@ impl Desktop {
         self.ui.status_regions = regions;
 
         let mut overlays: Vec<Rect> = Vec::new();
+        let chrome = Chrome::of(&self.config.floats);
         if self.ui.whichkey_visible || self.ui.whichkey_full {
             overlays.extend(whichkey::draw(
                 grid,
@@ -2654,6 +2724,7 @@ impl Desktop {
                 &self.ui.theme,
                 &self.keys,
                 self.ui.whichkey_full,
+                chrome,
             ));
         }
         if let Some(p) = &self.ui.palette {
@@ -2663,7 +2734,7 @@ impl Desktop {
             .ui
             .palette
             .as_ref()
-            .map(|p| p.render(grid, area, &self.ui.theme));
+            .map(|p| p.render(grid, area, &self.ui.theme, chrome));
         self.ui.pixel_images = self.place_pixel_images(
             grid, &placement, &overlays, candidates, protocol, image_bg, animates,
         );

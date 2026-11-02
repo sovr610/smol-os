@@ -260,6 +260,7 @@ impl App for ImageViewer {
             picture: Arc::clone(picture),
             rect: Rect::new(0, 0, w, h - 1),
             upscale: self.upscale,
+            scroll_top: 0,
         }]
     }
 

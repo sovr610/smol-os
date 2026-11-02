@@ -1,0 +1,6 @@
+---
+source: crates/termos-core/src/widgets.rs
+expression: "render(chart, 2, 2)"
+---
+ ⣿
+⣀⣿

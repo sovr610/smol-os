@@ -9,7 +9,7 @@ use termos_render::grid::{Grid, Rect};
 use termos_render::theme::Theme;
 
 use crate::keys::{is_cancel, printable};
-use crate::ui::{centered, panel, truncate, width};
+use crate::ui::{Chrome, centered, panel, truncate, width};
 
 /// One entry.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -166,10 +166,10 @@ impl Palette {
             .min(14)
     }
 
-    pub fn render(&self, grid: &mut Grid, area: Rect, theme: &Theme) -> (u16, u16) {
+    pub fn render(&self, grid: &mut Grid, area: Rect, theme: &Theme, chrome: Chrome) -> (u16, u16) {
         let list_rows = self.list_rows(area);
         let rect = self.rect(area);
-        let inner = panel(grid, rect, theme, "Command palette");
+        let inner = panel(grid, rect, area, theme, "Command palette", chrome);
         // Query line.
         let prompt_end = grid.put_str(inner.x + 1, inner.y, "> ", theme.overlay_key, inner.right());
         let q = truncate(&self.query, inner.w.saturating_sub(4));

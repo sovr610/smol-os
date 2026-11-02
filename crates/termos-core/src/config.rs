@@ -41,6 +41,7 @@ pub struct Config {
     pub graphics: GraphicsConfig,
     pub session: SessionConfig,
     pub plugins: PluginsConfig,
+    pub clipboard: ClipboardConfig,
 }
 
 impl Default for Config {
@@ -61,6 +62,7 @@ impl Default for Config {
             graphics: GraphicsConfig::default(),
             session: SessionConfig::default(),
             plugins: PluginsConfig::default(),
+            clipboard: ClipboardConfig::default(),
         }
     }
 }
@@ -281,6 +283,22 @@ impl ProtocolSetting {
     }
 }
 
+/// The clipboard history (D-050): in memory only, never saved.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(default, deny_unknown_fields, rename_all = "kebab-case")]
+pub struct ClipboardConfig {
+    /// How many copies to remember; 0 remembers none.
+    pub history: usize,
+}
+
+impl Default for ClipboardConfig {
+    fn default() -> Self {
+        Self {
+            history: crate::clipboard::DEFAULT_ENTRIES,
+        }
+    }
+}
+
 /// Out-of-process plugins (D-034). Only plugins listed here are started.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize)]
 #[serde(default, deny_unknown_fields, rename_all = "kebab-case")]
@@ -447,6 +465,11 @@ snapshot-delay-ms = 2000
 [plugins]
 enabled = []             # plugin directory names under ~/.config/termos/plugins
 
+[clipboard]
+# Copies remembered for the clipboard manager (prefix =), newest first.
+# Kept in memory only: never written to disk. 0 remembers none.
+history = 50
+
 [theme]
 # auto | dark | light | high-contrast. "auto" is dark or light to match each
 # terminal's background. Switch while running: palette → "theme".
@@ -462,6 +485,7 @@ base = "auto"
 # overlay-bg = "#22272e"
 # selection-bg = "#2d4a6e"
 # warn = "#e5a54b"
+# error = "#f47067"
 
 [ui]
 animations = true        # floats and toasts; never over SSH

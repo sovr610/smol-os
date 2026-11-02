@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! Small drawing helpers shared by the overlays.
 
+use termos_core::config::FloatConfig;
 use termos_render::cell::Cell;
 use termos_render::grid::{BorderKind, Grid, Rect};
 use termos_render::theme::Theme;
+use termos_wm::compose::drop_shadow;
 use unicode_width::UnicodeWidthStr;
 
 /// A `w`×`h` rectangle centred in `area` (shrunk to fit).
@@ -13,13 +15,49 @@ pub fn centered(area: Rect, w: u16, h: u16) -> Rect {
     Rect::new(area.x + (area.w - w) / 2, area.y + (area.h - h) / 2, w, h)
 }
 
-/// Draws an overlay panel (filled, rounded border, title) and returns its
-/// inner rectangle.
-pub fn panel(grid: &mut Grid, rect: Rect, theme: &Theme, title: &str) -> Rect {
+/// How panels look: the same border and shadow as floating windows
+/// (`[floats] border` and `shadow`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Chrome {
+    pub border: BorderKind,
+    pub shadow: bool,
+}
+
+impl Default for Chrome {
+    fn default() -> Self {
+        Self {
+            border: BorderKind::Rounded,
+            shadow: true,
+        }
+    }
+}
+
+impl Chrome {
+    pub fn of(floats: &FloatConfig) -> Self {
+        Self {
+            border: floats.border.into(),
+            shadow: floats.shadow,
+        }
+    }
+}
+
+/// Draws an overlay panel (shadow, fill, border, title) within `bounds`
+/// and returns its inner rectangle.
+pub fn panel(
+    grid: &mut Grid,
+    rect: Rect,
+    bounds: Rect,
+    theme: &Theme,
+    title: &str,
+    chrome: Chrome,
+) -> Rect {
+    if chrome.shadow {
+        drop_shadow(grid, rect, bounds, theme);
+    }
     grid.fill(rect, &Cell::blank(theme.overlay));
     grid.draw_box(
         rect,
-        BorderKind::Rounded,
+        chrome.border,
         theme.overlay_border,
         (!title.is_empty()).then_some((title, theme.overlay_title)),
     );

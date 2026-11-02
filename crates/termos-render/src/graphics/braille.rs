@@ -56,6 +56,62 @@ pub fn render(pic: &Picture, cols: u16, rows: u16, bg: Rgb, threshold: u8) -> Ve
     cells
 }
 
+/// A braille drawing surface for charts and line art: `cols`×`rows`
+/// cells of 2×4 dots, each cell inked by whatever drew there last.
+#[derive(Debug, Clone)]
+pub struct Canvas<I: Copy> {
+    cols: u16,
+    rows: u16,
+    bits: Vec<u8>,
+    ink: Vec<Option<I>>,
+}
+
+impl<I: Copy> Canvas<I> {
+    pub fn new(cols: u16, rows: u16) -> Self {
+        let n = usize::from(cols) * usize::from(rows);
+        Self {
+            cols,
+            rows,
+            bits: vec![0; n],
+            ink: vec![None; n],
+        }
+    }
+
+    pub fn width_dots(&self) -> u32 {
+        u32::from(self.cols) * 2
+    }
+
+    pub fn height_dots(&self) -> u32 {
+        u32::from(self.rows) * 4
+    }
+
+    /// Sets the dot at (`x`, `y`) (dots from the top left); outside the
+    /// canvas nothing happens.
+    pub fn dot(&mut self, x: u32, y: u32, ink: I) {
+        if x >= self.width_dots() || y >= self.height_dots() {
+            return;
+        }
+        let i = (y / 4) as usize * usize::from(self.cols) + (x / 2) as usize;
+        // In range: DOTS holds bits below 0x100.
+        self.bits[i] |= DOTS[(y % 4) as usize][(x % 2) as usize] as u8;
+        self.ink[i] = Some(ink);
+    }
+
+    /// The braille character and ink of a cell, if any dot is set.
+    pub fn cell(&self, col: u16, row: u16) -> Option<(char, I)> {
+        if col >= self.cols || row >= self.rows {
+            return None;
+        }
+        let i = usize::from(row) * usize::from(self.cols) + usize::from(col);
+        let bits = self.bits[i];
+        if bits == 0 {
+            return None;
+        }
+        let ch = char::from_u32(0x2800 + u32::from(bits))?;
+        Some((ch, self.ink[i]?))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -86,5 +142,17 @@ mod tests {
         assert_eq!(cells[0].symbol, " ");
         let cells = render(&p, 1, 1, Rgb::BLACK, 5);
         assert_eq!(cells[0].symbol, "⣿", "every dot past a low threshold");
+    }
+
+    #[test]
+    fn canvas_dots_and_ink() {
+        let mut c: Canvas<u8> = Canvas::new(2, 1);
+        assert_eq!((c.width_dots(), c.height_dots()), (4, 4));
+        c.dot(0, 0, 1);
+        c.dot(1, 3, 2);
+        c.dot(9, 9, 3);
+        assert_eq!(c.cell(0, 0), Some(('\u{2881}', 2)));
+        assert_eq!(c.cell(1, 0), None);
+        assert_eq!(c.cell(5, 5), None);
     }
 }

@@ -468,6 +468,8 @@ pub struct Server {
     clients: BTreeMap<ClientId, Conn>,
     next_client: u64,
     pane_ids: PaneIds,
+    /// What was copied in any session (D-050).
+    clipboard: termos_core::clipboard::SharedClipboard,
     pty_tx: mpsc::Sender<PtyEvent>,
     pty_rx: mpsc::Receiver<PtyEvent>,
     events_tx: mpsc::UnboundedSender<Event>,
@@ -551,6 +553,7 @@ impl Server {
         let (events_tx, events_rx) = mpsc::unbounded_channel();
         let (host_tx, host_rx) = mpsc::unbounded_channel();
         let plugins = PluginHost::new(opts.paths.plugins_dir(), host_tx);
+        let clipboard = termos_core::clipboard::ClipboardHistory::shared(config.clipboard.history);
         Self {
             opts,
             config,
@@ -559,6 +562,7 @@ impl Server {
             clients: BTreeMap::new(),
             next_client: 1,
             pane_ids: PaneIds::new(),
+            clipboard,
             pty_tx,
             pty_rx,
             events_tx,
@@ -689,6 +693,7 @@ impl Server {
             paths: self.opts.paths.clone(),
             env_shell: self.opts.env_shell.clone(),
             pane_ids: self.pane_ids.clone(),
+            clipboard: std::sync::Arc::clone(&self.clipboard),
             // Lets `termos msg`, `ls` and `detach` inside a pane find us
             // (D-029; supersedes D-027's pid-only value).
             pane_env: std::iter::once((

@@ -44,6 +44,17 @@ fn junction(u: bool, d: bool, l: bool, r: bool) -> char {
     }
 }
 
+/// Darkens the strips right of and below `outer` (within `bounds`), as
+/// if it floated above what is behind it.
+pub fn drop_shadow(grid: &mut Grid, outer: Rect, bounds: Rect, theme: &Theme) {
+    let right = Rect::new(outer.right(), outer.y.saturating_add(1), 2, outer.h);
+    let bottom = Rect::new(outer.x.saturating_add(2), outer.bottom(), outer.w, 1);
+    for strip in [right, bottom] {
+        let strip = strip.intersect(&bounds);
+        grid.shade(strip, &theme.palette, theme.shadow, theme.shadow_amount);
+    }
+}
+
 /// Draws the workspace. `content` draws a pane's content into its rectangle;
 /// `title` names a floating window.
 pub fn compose(
@@ -62,13 +73,7 @@ pub fn compose(
     for f in &placement.floats {
         let focused = focus == Some(f.pane);
         if opts.shadow && placement.zoomed != Some(f.pane) {
-            let o = f.outer;
-            let right = Rect::new(o.right(), o.y.saturating_add(1), 2, o.h);
-            let bottom = Rect::new(o.x.saturating_add(2), o.bottom(), o.w, 1);
-            for strip in [right, bottom] {
-                let strip = strip.intersect(&placement.area);
-                grid.shade(strip, &theme.palette, theme.shadow, theme.shadow_amount);
-            }
+            drop_shadow(grid, f.outer, placement.area, theme);
         }
         grid.fill(f.outer, &Cell::blank(Style::new()));
         content(f.pane, f.inner, grid);

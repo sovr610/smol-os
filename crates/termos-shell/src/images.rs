@@ -95,23 +95,24 @@ pub(crate) struct Candidate {
     pub clip: Rect,
 }
 
-/// `picture` fitted inside `area` (keeping its aspect ratio for cells of
-/// `cell` pixels) and centred.
-pub(crate) fn fit(area: Rect, picture: &Picture, cell: PxSize, upscale: bool) -> Rect {
-    let (cols, rows) = fit_cells(
-        picture.width(),
-        picture.height(),
-        cell,
-        area.w,
-        area.h,
-        upscale,
-    );
-    Rect::new(
-        area.x + (area.w - cols) / 2,
-        area.y + (area.h - rows) / 2,
+/// `picture` fitted inside a `w`×`h` box at (`x`, `y`), which may start
+/// above or left of the screen, keeping its aspect ratio, and centred.
+pub(crate) fn fit_place(
+    x: i32,
+    y: i32,
+    w: u16,
+    h: u16,
+    picture: &Picture,
+    cell: PxSize,
+    upscale: bool,
+) -> Place {
+    let (cols, rows) = fit_cells(picture.width(), picture.height(), cell, w, h, upscale);
+    Place {
+        x: x + i32::from((w - cols) / 2),
+        y: y + i32::from((h - rows) / 2),
         cols,
         rows,
-    )
+    }
 }
 
 /// The parts of an image (clipped to `clip`) that nothing in `above`
@@ -211,11 +212,14 @@ mod tests {
             height: 20,
         };
         // 200×100 px is 20×5 cells at 10×20, centred in 40×20.
-        let r = fit(Rect::new(2, 1, 40, 20), &pic(200, 100), cell, false);
-        assert_eq!(r, Rect::new(12, 8, 20, 5));
+        let r = fit_place(2, 1, 40, 20, &pic(200, 100), cell, false);
+        assert_eq!(r, Place::of(Rect::new(12, 8, 20, 5)));
         // Upscaled to fill the width.
-        let r = fit(Rect::new(0, 0, 40, 20), &pic(200, 100), cell, true);
-        assert_eq!(r, Rect::new(0, 5, 40, 10));
+        let r = fit_place(0, 0, 40, 20, &pic(200, 100), cell, true);
+        assert_eq!(r, Place::of(Rect::new(0, 5, 40, 10)));
+        // A box starting above the screen keeps its size.
+        let r = fit_place(0, -6, 40, 20, &pic(200, 100), cell, true);
+        assert_eq!((r.y, r.cols, r.rows), (-1, 40, 10));
     }
 
     #[test]

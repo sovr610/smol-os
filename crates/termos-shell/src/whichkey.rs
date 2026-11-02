@@ -7,7 +7,7 @@ use termos_render::theme::Theme;
 
 use crate::commands::Command;
 use crate::keys::KeyTables;
-use crate::ui::{panel, truncate, width};
+use crate::ui::{Chrome, panel, truncate, width};
 
 /// `(key, description)` rows for the prefix table, with the digit and
 /// layout-preset runs collapsed.
@@ -47,6 +47,7 @@ pub fn draw(
     theme: &Theme,
     keys: &KeyTables,
     full: bool,
+    chrome: Chrome,
 ) -> Option<Rect> {
     let mut items = entries(keys);
     if full {
@@ -82,7 +83,7 @@ pub fn draw(
     } else {
         format!("{} …", keys.prefix_key)
     };
-    let inner = panel(grid, rect, theme, &title);
+    let inner = panel(grid, rect, area, theme, &title, chrome);
     for (i, (k, d)) in items.iter().enumerate() {
         let Ok(i) = u16::try_from(i) else { break };
         let (col, row) = (i / nrows.max(1), i % nrows.max(1));
@@ -130,6 +131,7 @@ mod tests {
             &Theme::default(),
             &keys,
             false,
+            Chrome::default(),
         );
         let text = g.to_text();
         assert!(text.contains("C-b …"));

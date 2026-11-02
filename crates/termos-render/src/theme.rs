@@ -30,6 +30,8 @@ pub struct ThemeColors {
     pub overlay_bg: Color,
     pub selection_bg: Color,
     pub warn: Color,
+    /// Errors and critical levels (a full disk, a hot CPU).
+    pub error: Color,
 }
 
 impl Default for ThemeColors {
@@ -51,6 +53,7 @@ impl ThemeColors {
             overlay_bg: Color::rgb(0x22, 0x27, 0x2e),
             selection_bg: Color::rgb(0x2d, 0x4a, 0x6e),
             warn: Color::rgb(0xe5, 0xa5, 0x4b),
+            error: Color::rgb(0xf4, 0x70, 0x67),
         }
     }
 
@@ -66,6 +69,7 @@ impl ThemeColors {
             overlay_bg: Color::rgb(0xf6, 0xf8, 0xfa),
             selection_bg: Color::rgb(0xb6, 0xe3, 0xff),
             warn: Color::rgb(0x9a, 0x67, 0x00),
+            error: Color::rgb(0xcf, 0x22, 0x2e),
         }
     }
 
@@ -82,6 +86,7 @@ impl ThemeColors {
             overlay_bg: Color::rgb(0x00, 0x00, 0x00),
             selection_bg: Color::rgb(0x00, 0x3d, 0xa5),
             warn: Color::rgb(0xff, 0x9e, 0x3d),
+            error: Color::rgb(0xff, 0x6b, 0x6b),
         }
     }
 }
@@ -177,6 +182,8 @@ pub struct ThemeConfig {
     pub selection_bg: Option<Color>,
     #[serde(deserialize_with = "opt_color")]
     pub warn: Option<Color>,
+    #[serde(deserialize_with = "opt_color")]
+    pub error: Option<Color>,
 }
 
 impl ThemeConfig {
@@ -195,6 +202,7 @@ impl ThemeConfig {
             overlay_bg: self.overlay_bg.unwrap_or(p.overlay_bg),
             selection_bg: self.selection_bg.unwrap_or(p.selection_bg),
             warn: self.warn.unwrap_or(p.warn),
+            error: self.error.unwrap_or(p.error),
         };
         Theme::with_background(colors, base, background)
     }
@@ -378,6 +386,7 @@ mod tests {
             (c.muted, c.overlay_bg, "muted text"),
             (c.accent, c.overlay_bg, "accent"),
             (c.warn, c.overlay_bg, "warnings"),
+            (c.error, c.overlay_bg, "errors"),
             (c.status_fg, c.status_bg, "status line"),
             (c.status_bg, c.accent, "active tab"),
             (c.fg, c.selection_bg, "selected text"),

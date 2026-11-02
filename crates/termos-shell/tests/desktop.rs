@@ -26,6 +26,7 @@ const ROWS: u16 = 30;
 
 struct Harness {
     desktop: Desktop,
+    clipboard: termos_core::clipboard::SharedClipboard,
     pty_rx: mpsc::Receiver<PtyEvent>,
     grid: Grid,
     dir: tempfile::TempDir,
@@ -61,7 +62,9 @@ impl Harness {
         std::fs::write(paths.config_file(), &text).expect("write config");
         let config = Config::load(&paths.config_file()).expect("valid test config");
         let (tx, pty_rx) = mpsc::channel(1024);
+        let clipboard = termos_core::clipboard::ClipboardHistory::shared(50);
         let opts = DesktopOptions {
+            clipboard: std::sync::Arc::clone(&clipboard),
             session_name: "test".into(),
             config_path: paths.config_file(),
             paths,
@@ -82,11 +85,20 @@ impl Harness {
         );
         Self {
             desktop,
+            clipboard,
             pty_rx,
             grid: Grid::new(COLS, ROWS),
             dir,
             outbox: Vec::new(),
         }
+    }
+
+    /// The clipboard history, newest first: (text, source).
+    fn history(&self) -> Vec<(String, String)> {
+        let h = self.clipboard.lock().expect("not poisoned");
+        h.entries()
+            .map(|e| (e.text.clone(), e.source.to_string()))
+            .collect()
     }
 
     fn config_path(&self) -> PathBuf {
@@ -489,6 +501,10 @@ async fn copy_mode_search_select_yank() {
             .iter()
             .any(|m| *m == ServerMsg::Clipboard("copytext".into()))
     );
+    assert_eq!(
+        h.history(),
+        vec![("copytext".to_owned(), "selection".to_owned())]
+    );
     // Paste it back.
     h.keys("C-b ]");
     h.type_text("\n");
@@ -496,6 +512,19 @@ async fn copy_mode_search_select_yank() {
         s.matches("copytext").count() >= 3
     })
     .await;
+}
+
+/// Programs that copy (OSC 52) land in the clipboard history too.
+#[cfg(unix)]
+#[tokio::test]
+async fn programs_copies_are_remembered() {
+    let mut h = Harness::new("");
+    h.type_text("printf '\\033]52;c;aGk=\\007'; echo do''ne\n");
+    h.wait_text("done").await;
+    let hist = h.history();
+    assert_eq!(hist.len(), 1, "{hist:?}");
+    assert_eq!(hist[0].0, "hi");
+    assert_eq!(h.desktop.paste_buffer(), Some("hi"));
 }
 
 #[tokio::test]
@@ -790,6 +819,7 @@ async fn snapshots_keep_layout_and_scrollback() {
     // shell, new pane ids.
     let (tx, _rx) = mpsc::channel(1024);
     let opts = DesktopOptions {
+        clipboard: termos_core::clipboard::ClipboardHistory::shared(50),
         session_name: "again".into(),
         config_path: h.config_path(),
         paths: Paths {
