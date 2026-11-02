@@ -589,7 +589,7 @@ pub async fn run_on_pty(
     redactor: &Redactor,
 ) -> Output {
     use termos_core::ids::PaneId;
-    use termos_term::{PtyEvent, PtyPane, SpawnSpec};
+    use termos_term::{AlacrittyVt, PtyEvent, PtyPane, SpawnSpec, VtBackend, VtEvent};
     let (tx, mut rx) = tokio::sync::mpsc::channel::<PtyEvent>(64);
     let spec = SpawnSpec {
         program: argv[0].clone(),
@@ -607,6 +607,10 @@ pub async fn run_on_pty(
         Ok(p) => p,
         Err(e) => return Output::err(format!("cannot start the command: {e}")),
     };
+    // Programs (and Windows' ConPTY itself) ask the terminal questions
+    // (device attributes, the cursor position) and may wait for the
+    // answers: an emulator answers them, as it does for panes.
+    let mut answers = AlacrittyVt::new(spec.cols, spec.rows, 0);
     let mut raw: Vec<u8> = Vec::new();
     let mut dropped = false;
     let deadline = tokio::time::sleep(timeout);
@@ -615,6 +619,12 @@ pub async fn run_on_pty(
         tokio::select! {
             ev = rx.recv() => match ev {
                 Some(PtyEvent::Output(_, bytes)) => {
+                    answers.advance(&bytes);
+                    for ev in answers.take_events() {
+                        if let VtEvent::Reply(reply) = ev {
+                            pty.write(reply);
+                        }
+                    }
                     on_output(&bytes);
                     raw.extend_from_slice(&bytes);
                     // Keep the end: four times what the model gets, as raw
