@@ -5,13 +5,19 @@ name: Release
 # The tag must match the workspace version, and update bundles are signed
 # with the owner's keys (D-078), so the release stops without them.
 #
-# Run by hand, it is a rehearsal: the same builds and packages, kept as
-# this run's artifact instead of a release, with development keys when the
-# owner's are not set, and the images only when asked for.
+# Run by hand, or by a change to this workflow on any branch, it is a
+# rehearsal: the same builds and packages, kept as this run's artifact
+# instead of a release, with development keys when the owner's are not
+# set, and the images only when asked for (by hand).
 
 on:
   push:
     tags: ["v*"]
+    # Paths are not checked for tags.
+    branches: ["**"]
+    paths:
+      - ".github/workflows/release.yml"
+      - ".github/scripts/buildinfo.sh"
   workflow_dispatch:
     inputs:
       images:
@@ -165,7 +171,7 @@ jobs:
   images:
     name: Image (${{ matrix.target }})
     needs: version
-    if: github.event_name == 'push' || inputs.images
+    if: github.ref_type == 'tag' || inputs.images
     runs-on: ubuntu-24.04
     timeout-minutes: 300
     strategy:
@@ -190,7 +196,7 @@ jobs:
           KEY: ${{ secrets.TERMOS_RAUC_KEY }}
         run: |
           if [ -z "$CA" ] || [ -z "$CERT" ] || [ -z "$KEY" ]; then
-            if [ "$GITHUB_EVENT_NAME" != push ]; then
+            if [ "$GITHUB_REF_TYPE" != tag ]; then
               echo "::notice::a rehearsal without the owner's keys: the images trust development keys"
               exit 0
             fi
@@ -250,18 +256,18 @@ jobs:
       - name: Checksums
         run: cd out && sha256sum * > SHA256SUMS && cat SHA256SUMS
       - uses: actions/attest-build-provenance@v2
-        if: github.event_name == 'push'
+        if: github.ref_type == 'tag'
         with:
           subject-path: out/*
       - name: The rehearsal's files
-        if: github.event_name != 'push'
+        if: github.ref_type != 'tag'
         uses: actions/upload-artifact@v4
         with:
           name: rehearsal-${{ needs.version.outputs.version }}
           path: out/
           retention-days: 7
       - name: The draft
-        if: github.event_name == 'push'
+        if: github.ref_type == 'tag'
         env:
           GH_TOKEN: ${{ github.token }}
           V: ${{ needs.version.outputs.version }}

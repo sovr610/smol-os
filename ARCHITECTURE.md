@@ -533,7 +533,7 @@ termos-ai holds all of it; the CLI hands the server a launcher for its windows (
   - the language CI (D-053, D-056, `languages.yml`): `termos lang check` for every language on ubuntu-24.04 and ubuntu-24.04-arm, nightly, on developer-environment changes and on demand; Rust, Python and Go on x86_64 on every push.
 - **Test builds** on every push (D-041): Linux x86_64/aarch64 (glibc 2.31) and macOS arm64 `.tar.gz`, Windows x86_64 `.zip` (static C runtime), each with a `BUILDINFO.txt`, kept 14 days. The Linux builds are downloaded and smoke-run on matching runners.
   - static musl builds for x86_64 and aarch64 Linux next to the glibc ones, smoke-run and held to the same performance budgets (`perf-musl`, D-079).
-- **Releases** (`release.yml`, D-077): a `v<version>` tag matching the workspace version builds the hosted binaries (Linux glibc and musl, macOS arm64 and x86_64, Windows), every image with its update bundle and license report, signed with the owner's keys from CI secrets, then a draft GitHub release with `SHA256SUMS` and build provenance attestations. Run by hand it rehearses: the same files as a workflow artifact, images optional, development keys when the owner's are missing. docs/releasing.md.
+- **Releases** (`release.yml`, D-077): a `v<version>` tag matching the workspace version builds the hosted binaries (Linux glibc and musl, macOS arm64 and x86_64, Windows), every image with its update bundle and license report, signed with the owner's keys from CI secrets, then a draft GitHub release with `SHA256SUMS` and build provenance attestations. Run by hand, or changed on a branch, it rehearses: the same files as a workflow artifact, images optional, development keys when the owner's are missing. docs/releasing.md.
 
 ---
 
