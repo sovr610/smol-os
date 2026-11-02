@@ -777,7 +777,7 @@ pub fn layout(doc: &Doc, width: u16, sizes: &[Option<(u32, u32)>]) -> Vec<Row> {
 }
 
 /// The theme style for a look.
-fn style(look: Look, theme: &Theme) -> Style {
+pub fn style(look: Look, theme: &Theme) -> Style {
     let c = &theme.colors;
     let mut s = Style::new().fg(c.fg);
     if look.heading > 0 {

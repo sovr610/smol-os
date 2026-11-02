@@ -448,6 +448,39 @@ async fn markdown_with_a_picture() {
     assert!(screen.contains("After it."), "{screen}");
 }
 
+/// The file manager lists a folder (folders first), previews what is
+/// selected, asks before trashing, and opens files in the right app.
+#[tokio::test]
+async fn file_manager_lists_previews_and_opens() {
+    use termos_shell::commands::Command;
+
+    let mut h = Harness::new("");
+    let d = h.dir.path().join("work");
+    std::fs::create_dir_all(d.join("sub")).expect("mkdir");
+    std::fs::write(d.join("b.txt"), "plain text inside\n").expect("write");
+    std::fs::write(d.join("notes.md"), "# Big notes\n\nhello\n").expect("write");
+    h.desktop.run(Command::FilesOpen(d.display().to_string()));
+    let screen = h.wait_text("notes.md").await;
+    assert!(screen.contains("Files · work"), "{screen}");
+    let row = |s: &str, name: &str| s.lines().position(|l| l.contains(name));
+    assert!(
+        row(&screen, "sub/") < row(&screen, "b.txt"),
+        "folders first: {screen}"
+    );
+    h.key("j");
+    h.wait_text("plain text inside").await;
+    h.key("j");
+    h.wait_text("Big notes").await;
+    // Trashing asks first; n keeps the file.
+    h.key("d");
+    h.wait_text("Move notes.md to the trash? y/n").await;
+    h.key("n");
+    assert!(d.join("notes.md").exists());
+    // Enter opens markdown in its viewer.
+    h.type_text("\n");
+    h.wait_text("Markdown · notes.md").await;
+}
+
 #[tokio::test]
 async fn split_right_type_and_see_separator() {
     let mut h = Harness::new("");

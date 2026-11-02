@@ -15,6 +15,7 @@ pulldown-cmark.workspace = true
 ratatui-core.workspace = true
 termos-core.workspace = true
 termos-render.workspace = true
+trash.workspace = true
 tracing.workspace = true
 unicode-width.workspace = true
 

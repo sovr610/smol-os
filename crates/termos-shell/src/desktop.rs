@@ -32,7 +32,7 @@ use termos_term::vt::{AlacrittyVt, VtBackend, VtEvent};
 use termos_wm::compose::{ComposeOptions, compose};
 use termos_wm::hit::{Button, Edge, Hit};
 use termos_wm::layout::Dir;
-use termos_wm::workspace::{Placement, Session, Snap, Workspace};
+use termos_wm::workspace::{Placement, Session, Snap, SplitHow, Workspace};
 use tokio::sync::mpsc;
 
 use crate::apps::{NotificationCenter, Tutorial};
@@ -305,6 +305,21 @@ fn next_minute(now: Instant) -> Instant {
     let nanos = u64::try_from(z.subsec_nanosecond()).unwrap_or(0);
     let wait = Duration::from_secs(60 - into.min(59)).saturating_sub(Duration::from_nanos(nanos));
     now + wait.max(Duration::from_millis(10))
+}
+
+/// The editor for `file.edit`: `$VISUAL`, else `$EDITOR` (split into a
+/// program and its arguments), else `vi` (Notepad on Windows).
+pub(crate) fn editor_command(env: impl Fn(&str) -> Option<String>) -> (String, Vec<String>) {
+    for var in ["VISUAL", "EDITOR"] {
+        if let Some(v) = env(var) {
+            let mut words = v.split_whitespace().map(str::to_owned);
+            if let Some(program) = words.next() {
+                return (program, words.collect());
+            }
+        }
+    }
+    let fallback = if cfg!(windows) { "notepad.exe" } else { "vi" };
+    (fallback.to_owned(), Vec::new())
 }
 
 /// The user's home directory (`HOME`, or `USERPROFILE` on Windows).
@@ -779,10 +794,24 @@ impl Desktop {
     }
 
     fn spawn_term(&mut self, cwd: Option<PathBuf>, size: (u16, u16)) -> io::Result<PaneId> {
+        self.spawn_pane(cwd, size, None)
+    }
+
+    /// A new pane running `program` (with arguments), else the shell.
+    fn spawn_pane(
+        &mut self,
+        cwd: Option<PathBuf>,
+        size: (u16, u16),
+        program: Option<(String, Vec<String>)>,
+    ) -> io::Result<PaneId> {
         let id = self.alloc_id();
         let (w, h) = (size.0.max(1), size.1.max(1));
         let mut spec =
             SpawnSpec::shell(self.config.shell_program(self.opts.env_shell.clone()), w, h);
+        if let Some((program, args)) = program {
+            spec.program = program;
+            spec.args = args;
+        }
         spec.cwd = cwd.filter(|c| c.is_dir());
         spec.env = vec![
             ("TERM".into(), "xterm-256color".into()),
@@ -1696,6 +1725,48 @@ impl Desktop {
                 let path = self.resolve_path(&path);
                 self.open_app(Box::new(termos_apps::MarkdownViewer::open(path)));
             }
+            Command::FilesOpen(path) => {
+                let dir = if path.is_empty() {
+                    self.focused_cwd()
+                        .or_else(home_dir)
+                        .or_else(|| std::env::current_dir().ok())
+                        .unwrap_or_default()
+                } else {
+                    self.resolve_path(&path)
+                };
+                self.open_app(Box::new(termos_apps::FileManager::open(dir)));
+            }
+            Command::FileOpen(path) => {
+                use termos_apps::files::{OpenKind, open_kind};
+                let path = self.resolve_path(&path);
+                let shown = path.display().to_string();
+                match open_kind(&path) {
+                    OpenKind::Dir => self.run(Command::FilesOpen(shown)),
+                    OpenKind::Image => self.run(Command::ImageOpen(shown)),
+                    OpenKind::Markdown => self.run(Command::MarkdownOpen(shown)),
+                    OpenKind::Other => self.run(Command::FileEdit(shown)),
+                }
+            }
+            Command::FileEdit(path) => {
+                let path = self.resolve_path(&path);
+                let (program, mut args) = editor_command(|k| std::env::var(k).ok());
+                args.push(path.display().to_string());
+                let cwd = path.parent().map(PathBuf::from);
+                let estimate = (area.w / 2, area.h);
+                match self.spawn_pane(cwd, estimate, Some((program.clone(), args))) {
+                    Ok(id) => {
+                        if !self
+                            .session
+                            .active_mut()
+                            .add_split(id, SplitHow::Auto, area)
+                        {
+                            self.close_pane(id);
+                            self.notify(Level::Warn, "no space for new pane");
+                        }
+                    }
+                    Err(e) => self.notify(Level::Error, format!("cannot start {program}: {e}")),
+                }
+            }
             Command::ThemeSelect(base) => {
                 // The client that asked (the control API acts as the
                 // session's newest client); without one, every client.
@@ -1806,7 +1877,9 @@ impl Desktop {
                 | Command::SessionSwitch(_)
                 | Command::ThemeSelect(_)
                 | Command::ImageOpen(_)
-                | Command::MarkdownOpen(_) => continue,
+                | Command::MarkdownOpen(_)
+                | Command::FileOpen(_)
+                | Command::FileEdit(_) => continue,
                 _ => {}
             }
             items.push(PaletteItem {
@@ -2818,5 +2891,31 @@ impl Desktop {
                 .iter()
                 .any(|f| f.outer.contains(state.x, state.y));
         (!covered).then_some(state)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_editor_comes_from_visual_then_editor() {
+        let env = |vars: &'static [(&'static str, &'static str)]| {
+            move |k: &str| {
+                vars.iter()
+                    .find(|(n, _)| *n == k)
+                    .map(|(_, v)| (*v).to_owned())
+            }
+        };
+        assert_eq!(
+            editor_command(env(&[("VISUAL", "code --wait"), ("EDITOR", "vim")])),
+            ("code".to_owned(), vec!["--wait".to_owned()])
+        );
+        assert_eq!(
+            editor_command(env(&[("VISUAL", "  "), ("EDITOR", "nano")])),
+            ("nano".to_owned(), Vec::new())
+        );
+        let fallback = if cfg!(windows) { "notepad.exe" } else { "vi" };
+        assert_eq!(editor_command(env(&[])).0, fallback);
     }
 }

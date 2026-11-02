@@ -65,6 +65,13 @@ pub enum Command {
     ImageOpen(String),
     /// Open a markdown document in the viewer.
     MarkdownOpen(String),
+    /// Open the file manager in a folder (empty: the focused pane's).
+    FilesOpen(String),
+    /// Open a file with what suits it: folders in the file manager,
+    /// pictures and markdown in their viewers, the rest in the editor.
+    FileOpen(String),
+    /// Edit a file with `$VISUAL` or `$EDITOR` in a new pane.
+    FileEdit(String),
 }
 
 /// Static description of a command name.
@@ -192,16 +199,36 @@ pub const COMMANDS: &[CommandInfo] = &[
         description: "Open a markdown document",
         arg: Some("README.md"),
     },
+    info("files.open", "Files: browse this folder"),
+    CommandInfo {
+        name: "file.open",
+        description: "Open a file",
+        arg: Some("notes.txt"),
+    },
+    CommandInfo {
+        name: "file.edit",
+        description: "Edit a file",
+        arg: Some("notes.txt"),
+    },
 ];
 
 /// Commands whose argument is the rest of the line: a path, spaces and
 /// all. The flag says whether the path may be left out.
-const PATH_COMMANDS: [(&str, bool); 2] = [("image.open", false), ("markdown.open", false)];
+const PATH_COMMANDS: [(&str, bool); 5] = [
+    ("image.open", false),
+    ("markdown.open", false),
+    ("files.open", true),
+    ("file.open", false),
+    ("file.edit", false),
+];
 
 fn path_command(name: &str, path: String) -> Option<Command> {
     Some(match name {
         "image.open" => Command::ImageOpen(path),
         "markdown.open" => Command::MarkdownOpen(path),
+        "files.open" => Command::FilesOpen(path),
+        "file.open" => Command::FileOpen(path),
+        "file.edit" => Command::FileEdit(path),
         _ => return None,
     })
 }
@@ -425,6 +452,10 @@ impl fmt::Display for Command {
             Command::ThemeSelect(b) => write!(f, "theme.select {b}"),
             Command::ImageOpen(p) => write!(f, "image.open {p}"),
             Command::MarkdownOpen(p) => write!(f, "markdown.open {p}"),
+            Command::FilesOpen(p) if p.is_empty() => f.write_str("files.open"),
+            Command::FilesOpen(p) => write!(f, "files.open {p}"),
+            Command::FileOpen(p) => write!(f, "file.open {p}"),
+            Command::FileEdit(p) => write!(f, "file.edit {p}"),
         }
     }
 }

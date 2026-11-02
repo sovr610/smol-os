@@ -1,0 +1,11 @@
+---
+source: crates/termos-apps/src/files.rs
+expression: text
+---
+ photos/                    │ buy milk
+ big.log               4.9K │ call home
+ todo.txt               19B │
+                            │
+                            │
+                            │
+ enter open · h up · / filter · . hidden · s sort · r rename · n fold…
