@@ -9,6 +9,7 @@
 //! such as `termos msg` and `termos detach` talk to the server and session
 //! the pane belongs to (`$TERMOS`).
 
+mod agents;
 mod client;
 mod images;
 mod probe;
@@ -148,6 +149,26 @@ enum Cmd {
         #[command(subcommand)]
         action: LangCmd,
     },
+    /// API keys for agents, in the OS keyring or the secrets file.
+    Secret {
+        #[command(subcommand)]
+        action: agents::SecretCmd,
+    },
+    /// AI agents: providers' models, saved conversations, external agents.
+    Agent {
+        #[command(subcommand)]
+        action: agents::AgentCmd,
+    },
+    /// The agents' tamper-evident audit logs.
+    Audit {
+        #[command(subcommand)]
+        action: agents::AuditCmd,
+    },
+    /// The sandbox agents' commands run in.
+    Sandbox {
+        #[command(subcommand)]
+        action: agents::SandboxCmd,
+    },
     /// Diagnostics.
     #[command(hide = true)]
     Debug {
@@ -216,6 +237,11 @@ enum DebugCmd {
     },
     /// Print the hardware TermOS sees (what the system monitor shows).
     Hw,
+    /// Try a TCP connection (can this sandbox reach the network?).
+    Connect {
+        /// `host:port`.
+        addr: String,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -281,6 +307,13 @@ fn resolve_target(cli: &Cli, paths: &Paths) -> anyhow::Result<Target> {
 }
 
 fn main() -> ExitCode {
+    // The sandbox helper (D-061): Landlock, then the command in its place.
+    // Its arguments are not TermOS's, so it is handled before parsing.
+    let args: Vec<String> = std::env::args().collect();
+    if args.get(1).is_some_and(|a| a == "sandbox-exec") {
+        let code = termos_ai::sandbox::helper_main(&args[2..]);
+        return ExitCode::from(u8::try_from(code).unwrap_or(1));
+    }
     let cli = Cli::parse();
     let paths = Paths::detect();
     let config_path = cli.config.clone().unwrap_or_else(|| paths.config_file());
@@ -295,10 +328,17 @@ fn main() -> ExitCode {
         }) => create_command(template.as_deref(), dir.as_deref(), *list, &paths),
         Some(Cmd::Task { name, wait }) => task_command(name.as_deref(), *wait),
         Some(Cmd::Git) => git_command(&paths),
+        Some(Cmd::Secret { action }) => agents::secret_command(action, &paths, &config_path),
+        Some(Cmd::Agent { action }) => agents::agent_command(action, &paths, &config_path),
+        Some(Cmd::Audit { action }) => agents::audit_command(action, &paths),
+        Some(Cmd::Sandbox { action }) => agents::sandbox_command(action, &paths),
         Some(Cmd::Debug {
             what: DebugCmd::Caps { raw },
         }) => debug_caps(*raw),
         Some(Cmd::Debug { what: DebugCmd::Hw }) => debug_hw(),
+        Some(Cmd::Debug {
+            what: DebugCmd::Connect { addr },
+        }) => debug_connect(addr),
         _ => resolve_target(&cli, &paths).and_then(|t| run(&cli, &paths, &config_path, &t)),
     };
     match result {
@@ -414,7 +454,11 @@ fn run(cli: &Cli, paths: &Paths, config_path: &Path, t: &Target) -> anyhow::Resu
             | Cmd::Edit { .. }
             | Cmd::Create { .. }
             | Cmd::Task { .. }
-            | Cmd::Git,
+            | Cmd::Git
+            | Cmd::Secret { .. }
+            | Cmd::Agent { .. }
+            | Cmd::Audit { .. }
+            | Cmd::Sandbox { .. },
         ) => Ok(ExitCode::SUCCESS),
     }
 }
@@ -824,6 +868,25 @@ fn lang_command(action: &LangCmd, paths: &Paths) -> anyhow::Result<ExitCode> {
 
 /// `termos debug hw`: the machine as `termos-hw` reads it, and one sample
 /// taken a second later (CPU load needs two readings).
+fn debug_connect(addr: &str) -> anyhow::Result<ExitCode> {
+    use std::net::ToSocketAddrs as _;
+    let target = addr
+        .to_socket_addrs()
+        .with_context(|| format!("cannot resolve {addr}"))?
+        .next()
+        .with_context(|| format!("{addr} has no address"))?;
+    match std::net::TcpStream::connect_timeout(&target, Duration::from_secs(3)) {
+        Ok(_) => {
+            println!("connected to {target}");
+            Ok(ExitCode::SUCCESS)
+        }
+        Err(e) => {
+            println!("cannot connect to {target}: {e}");
+            Ok(ExitCode::FAILURE)
+        }
+    }
+}
+
 fn debug_hw() -> anyhow::Result<ExitCode> {
     use termos_hw::Source;
     let mut sampler = termos_hw::Sampler::new().context("cannot read this machine")?;
@@ -1116,6 +1179,21 @@ fn run_server(paths: &Paths, config_path: &Path, t: &Target) -> anyhow::Result<E
     opts.socket_path.clone_from(&t.socket);
     opts.handle_signals = true;
     opts.pane_env.extend(pane_path(paths));
+    // Agent windows and audit logs (termos-ai), which the shell opens
+    // without depending on it (ARCHITECTURE.md §4).
+    let home = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
+        .filter(|h| !h.is_empty())
+        .map(PathBuf::from);
+    opts.launcher = Some(std::sync::Arc::new(termos_ai::ui::AgentLauncher::new(
+        std::env::current_exe().ok(),
+        home,
+    )));
+    // Plugins run in the same sandbox, through `termos sandbox run` (D-064).
+    // Only Linux has one; elsewhere a wrapper would add nothing (and on
+    // Windows it could not replace itself with the plugin).
+    if cfg!(target_os = "linux") {
+        opts.plugin_sandbox = std::env::current_exe().ok();
+    }
     let mut server = Server::new(opts, config);
     if let Some(e) = config_error {
         server.notice(Level::Error, format!("using default settings: {e}"));

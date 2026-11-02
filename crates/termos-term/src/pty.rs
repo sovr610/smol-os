@@ -37,6 +37,9 @@ pub struct SpawnSpec {
     pub cwd: Option<PathBuf>,
     /// Extra environment variables (added to the inherited environment).
     pub env: Vec<(String, String)>,
+    /// Inherited variables to leave out (an agent's commands do not get
+    /// the server's keys or sockets).
+    pub env_remove: Vec<String>,
     pub cols: u16,
     pub rows: u16,
 }
@@ -49,6 +52,7 @@ impl SpawnSpec {
             args: Vec::new(),
             cwd: None,
             env: Vec::new(),
+            env_remove: Vec::new(),
             cols,
             rows,
         }
@@ -101,6 +105,9 @@ impl PtyPane {
             cmd.cwd(cwd);
         } else if let Ok(cwd) = std::env::current_dir() {
             cmd.cwd(cwd);
+        }
+        for k in &spec.env_remove {
+            cmd.env_remove(k);
         }
         for (k, v) in &spec.env {
             cmd.env(k, v);
@@ -368,6 +375,7 @@ mod tests {
                 "printf 'hi %s' \"$TERMOS_TEST\"; exit 3".into(),
             ],
             env: vec![("TERMOS_TEST".into(), "there".into())],
+            env_remove: Vec::new(),
             ..SpawnSpec::shell("/bin/sh", 40, 5)
         };
         let pane = PtyPane::spawn(PaneId(1), &spec, tx).expect("spawn");
@@ -427,6 +435,7 @@ mod tests {
         let spec = SpawnSpec {
             args: vec!["/c".into(), "echo hi %TERMOS_TEST%& exit 3".into()],
             env: vec![("TERMOS_TEST".into(), "there".into())],
+            env_remove: Vec::new(),
             ..SpawnSpec::shell("cmd.exe", 40, 5)
         };
         let pane = PtyPane::spawn(PaneId(11), &spec, tx).expect("spawn");

@@ -34,10 +34,17 @@ struct Shared {
 /// stops the server started in it.
 pub struct Env {
     dir: tempfile::TempDir,
+    /// More environment for every `termos` this runs.
+    extra: Vec<(&'static str, PathBuf)>,
 }
 
 impl Env {
     pub fn new(extra_config: &str) -> Arc<Self> {
+        Self::with_vars(extra_config, Vec::new())
+    }
+
+    /// Like [`Env::new`], with more environment variables.
+    pub fn with_vars(extra_config: &str, extra: Vec<(&'static str, PathBuf)>) -> Arc<Self> {
         let dir = tempfile::tempdir().expect("tempdir");
         let cfg = dir.path().join("config").join("termos");
         std::fs::create_dir_all(&cfg).expect("mkdir");
@@ -54,7 +61,7 @@ impl Env {
             ),
         )
         .expect("config");
-        Arc::new(Self { dir })
+        Arc::new(Self { dir, extra })
     }
 
     pub fn path(&self) -> &Path {
@@ -72,6 +79,16 @@ impl Env {
         .socket_path("default")
     }
 
+    /// The directories `termos` uses in this environment.
+    pub fn paths(&self) -> termos_core::paths::Paths {
+        let vars = self.vars();
+        termos_core::paths::Paths::from_env(|k| {
+            vars.iter()
+                .find(|(n, _)| *n == k)
+                .map(|(_, v)| v.to_string_lossy().into_owned())
+        })
+    }
+
     /// Whether the default server's endpoint still exists.
     pub fn server_alive(&self) -> bool {
         termos_core::local::exists(&self.socket())
@@ -79,23 +96,34 @@ impl Env {
 
     fn vars(&self) -> Vec<(&'static str, PathBuf)> {
         let d = self.path();
-        vec![
+        let mut v = vec![
             ("HOME", d.to_owned()),
             ("XDG_CONFIG_HOME", d.join("config")),
             ("XDG_STATE_HOME", d.join("state")),
             ("XDG_RUNTIME_DIR", d.join("run")),
+            ("XDG_DATA_HOME", d.join("data")),
             ("SHELL", "/bin/sh".into()),
             ("TERM", "xterm-256color".into()),
             ("PS1", "$ ".into()),
             // cmd's prompt, `$ ` like the POSIX shell's.
             ("PROMPT", "$$$S".into()),
-        ]
+        ];
+        v.extend(self.extra.iter().cloned());
+        v
     }
 
     /// Runs `termos ARGS` without a terminal (`ls`, `msg`, …).
     pub fn run(&self, args: &[&str]) -> Output {
+        self.run_in(self.path(), args)
+    }
+
+    /// Runs `termos ARGS` in `dir`, without a terminal.
+    pub fn run_in(&self, dir: &Path, args: &[&str]) -> Output {
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_termos"));
-        cmd.args(args).env_remove("TERMOS").env_remove("TMUX");
+        cmd.args(args)
+            .current_dir(dir)
+            .env_remove("TERMOS")
+            .env_remove("TMUX");
         for (k, v) in self.vars() {
             cmd.env(k, v);
         }
@@ -124,6 +152,11 @@ impl Termos {
     /// `/bin/sh` as the shell.
     pub fn start(extra_config: &str) -> Self {
         Self::spawn(Env::new(extra_config), &[])
+    }
+
+    /// Starts `termos` in an environment made beforehand.
+    pub fn start_in(env: Arc<Env>) -> Self {
+        Self::spawn(env, &[])
     }
 
     /// Another client in the same environment: `termos ARGS` on a new

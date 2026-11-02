@@ -364,7 +364,7 @@ rewrite history.
   - Periodic snapshots: they cost wakeups (D-028).
 
 ## D-034: Plugins v1 (refines the out-of-process part of D-013)
-- **Status:** Accepted (lead), refined by D-040 (token source, SDK transport) · 2026-11-01
+- **Status:** Accepted (lead), refined by D-040 (token source, SDK transport) and D-064 (the sandbox) · 2026-11-01
 - **Decision:**
   - **Install and consent:** a plugin is a directory `~/.config/termos/plugins/<name>/` with a `plugin.toml`:
     - `name` (must equal the directory name: lowercase, digits, `-`, `_`), `version`, `description`;
@@ -613,6 +613,69 @@ rewrite history.
   - **jdtls** is pinned by its milestone URL; TermOS moves the pin.
 - **Alternatives:** one Java for every language (jdtls would force Java 25 on kotlin-language-server); a separate tool list per server (more registry for the same result).
 
+## D-058: M6 owner answers: our own thin LLM clients; an age file for secrets where no keyring exists
+- **Status:** Accepted (owner) · 2026-11-02
+- **Decision:**
+  - **LLM clients (owner, resolves O-4):** our own thin clients over `reqwest` behind the `Provider` trait, sharing one SSE parser, instead of provider SDK crates (`async-openai` and others). Model listing, streaming and tool calls keep one shape across providers, and a provider's API changes reach us only through code we own and test against recorded fixtures.
+  - **Secrets where there is no keyring (owner, resolves O-5):** an age file (`<data>/secrets.age`) encrypted to a passphrase (scrypt), unlocked for the life of the server when an agent first needs a key. TPM sealing may come later. Where a keyring service exists (Secret Service on Linux, Keychain on macOS, Credential Manager on Windows), keys go there; `[secrets] store` chooses.
+  - **Crates:** reqwest 0.13 with rustls and the ring provider (aws-lc-rs, reqwest's default, carries OpenSSL-licensed code, which D-003 rules out); `keyring` 4 (zbus for the Secret Service: no C library to link); `age` 0.11 (0.12 pulls P-256 code with a timing advisory in `crypto-bigint` 0.5, for recipients TermOS never uses; the file format is the same). cargo-deny ignores five "unmaintained" notices, each with its reason in `deny.toml`: three crates zbus folded into itself, and two used only at build time by age's localisation macros.
+  - **TLS is a feature of termos-ai (`tls`, on by default):** ring compiles C, which the clippy check for Windows run from Linux cannot build, as with wasmtime (D-051). Without it only plain-HTTP endpoints (local servers) work, and saying so is the error.
+- **Alternatives:** SDK crates (one per provider, each with its own types and stream model); a TPM-sealed key first (not every board has a TPM, and the passphrase is needed as a fallback anyway); `rustls-rustcrypto` as the provider (not mature).
+
+## D-059: The agent runtime: a session per window, provider-neutral and append-only
+- **Status:** Accepted (lead) · 2026-11-02
+- **Decision:**
+  - **Windows without a dependency:** `termos_core::app::Launcher` lets the shell open agent windows and the audit viewer (`agent.open [profile]`, `agent.resume [id]`, `audit.open`; prefix `a` and `A`) without depending on termos-ai; the `termos` binary hands the server a launcher (ARCHITECTURE.md §4). Apps also gained `handle_paste`.
+  - **A session per window:** each agent window runs its session on a thread of its own with a single-threaded tokio runtime; the window and the session share a `View` (transcript, phase, usage) behind a mutex, and the session wakes the window (`AppWaker`). Closing the window ends the session, its commands and its MCP servers. Nothing runs while a window waits for input.
+  - **Providers (D-058):** one `Provider` trait (`list_models`, `chat` streaming deltas and returning the whole reply). Anthropic: Messages API version 2026-10-21, no sampling parameters and no `thinking` setting (each model's default), `eager_input_streaming` on every tool (inputs are parsed and checked here: an input that is not a JSON object, or cut off by the token limit, is answered with an error, never run), top-level prompt caching, `refusal` stops shown, model limits from the Models API. The OpenAI family: Chat Completions for every server (it is what Ollama, vLLM, LM Studio, OpenRouter and Moonshot share), `max_completion_tokens` for OpenAI itself, usage in the stream; Kimi's `reasoning_content` is sent back with its tool calls. No idle HTTP connections are pooled (hyper's pool keeps a timer).
+  - **Conversations are append-only:** blocks a provider needs back unchanged (Anthropic's `thinking` blocks with their signatures, anything unknown) are kept verbatim as `Opaque`; the system prompt and tool list are fixed for the session. After a cancelled reply, the next message joins the last user message instead of editing anything the model saw.
+  - **The loop:** up to 4 tries for a rate-limited, overloaded or failed request, 2/4/8 s apart, only before any output arrived; at most 60 rounds of tool calls per message, then the user is asked to continue; Esc cancels the reply or the running call, and calls left over are answered "cancelled".
+  - **Tokens and cost:** per session, including cache reads and writes; cost only with prices from `[agents.providers.<name>.prices]` or the provider's own list (OpenRouter's).
+  - **Tools:** `read_file`, `list_dir`, `search_code` (ripgrep's `grep` and `ignore` crates), `write_file`, `edit_file`, `run_command`, `fetch_url`, MCP tools. `edit_file` is the planned `apply_patch` as exact replacement (the old text must appear once): models apply that far more reliably than unified diffs, and the diff shown is computed from the result. An edit is checked again before it is written (the file may have changed while the user decided). `fetch_url` never follows redirects, so each new host goes through the permissions.
+  - **History:** `$XDG_STATE_HOME/termos/agents/<id>.json`, mode 0600, rewritten after every message, with the audit log's last hash; `[agents] history = false` keeps none.
+- **Alternatives:** agents as `termos agent` processes in PTY panes (no shared theme, images or confirmation overlays, and every UI piece twice); one runtime for all sessions (one slow session's blocking work would stall the others); the OpenAI Responses API (only OpenAI has it); unified-diff `apply_patch`.
+
+## D-060: The permission engine
+- **Status:** Accepted (lead) · 2026-11-02
+- **Decision:**
+  - **Rules:** a profile gives each class (`read`, `write`, `command`, `network`, `mcp`) `allow`, `ask` or `deny`; defaults: read allow, the rest ask. Filesystem scopes are the workspace (the focused pane's folder) plus `read-paths` and `write-paths`; paths are resolved with symbolic links followed as far as they exist, so a link cannot lead out unnoticed.
+  - **Always asks** (a `deny` still refuses): deleting files, discarding changes, rewriting history, pushing and force-pushing, installing or removing packages, running a downloaded script, running as another user, writing disks, stopping processes, changing the system, writing outside the scopes, reading or writing credentials (`~/.ssh`, `~/.aws`, keyrings…), anything on the network (except `fetch_url` to a listed domain with `network = "allow"`), and every command when the sandbox is missing or partial. TermOS's own secrets file is never read or written by tools.
+  - **Commands** are classified, not interpreted: split at unquoted `;`, `&&`, `||`, `|`, `&` and newlines; wrappers (`env`, `timeout`, `nice`…) and assignments skipped. `allow-commands` patterns (`*` matches anything) must match every part; a command substitution (`$(…)`, backticks, `<(…)`) or an unclosed quote always falls back to asking.
+  - **"Allow for this session"** covers one exact command line, every write inside the scopes, reads of one folder, one MCP tool or one host; it is never offered for what always asks.
+- **Alternatives:** parsing commands with a real shell grammar (more code, and still not what the shell would do with aliases and functions; the sandbox is the boundary, the classifier only decides when to ask); approvals per tool class (too coarse for commands).
+
+## D-061: The agent sandbox: bubblewrap, then Landlock through a re-executed helper
+- **Status:** Accepted (lead) · 2026-11-02
+- **Decision:**
+  - **bubblewrap:** `--unshare-all`, `--die-with-parent`, the root bound read-only, a private `/tmp`, the workspace and `write-paths` bound read-write, credentials and the runtime folder (D-Bus, ssh-agent and TermOS sockets) hidden behind empty folders (files behind `/dev/null`), TermOS's conversations, audit logs and secrets file hidden; the network shared only when the call asked for it and the user agreed; the start folder bound read-only if nothing else makes it exist.
+  - **Landlock** (ABI 6, best effort): `termos sandbox-exec` — the same binary, handled before argument parsing — restricts itself (writes beneath the writable folders and a few devices, no TCP without the network, scoped signals and abstract sockets), drops environment variables named like credentials, and `exec`s the command. No code runs between `fork` and `exec`, so no `unsafe` is needed.
+  - **Less:** Landlock alone (no bubblewrap) confines writes and TCP but hides nothing and leaves UDP, so it counts as partial and every command asks; the system `/tmp` is then replaced by a private `TMPDIR`. Without either, commands run unconfined and every one asks, with a warning in the window. macOS is confirm-only by design; Windows is `TODO(M9)`. `sandbox = "required"` refuses without bubblewrap.
+  - **PTY:** `run_command` runs on a PTY (termos-term) so programs behave as in a pane; the window shows a terminal of the output, the model gets plain text (escape sequences stripped, carriage returns applied, the last 30 KiB, redacted). Two minutes by default, at most thirty.
+  - **`termos sandbox run|status`:** the same sandbox from the shell, used by external agents and plugins (D-063, D-064). `termos debug connect HOST:PORT` checks network reach.
+  - **CI** installs bubblewrap on the Linux runners, allows unprivileged user namespaces (Ubuntu 24.04 restricts them through AppArmor) and sets `TERMOS_REQUIRE_SANDBOX=1`, so the sandbox tests fail rather than skip there.
+- **Alternatives:** Landlock in a `pre_exec` hook (unsafe, and not async-signal-safe in a threaded server); seccomp now (after 1.0, ROADMAP); firejail or nsjail (more to install; bubblewrap is on most desktops already for Flatpak).
+
+## D-062: Audit logs are hash-chained JSONL; secrets are redacted before anything is written
+- **Status:** Accepted (lead) · 2026-11-02
+- **Decision:**
+  - **Format:** `$XDG_STATE_HOME/termos/audit/<session>.jsonl`, mode 0600, one JSON object per line: `seq`, `time`, `prev` (the SHA-256 of the previous line; 64 zeros first), `session`, and the event: the session (profile, provider, model, workspace, sandbox), a tool call (redacted arguments, `allowed`/`approved`/`denied`/`refused`/`invalid`/`cancelled`, why, a redacted result summary, success) or a note. Lines are synced as written.
+  - **Verification:** `termos audit verify` walks the chain; the session's conversation file holds the last hash, so lines cut off the end show too. A log that does not verify is never continued: it is renamed `.broken` and a new chain starts with a note saying so. Without a working audit log, no tool runs.
+  - **Redaction:** the values of the keys the session resolved, and text shaped like a credential (provider key prefixes, bearer tokens, private key blocks, `password=…`), become `[redacted]` in audit records, tool results the model sees, and saved conversations. What the user types loses only the session's own keys.
+  - **Canary tests:** an agent session against a mock provider with a canary key in the secrets file and in the server's environment (the real desktop on a PTY) must leave it in no log, audit record, conversation, snapshot, config or runtime file, and in no request to the provider; and the library's session test checks the same for a key the user pasted.
+- **Alternatives:** a log signed with a key (where would the key live?); hashing entries without the line bytes (the JSON would need canonicalizing).
+
+## D-063: MCP servers through rmcp; external agents through presets
+- **Status:** Accepted (lead) · 2026-11-02
+- **Decision:**
+  - **MCP:** the `rmcp` 3.8 client, without its default features or aws-lc (`reqwest-tls-no-provider`). `[agents.mcp.<name>]` with `command` (stdio, started in the sandbox like commands, network only with `network = true`) or `url` (streamable HTTP over TermOS's own HTTP client, a bearer token from the secret store). Only servers the profile lists start, with the session, and they stop with it. Tools reach the model as `mcp__<server>__<tool>` and follow the `mcp` rule.
+  - **External agents:** built-in presets for Claude Code, Codex CLI, Gemini CLI, aider and opencode; `[agents.external.<name>]` adds or changes them. `agent.external NAME` opens a float running `termos agent external NAME` in the focused pane's folder; a preset with `sandbox = true` runs under `termos sandbox`, with its environment kept (its own keys), the network on, and its settings folders writable. A missing program is reported with where to get it.
+- **Alternatives:** our own MCP client (the protocol moves quickly; rmcp is the reference SDK); external agents as in-process apps (they are terminal programs already).
+
+## D-064: Launched plugins run in the agent sandbox
+- **Status:** Accepted (lead; completes D-034's deferred item) · 2026-11-02
+- **Decision:** with `[plugins] sandbox = true` (the default), the server starts each plugin through `termos sandbox run --keep-env --workspace <state>/plugins/<name> --keep <session socket> [--net] -- <exec…>` in the plugin's directory. The plugin's own data folder (`TERMOS_PLUGIN_DATA`, made for every plugin, sandboxed or not) is the only writable one besides a temporary folder; the session socket is bound back into the hidden runtime folder; the network needs the manifest's new `network` permission. `termos sandbox run` replaces itself with the sandbox, so stopping a plugin stops what runs inside. Without a sandbox (macOS, Windows, no bubblewrap or Landlock) plugins run as before.
+- **Alternatives:** a sandbox library call inside termos-shell (it would depend on termos-ai); off by default (plugins written before M6 needing the network now have to ask for it, which is the point).
+
 ---
 
 ## Open questions (the owner will be asked before the milestone that needs each one)
@@ -622,8 +685,8 @@ rewrite history.
 | O-1 | Default WM keybinding scheme: a tmux-style leader key, or modifier chords (Alt/Super)? | M2 | **Resolved by D-023:** tmux prefix `C-b`. |
 | O-2 | PTY layer: `portable-pty`, `pty-process` or direct `rustix` openpty with tokio `AsyncFd`? | M1 | **Resolved by D-025:** `portable-pty`. |
 | O-3 | Git UI: embed lazygit/gitui in a window, or build our own panel? | M5 | **Resolved by D-053:** embed lazygit. |
-| O-4 | LLM clients: provider SDK crates (async-openai, others) or our own thin reqwest clients behind `Provider`? | M6 | Own thin clients plus shared SSE parsing, so the model-listing and tool-calling shapes stay uniform. |
-| O-5 | Secret store on bare metal, where there's no Secret Service: an age-encrypted file unlocked by passphrase, a TPM-sealed key, or something else? | M6 | age file with a passphrase; TPM later. |
+| O-4 | LLM clients: provider SDK crates (async-openai, others) or our own thin reqwest clients behind `Provider`? | M6 | **Resolved by D-058:** our own thin clients with shared SSE parsing. |
+| O-5 | Secret store on bare metal, where there's no Secret Service: an age-encrypted file unlocked by passphrase, a TPM-sealed key, or something else? | M6 | **Resolved by D-058:** an age file with a passphrase; TPM later. |
 | O-6 | llama.cpp integration: a managed `llama-server` subprocess or FFI (`llama-cpp-2`)? | M7 | Subprocess: crash isolation, a ready-made OpenAI API, easy CUDA/ROCm/Vulkan build swaps. |
 | O-7 | Rust-native inference: ONNX Runtime (`ort`), candle, or both? | M7 | candle first (pure Rust, no C++ runtime). |
 | O-8 | WASM engine for widgets: wasmtime (component model, JIT, larger) or wasmi (interpreter, small)? | M4 | **Resolved by D-042:** wasmtime. |

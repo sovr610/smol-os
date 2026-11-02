@@ -123,6 +123,9 @@ crate never depends on one listed above it.
 
 The in-process `App` trait (§9) lives in `termos-core`. That lets apps,
 agents and devkit panels each provide windows without depending on the shell.
+Agent windows reach the desktop through `termos_core::app::Launcher`, which
+the `termos` binary gives the server (D-059), so the shell never depends on
+termos-ai.
 Frontends depend only on `termos-render` and `termos-core`, which keeps the
 client small.
 
@@ -275,7 +278,7 @@ Window = { id, title, source: Pty | App | Plugin | Agent, state: normal | minimi
   - panes: `pane.list/send-text/send-keys/kill`;
   - other: `notify.send`, `command.run`, `plugin.list`.
   - Every named command and plugin command is also a method of its own name.
-  - Event subscriptions (`subscribe`) are planned for when agents need them (M6).
+  - Event subscriptions (`subscribe`) are not built: nothing needs them yet (the agents of M6 run inside the server).
 - **Plugin stream:** JSON-RPC as well; see §9 and D-034.
 - **Inside panes:** `TERMOS=<socket>,<server pid>,$<session id>` lets CLI commands run in a pane find their server and session.
 - **Over SSH:** `ssh -t host termos` runs a client on the remote host and attaches to (or starts) that host's server; detaching leaves everything running there. Later, a local client could attach to a remote server through a forwarded socket so that local capabilities such as Kitty graphics apply; the protocol is transport-agnostic.
@@ -293,6 +296,7 @@ Window = { id, title, source: Pty | App | Plugin | Agent, state: normal | minimi
 - **Graphics:** `[graphics] protocol = "auto" | "kitty" | "sixel" | "iterm2" | "blocks"`.
 - **Clipboard:** `[clipboard] history` (entries kept in memory, default 50; 0 keeps none).
 - **Widgets:** `[widgets.<name>]` for WASM status-line widgets (§9, D-051).
+- **Agents (§11):** `[agents]` (providers, profiles, MCP servers, external agents) and `[secrets] store`; keys are named (`keyring:<name>`), never written.
 - **Settings app:** writes config.toml itself (toml_edit, comments kept), only after the result parses as a config.
 - **Session persistence (D-011, D-033):**
   - **Where:** snapshots go to `$XDG_STATE_HOME/termos/sessions/<server>/<session>.json`, with a versioned schema, mode 0600, written atomically.
@@ -307,7 +311,7 @@ Window = { id, title, source: Pty | App | Plugin | Agent, state: normal | minimi
 ## 9. Apps and plugins (D-013)
 
 - **Built-in apps** (`termos-apps`) implement an in-process trait defined in `termos-core` (agent windows and devkit panels implement it too):
-  `App { title, handle_key/handle_mouse -> effect, render(area, &mut ratatui::Buffer, theme), images, set_waker, deadline, on_timer }`.
+  `App { title, handle_key/handle_mouse/handle_paste -> effect, render(area, &mut ratatui::Buffer, theme), images, set_waker, deadline, on_timer }`.
   - They run on the server loop and push heavy work to their own threads, asking for a redraw with `AppWaker` when it is done.
   - **Timers (D-052):** `deadline`/`on_timer` are scheduled only while the app is on screen for some client, so hidden apps cost nothing (D-028).
   - **Effects:** redraw, close, notify, run a command, `Copy(text)` (clipboard and history), `PasteAndClose(text)`.
@@ -328,7 +332,7 @@ Window = { id, title, source: Pty | App | Plugin | Agent, state: normal | minimi
     - Keys, mouse, resizes and closes in its windows, and command invocations, come back as notifications.
   - **Windows:** plugin windows are in-process `App`s whose content the plugin draws remotely.
   - **Failure:** a plugin that exits or disconnects loses its UI and the user is notified. There's no automatic restart in v1.
-  - **Later:** sandboxing launched plugins comes with the agent sandbox (M6).
+  - **Sandbox (D-064):** on Linux, launched plugins run in the agent sandbox (§11) through `termos sandbox run`: only their own data folder (`TERMOS_PLUGIN_DATA`) writable, credentials hidden, the session socket kept reachable, the network only with the manifest's `network` permission. `[plugins] sandbox = false` turns it off.
   - **Languages:** `termos-plugin` is the Rust SDK; other languages speak JSON-RPC directly (the tests include a plain Python plugin).
 - **WASM widgets (D-051):** status-line widgets as components of the `termos:widget` WIT world (`crates/termos-plugin/wit/widget.wit`): `init(settings)`, `render(width) -> spans`, `tick`, `on-event(click)`; each call returns when the widget next wants to run, so a widget at rest is never called.
   - **Config:** `[widgets.<name>] path, settings, dirs, max-width`.
@@ -342,7 +346,7 @@ Window = { id, title, source: Pty | App | Plugin | Agent, state: normal | minimi
 
 termos-devkit holds all of it; the CLI wires it in, and the desktop reaches it by running `termos` subcommands in panes, so termos-shell never depends on termos-devkit (§4).
 
-- **mise (D-053):** the `mise` on `PATH` when it is 2025.10.0 or newer (or `TERMOS_MISE`), else a pinned release (2026.10.14) fetched with the system's `curl` into `<data>/mise/<version>/` and checked against SHA-256 sums compiled into TermOS. TermOS itself links no TLS stack. Panes get mise's shims (and a fetched mise) at the front of `PATH`.
+- **mise (D-053):** the `mise` on `PATH` when it is 2025.10.0 or newer (or `TERMOS_MISE`), else a pinned release (2026.10.14) fetched with the system's `curl` into `<data>/mise/<version>/` and checked against SHA-256 sums compiled into TermOS. (TermOS links rustls since M6, for agents, D-058; mise is still fetched with `curl`.) Panes get mise's shims (and a fetched mise) at the front of `PATH`.
 - **Toolchains (D-054):** `termos lang install|use|list|remove|check <lang>[@version]`. The runtime and its helpers become global defaults (`mise use --global`); language servers and debuggers are only installed (`mise install`), and editors start them through `mise exec` with their exact versions. Projects pin versions in `mise.toml` (or `.tool-versions`).
 - **Registry (`langs`):** per language: the runtime, helpers, servers (mise spec, command, filetypes, root markers, whether a project root is required), the debugger (with port arguments for adapters that listen on a socket), Helix names, and platform limits naming the tool that has no build there (`termos lang install` leaves it out and says why).
 - **Coverage** (each row checked on Linux x86_64 and aarch64 by the language CI):
@@ -374,34 +378,33 @@ termos-devkit holds all of it; the CLI wires it in, and the desktop reaches it b
 
 ---
 
-## 11. AI agent runtime (M6)
+## 11. AI agent runtime (M6; D-058–D-064)
 
-- **Providers:**
+termos-ai holds all of it; the CLI hands the server a launcher for its windows (§4), and `termos secret|agent|audit|sandbox` reach it from the shell. User guide: [docs/agents.md](docs/agents.md).
+
+- **Providers (D-058, D-059):**
   ```rust
   trait Provider {
-      fn id(&self) -> &ProviderId;
-      async fn list_models(&self) -> Result<Vec<ModelInfo>>;
-      fn chat(&self, req: ChatRequest) -> BoxStream<'_, Result<ChatEvent>>; // TextDelta, ToolCall*, Usage, Stop
+      fn name(&self) -> &str;
+      fn kind(&self) -> ProviderKind;
+      fn list_models(&self) -> BoxFuture<'_, Result<Vec<ModelInfo>, ProviderError>>;
+      fn chat<'a>(&'a self, req: &'a ChatRequest, on_delta: &'a mut (dyn FnMut(Delta) + Send))
+          -> BoxFuture<'a, Result<Reply, ProviderError>>; // deltas: text, thinking, tool start
   }
   ```
-  - Implementations: Anthropic (native Messages API), OpenAI, Moonshot Kimi (an OpenAI-compatible preset with its own base URL and listing behaviour), a generic OpenAI-compatible provider (Ollama, vLLM, LM Studio, OpenRouter), and local (the router from §12).
-  - **Model names are never hardcoded.** They're listed from the provider APIs; when a provider can't list models, the user types one in. Agent profiles store the chosen model.
-- **Agent loop:** stream the response → collect tool calls → check the permission engine → confirm if needed → run in the sandbox → return the results → continue. It supports cancellation, persists conversation history, and accounts tokens and cost per session. Cost is shown only when prices are known, from the provider API or user configuration.
-- **Tools:**
-  - `read_file`, `write_file` / `apply_patch` (with a diff preview), `list_dir`;
-  - `search_code`, using the ripgrep crates `grep` and `ignore`;
-  - `run_command`, PTY-backed so its output is visible in the agent window;
-  - `fetch_url`;
-  - MCP tools.
-- **Permissions:** each agent profile has filesystem scopes, command allow/deny patterns, a network domain allowlist and an MCP server allowlist, with ask/allow/deny per tool class. Destructive or network actions *always* ask: deleting files, force-pushing, writing outside the workspace, installing packages, piping curl into a shell, and the like.
-- **Sandbox:**
-  - Commands run under bubblewrap: new mount/pid/net namespaces, the system bound read-only, the workspace read-write, and no network unless granted.
-  - Landlock rulesets add defence in depth, and seccomp is planned.
-  - On macOS hosted mode the sandbox degrades to confirm-only, with an explicit warning.
-- **Audit:** an append-only JSONL file per agent session in `$XDG_STATE_HOME/termos/audit/`. Entries are hash-chained (SHA-256 of the previous entry) and record the tool, redacted arguments, the decision, a result summary and timestamps. A viewer app displays them.
-- **MCP:** an `rmcp` client over stdio and streamable HTTP. Each server must be allowlisted, and local servers launch inside the sandbox.
-- **External CLI agents:** Claude Code, Codex CLI and others get launcher presets that open them in PTY windows, optionally under a sandbox profile.
-- **Secrets:** stored with the `keyring` crate (Secret Service on Linux, Keychain on macOS), or in an encrypted file store where no keyring service exists, as on bare metal (O-5). They're handled as `secrecy` types, and config refers to them by name (D-017).
+  - Our own thin clients over reqwest (rustls with ring) and one SSE parser (fuzzed: `sse_parse`): Anthropic's Messages API (version 2026-10-21, eager tool-input streaming, prompt caching, `thinking` blocks kept verbatim, `refusal` handled), and Chat Completions for OpenAI, Moonshot Kimi (its reasoning sent back with tool calls), any OpenAI-compatible server (Ollama, vLLM, LM Studio, OpenRouter) and the local router of §12 (`base-url` until M7).
+  - **Model names are never hardcoded.** They're listed from the provider APIs (with context windows, output limits and, where listed, prices); when a provider can't list models, the user types one in. Profiles can store the chosen model.
+- **Agent windows and the loop (D-059):** each window runs its session on its own thread with a single-threaded tokio runtime and shares a `View` with the window. Stream the reply → collect tool calls → ask the permission engine → confirm in the window if needed (diffs for file changes) → run (commands in the sandbox) → return the results → continue. Esc cancels; requests that failed before any output are retried (4 tries); 60 rounds of tool calls per message at most. Conversations are append-only and persisted in `$XDG_STATE_HOME/termos/agents/` (resume with `agent.resume`); tokens and cost are counted per session, cost only where prices are known (config or the provider's list).
+- **Tools:** `read_file`, `write_file` / `edit_file` (exact replacement, with a diff preview), `list_dir`; `search_code` (ripgrep's `grep` and `ignore` crates); `run_command`, PTY-backed so its output shows in the window as a terminal (the model gets plain text); `fetch_url` (redirects reported, not followed); MCP tools.
+- **Permissions (D-060):** each profile has filesystem scopes (the workspace, `read-paths`, `write-paths`), command allow/deny patterns, a domain allowlist for `fetch_url`, an MCP server list, and ask/allow/deny per tool class. Destructive or network actions *always* ask: deleting files, discarding changes, force-pushing, installing packages, piping a download into a shell, running as another user, writing outside the workspace, touching credentials, and every command when the sandbox is missing or partial. "Allow for this session" is offered for the rest.
+- **Sandbox (D-061):**
+  - Commands run under bubblewrap: new mount/pid/ipc/uts/net namespaces, the system bound read-only, the workspace read-write, a private `/tmp`, credentials and the runtime folder hidden, and no network unless granted.
+  - Landlock adds defence in depth from inside, through `termos sandbox-exec` (writes, TCP, signal and abstract-socket scopes), which also drops credential-like environment variables. Landlock alone counts as partial (every command asks). seccomp is planned (after 1.0).
+  - On macOS hosted mode the sandbox degrades to confirm-only, with an explicit warning; on Windows too, until M9.
+- **Audit (D-062):** an append-only JSONL file per agent session in `$XDG_STATE_HOME/termos/audit/`. Entries are hash-chained (SHA-256 of the previous line; the conversation keeps the last hash) and record the tool, redacted arguments, the decision and why, a redacted result summary and timestamps. `termos audit verify` checks them; the viewer app (`audit.open`) lists them.
+- **MCP (D-063):** an `rmcp` client over stdio and streamable HTTP. Each server must be listed by the profile; local servers launch inside the sandbox.
+- **External CLI agents (D-063):** Claude Code, Codex CLI, Gemini CLI, aider and opencode have launcher presets (`agent.external NAME`) that open them in PTY windows, optionally under the sandbox.
+- **Secrets (D-017, D-058):** stored with the `keyring` crate (Secret Service on Linux, Keychain on macOS, Credential Manager on Windows), or in an age file locked with a passphrase where no keyring service exists, as on bare metal. They're handled as `secrecy` types, config refers to them as `keyring:<name>`, and they are redacted from everything TermOS writes.
 
 ---
 
@@ -460,11 +463,11 @@ termos-devkit holds all of it; the CLI wires it in, and the desktop reaches it b
 - **WASM widgets (D-051):** WASI without network or environment; files only where `dirs` grants, read-only; fuel, memory, time and output bounds on every call.
 - **Clipboard history (D-050):** in the server's memory only; never in logs, `Debug` output or snapshots.
 - **File manager:** deleting moves to the system trash; a permanent delete needs a second confirmation. Previews never run anything; pictures in markdown are read only from local files.
-- **No plaintext secrets** anywhere: config, logs, snapshots or audit records.
+- **No plaintext secrets** anywhere: config, logs, snapshots, conversations or audit records. API keys live in the OS keyring or an age-encrypted file (D-058).
   - Scrollback persistence is opt-in.
   - Snapshots keep command lines only for allowlisted programs.
   - Plugin tokens are never logged.
-- **Agents and plugins:** least privilege, sandboxing, confirmation for destructive or network actions, and a tamper-evident audit log.
+- **Agents and plugins (D-060–D-064):** least privilege (profiles), the bubblewrap + Landlock sandbox for agents' commands, local MCP servers and launched plugins, confirmation for destructive or network actions, a tamper-evident audit log, and redaction of keys and credential-shaped text from everything written down. A canary-key test runs a whole session on the real desktop and checks logs, audit records, conversations and snapshots.
 - **Listeners:** nothing listens on the network by default. The model router binds localhost or a Unix socket and needs a token.
 - **Supply chain:** cargo-deny checks licenses, advisories and sources (crates.io only); `Cargo.lock` is committed; Actions are pinned to major versions (SHA pinning to be reconsidered in M9).
 - **Developer tools (D-053, D-056):** the only download TermOS makes itself is mise, over HTTPS only (`curl --proto =https --tlsv1.2`), checked against SHA-256 sums compiled in before it is used. Everything else is mise's to download and verify. The `mise.toml` files TermOS writes list only tools and are marked trusted; TermOS never trusts a project's own mise config for you. Neovim plugins are pinned to commits.
@@ -490,6 +493,7 @@ termos-devkit holds all of it; the CLI wires it in, and the desktop reaches it b
 - **WASM widgets** are tested with the sample's build kept in `crates/termos-shell/tests/fixtures/`; CI rebuilds it from source and runs the same tests against the fresh build.
 - **Snapshot tests** (`insta`): a `Grid` renders to text plus a style layer. The headless client drives the full desktop: inject input, then snapshot the screen. These cover chrome, layouts, apps and overlays.
 - **Integration tests:** real PTYs (`sh -c …`), client/server over the socket (sessions, detach, snapshots and restore, plugins), the real daemon driven through its CLI, config hot reload, and recorded provider fixtures with mock servers. CI never uses live API keys.
+- **Agents (M6):** provider contract tests run the real HTTP clients against a mock server answering with fixtures in the documented formats (streams cut at arbitrary bytes); a whole session runs against a scripted provider (passphrase, model list, approvals, a PTY command, the audit chain, the history); the permission engine, classifier, redactor and audit chain have unit tests; through the real binary, the sandbox must refuse writes outside the workspace and the network, a sandboxed plugin must still reach the session socket, a tampered log must fail `termos audit verify`, and the canary key must be nowhere after a session on the desktop. No live keys anywhere.
 - **Developer environment:** `termos lang`, `edit`, `create`, `task` and `lang check` are tested against a stand-in mise script (`TERMOS_MISE`) that logs its arguments and runs what follows `exec --`; DAP framing against in-memory and socket adapters. Real installs, builds, LSP and DAP handshakes run in the language CI (§17).
 - **Property tests** (`proptest`) for layout invariants (no overlaps or gaps, sizes sum to the parent), rectangle subtraction and the block raster.
 - **Golden bytes** for the Kitty, Sixel and iTerm2 encoders and the Kitty keyboard protocol table, and a Sixel round trip.
@@ -498,7 +502,8 @@ termos-devkit holds all of it; the CLI wires it in, and the desktop reaches it b
   - config parsing (M2);
   - protocol decoding (`proto_decode`: frames and JSON-RPC);
   - capability replies (`caps_reply`), Sixel decoding (`sixel_decode`) and the image interceptor (`apc_dcs_intercept`);
-  - markdown layout (`markdown_layout`).
+  - markdown layout (`markdown_layout`);
+  - provider event streams (`sse_parse`).
   
   CI runs a timed smoke pass on every push and longer scheduled runs.
 - **QEMU boot tests** (M8).
@@ -511,7 +516,7 @@ termos-devkit holds all of it; the CLI wires it in, and the desktop reaches it b
 - **Workspace and tooling:** a pinned toolchain (D-005); `cargo xtask ci` mirrors CI locally (D-020).
 - **CI** (D-016, D-041):
   - lint: fmt, repo checks, cargo-deny, and clippy for the Windows target from Linux (without default features: wasmtime compiles C there); `cargo xtask ci` also runs clippy for macOS arm64 when that target is installed;
-  - clippy, tests and a daemon smoke test (`new -d`, `ls`, `msg`, `kill-server`) on x86_64 Linux, aarch64 Linux, macOS arm64 and Windows x86_64;
+  - clippy, tests and a daemon smoke test (`new -d`, `ls`, `msg`, `kill-server`) on x86_64 Linux, aarch64 Linux, macOS arm64 and Windows x86_64; the Linux runners install bubblewrap and require the agent sandbox (D-061);
   - zigbuild cross-builds; a fuzz smoke pass; the performance budgets;
   - the sample WASM widget built from source for `wasm32-wasip2`, with the widget tests run against it;
   - the language CI (D-053, D-056, `languages.yml`): `termos lang check` for every language on ubuntu-24.04 and ubuntu-24.04-arm, nightly, on developer-environment changes and on demand; Rust, Python and Go on x86_64 on every push.
@@ -529,7 +534,7 @@ termos-devkit holds all of it; the CLI wires it in, and the desktop reaches it b
 | x86_64 Linux | Tier 1 | Tier 1 (UEFI + BIOS) | |
 | aarch64 Linux | Tier 1 | Tier 1 (generic UEFI) | |
 | macOS (arm64, x86_64) | Tier 1 | — | Agent sandbox is confirm-only (§11) |
-| Windows 10 1809+ / 11 (x86_64, native) | Tier 2 | — | Windows Terminal or another VT console; named pipes and ConPTY. Gaps tracked as `TODO(M9)` (D-035) |
+| Windows 10 1809+ / 11 (x86_64, native) | Tier 2 | — | Windows Terminal or another VT console; named pipes and ConPTY. Agent sandbox confirm-only for now. Gaps tracked as `TODO(M9)` (D-035) |
 | WSL2 | Tier 2 | — | |
 | Raspberry Pi 5 / 4 | Tier 2 (on Pi OS) | Tier 1 images | Latency budget 33 ms on Pi 4 |
 | Raspberry Pi 3 / Zero 2 W | Best effort | Best effort | 512 MB–1 GB RAM limits dev tools and local models |

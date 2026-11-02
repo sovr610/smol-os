@@ -48,6 +48,8 @@ pub struct Permissions {
     pub commands: bool,
     /// Post notifications.
     pub notify: bool,
+    /// Reach the network from the sandbox (D-064).
+    pub network: bool,
 }
 
 /// `plugin.toml`.
@@ -382,6 +384,10 @@ pub struct PluginCommand {
 pub(crate) struct PluginHost {
     dir: PathBuf,
     socket: Option<PathBuf>,
+    /// Where each plugin's own writable folder is made.
+    data: Option<PathBuf>,
+    /// The `termos` binary that runs plugins in the sandbox.
+    sandbox: Option<PathBuf>,
     pub(crate) plugins: BTreeMap<String, PluginState>,
     /// Plugins that could not start; tried again only after a reload.
     failed: BTreeSet<String>,
@@ -405,6 +411,8 @@ impl PluginHost {
         Self {
             dir,
             socket: None,
+            data: None,
+            sandbox: None,
             plugins: BTreeMap::new(),
             failed: BTreeSet::new(),
             next_generation: 1,
@@ -415,6 +423,14 @@ impl PluginHost {
 
     pub(crate) fn events(&self) -> mpsc::UnboundedSender<HostEvent> {
         self.events.clone()
+    }
+
+    /// Each plugin gets a writable folder under `data`; with `sandbox`
+    /// (the `termos` binary), plugins started from now on run in the
+    /// agent sandbox through `termos sandbox run` (D-064).
+    pub(crate) fn set_sandbox(&mut self, data: PathBuf, sandbox: Option<PathBuf>) {
+        self.data = Some(data);
+        self.sandbox = sandbox;
     }
 
     /// Plugins can run once the server listens on `socket`.
@@ -479,10 +495,42 @@ impl PluginHost {
         let token = Token::generate().map_err(|e| format!("no random token: {e}"))?;
         let generation = self.next_generation;
         self.next_generation += 1;
-        // TODO(M6): run launched plugins under the agent sandbox (bwrap + landlock).
-        let mut cmd = tokio::process::Command::new(program_path(&dir, &manifest.exec[0]));
-        cmd.args(&manifest.exec[1..])
-            .current_dir(&dir)
+        let program = program_path(&dir, &manifest.exec[0]);
+        let own = match &self.data {
+            Some(data) => {
+                let own = data.join(name);
+                std::fs::create_dir_all(&own)
+                    .map_err(|e| format!("cannot create {}: {e}", own.display()))?;
+                Some(own)
+            }
+            None => None,
+        };
+        let mut cmd = match (&self.sandbox, &own) {
+            // The agent sandbox (D-064): the plugin's own data folder is
+            // its workspace, the session socket stays reachable, and its
+            // environment (its token) is kept.
+            (Some(termos), Some(own)) => {
+                let mut c = tokio::process::Command::new(termos);
+                c.args(["sandbox", "run", "--keep-env", "--workspace"])
+                    .arg(own)
+                    .arg("--keep")
+                    .arg(socket);
+                if manifest.permissions.network {
+                    c.arg("--net");
+                }
+                c.arg("--").arg(&program).args(&manifest.exec[1..]);
+                c
+            }
+            _ => {
+                let mut c = tokio::process::Command::new(&program);
+                c.args(&manifest.exec[1..]);
+                c
+            }
+        };
+        if let Some(own) = &own {
+            cmd.env(env::DATA, own);
+        }
+        cmd.current_dir(&dir)
             .env(env::SOCKET, socket)
             .env(env::TOKEN, token.expose())
             .env(env::NAME, name)
@@ -646,7 +694,8 @@ mod tests {
                 windows: true,
                 status: true,
                 commands: false,
-                notify: false
+                notify: false,
+                network: false
             }
         );
         let cases = [

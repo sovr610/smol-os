@@ -83,6 +83,7 @@ key for each command.
 | `C-b ]` | Paste what you copied |
 | `C-b :` | Command palette (same as `Ctrl+Space`) |
 | `C-b N` | Notification center |
+| `C-b a` / `C-b A` | AI agent: a new conversation / resume one ([agents.md](agents.md)) |
 | `C-b r` | Reload the config file |
 | `C-b d` | Detach (everything keeps running; `termos` reattaches) |
 | `C-b (` / `C-b )` | Previous / next session |

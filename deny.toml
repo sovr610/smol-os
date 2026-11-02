@@ -8,7 +8,20 @@ all-features = true
 [advisories]
 version = 2
 yanked = "deny"
-ignore = []
+# Each entry names why it cannot apply to TermOS or why no fix exists yet.
+ignore = [
+  # zbus 5, which `keyring` uses for the Secret Service (D-058), still
+  # depends on these; upstream folded them into zbus itself
+  # (z-galaxy/zbus#2043) and there is no release without them yet. They
+  # are maintained as part of zbus; nothing is known to be wrong with them.
+  { id = "RUSTSEC-2026-0370", reason = "zvariant: folded into zbus, no release without it yet" },
+  { id = "RUSTSEC-2026-0371", reason = "zbus_names: folded into zbus, no release without it yet" },
+  { id = "RUSTSEC-2026-0372", reason = "zvariant_derive: folded into zbus, no release without it yet" },
+  # Used only at build time, by age's localisation macros reading their
+  # i18n.toml; never on input TermOS receives.
+  { id = "RUSTSEC-2026-0374", reason = "basic-toml: build-time only (age's i18n macros)" },
+  { id = "RUSTSEC-2026-0173", reason = "proc-macro-error2: build-time only (age's i18n macros)" },
+]
 
 [licenses]
 version = 2

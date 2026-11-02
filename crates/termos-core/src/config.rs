@@ -14,6 +14,10 @@ use termos_render::theme::ThemeConfig;
 
 use crate::input::KeyEvent;
 
+pub mod agents;
+
+pub use agents::{AgentsConfig, SecretsConfig};
+
 /// The whole configuration. Every field has a default, so an empty or
 /// missing file is valid.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -45,6 +49,10 @@ pub struct Config {
     /// WASM status-line widgets by name (D-013, D-051).
     pub widgets: std::collections::BTreeMap<String, WidgetConfig>,
     pub dev: DevConfig,
+    /// AI agents (M6, D-059).
+    pub agents: AgentsConfig,
+    /// Where API keys are kept (D-058).
+    pub secrets: SecretsConfig,
 }
 
 impl Default for Config {
@@ -68,6 +76,8 @@ impl Default for Config {
             clipboard: ClipboardConfig::default(),
             widgets: std::collections::BTreeMap::new(),
             dev: DevConfig::default(),
+            agents: AgentsConfig::default(),
+            secrets: SecretsConfig::default(),
         }
     }
 }
@@ -349,10 +359,23 @@ fn default_widget_width() -> u16 {
 }
 
 /// Out-of-process plugins (D-034). Only plugins listed here are started.
-#[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(default, deny_unknown_fields, rename_all = "kebab-case")]
 pub struct PluginsConfig {
     pub enabled: Vec<String>,
+    /// Run plugins in the agent sandbox where there is one (D-064): their
+    /// own data folder writable, the network only with the manifest's
+    /// `network` permission.
+    pub sandbox: bool,
+}
+
+impl Default for PluginsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: Vec::new(),
+            sandbox: true,
+        }
+    }
 }
 
 fn de_key<'de, D: Deserializer<'de>>(d: D) -> Result<KeyEvent, D::Error> {
@@ -513,6 +536,7 @@ snapshot-delay-ms = 2000
 
 [plugins]
 enabled = []             # plugin directory names under ~/.config/termos/plugins
+sandbox = true           # in the agent sandbox where there is one (Linux)
 
 [clipboard]
 # Copies remembered for the clipboard manager (prefix =), newest first.
@@ -527,6 +551,49 @@ history = 50
 #   helix       Helix, with the same servers
 #   env         always $VISUAL or $EDITOR
 editor = "auto"
+
+[agents]
+# AI agents in windows (see docs/agents.md): palette → "agent", or prefix a.
+default-profile = "default"   # the profile agent.open uses
+history = true                # keep conversations (mode 0600) to resume them
+# Providers. API keys are never written here: name them as keyring:<name>
+# and store them with `termos secret set <name>`. Models are listed from
+# each provider when a window opens.
+# [agents.providers.anthropic]
+# kind = "anthropic"          # anthropic | openai | kimi | openai-compatible | local
+# key = "keyring:anthropic"
+# base-url = "https://api.anthropic.com"
+# max-tokens = 32000
+# [agents.providers.anthropic.prices."<model id>"]   # US$ per million tokens
+# input = 3.0
+# output = 15.0
+# Profiles: which provider and model, and what the agent may do. Each tool
+# class is "ask", "allow" or "deny". Deleting, force-pushing, installing,
+# writing outside the workspace and anything on the network always ask.
+# [agents.profiles.default]
+# provider = "anthropic"
+# model = ""                  # empty: pick from the provider's list
+# tools = { read = "allow", write = "ask", command = "ask", network = "ask", mcp = "ask" }
+# allow-commands = ["cargo test*", "git status", "git diff*"]
+# deny-commands = []
+# domains = ["docs.rs"]       # fetch_url; empty: any domain, after asking
+# mcp-servers = []
+# sandbox = "auto"            # auto | required | off
+# MCP servers, started in the sandbox (command) or reached over HTTP (url).
+# [agents.mcp.files]
+# command = ["npx", "-y", "@modelcontextprotocol/server-filesystem", "."]
+# External CLI agents in terminal windows (built in: claude, codex, gemini,
+# aider, opencode). sandbox = true confines them to the workspace.
+# [agents.external.claude]
+# command = ["claude"]
+# sandbox = true
+# write-paths = ["~/.claude", "~/.claude.json"]
+
+[secrets]
+# Where API keys live: auto | keyring | file. auto uses the secrets file if
+# there is one, else the OS keyring when it works, else the file (an age
+# file locked with a passphrase you choose).
+store = "auto"
 
 # WASM status-line widgets (see docs/widgets.md). Each runs sandboxed: no
 # network, no files except the folders in `dirs` (read-only).

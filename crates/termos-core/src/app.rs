@@ -102,6 +102,11 @@ pub trait App: Send {
         let _ = event;
         AppEffect::None
     }
+    /// Text pasted while the app has focus (bracketed paste).
+    fn handle_paste(&mut self, text: &str) -> AppEffect {
+        let _ = text;
+        AppEffect::None
+    }
     /// Draws the app into `buf`, which covers `area` (origin 0,0).
     fn render(&mut self, area: TuiRect, buf: &mut Buffer, theme: &Theme);
     /// Images to show over the app's cells (called after `render`, for
@@ -125,6 +130,47 @@ pub trait App: Send {
         let _ = now;
         AppEffect::None
     }
+}
+
+/// Windows whose code lives in crates the shell does not depend on
+/// (agents, ARCHITECTURE.md §4): the `termos` binary gives the desktop a
+/// launcher, and the desktop asks it to open them.
+pub trait Launcher: Send + Sync {
+    /// Opens a window of `kind`; `arg` is the command's argument (a
+    /// profile, a session id, or empty).
+    fn open(
+        &self,
+        kind: LaunchKind,
+        arg: &str,
+        ctx: &LaunchContext<'_>,
+    ) -> Result<Box<dyn App>, String>;
+}
+
+impl std::fmt::Debug for dyn Launcher {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Launcher")
+    }
+}
+
+/// What a [`Launcher`] opens.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LaunchKind {
+    /// A new agent session (`agent.open [profile]`).
+    Agent,
+    /// A saved agent conversation, or a list to pick one
+    /// (`agent.resume [id]`).
+    AgentResume,
+    /// The audit log viewer (`audit.open [session]`).
+    Audit,
+}
+
+/// What the desktop knows when it opens a launched window.
+#[derive(Debug, Clone, Copy)]
+pub struct LaunchContext<'a> {
+    pub config: &'a crate::config::Config,
+    pub paths: &'a crate::paths::Paths,
+    /// The focused pane's folder (an agent's workspace).
+    pub cwd: Option<&'a std::path::Path>,
 }
 
 /// Renders `app` into `grid` at `at`.

@@ -37,6 +37,7 @@ windows = true                  # open, draw and close windows
 status = true                   # a status-line widget
 commands = true                 # palette commands
 notify = true                   # notifications
+network = false                 # reach the network from the sandbox
 ```
 
 A plugin runs **only** while it is listed in your config:
@@ -212,10 +213,28 @@ for raw in lines:  # notifications, until the server goes away
 The test suite runs a fuller version:
 [`crates/termos-shell/tests/fixtures/hello_plugin.py`](../crates/termos-shell/tests/fixtures/hello_plugin.py).
 
+## The sandbox
+
+On Linux, plugins run in the same sandbox as agents' commands (see
+[agents.md](agents.md#the-sandbox)), when bubblewrap or Landlock is available:
+
+- The system is read-only. The only folders a plugin can write are its own,
+  `$TERMOS_PLUGIN_DATA` (`~/.local/state/termos/plugins/<name>/`), and a
+  temporary one. Its own directory, where it starts, is read-only.
+- Credentials (`~/.ssh`, keyrings, cloud configs) and TermOS's runtime folder
+  are hidden; only the session socket is left reachable.
+- There is no network unless the manifest asks for it (`network = true`).
+- Its environment is passed on unchanged (it carries the plugin's token).
+
+`[plugins] sandbox = false` turns this off. On macOS and Windows plugins run
+without a sandbox. `TERMOS_PLUGIN_DATA` is set (and the folder made) either
+way.
+
 ## Security
 
-- Plugins run as you, with your files. Enable only plugins you trust.
+- Plugins run as you. On Linux the sandbox keeps them to their own folder and
+  away from the network; elsewhere they have your files. Enable only plugins
+  you trust.
 - The manifest's permissions limit what a plugin can do *in TermOS*: no
-  windows without `windows`, and so on. They do not sandbox the program
-  itself yet; that comes with the agent sandbox in milestone M6.
+  windows without `windows`, and so on.
 - Plugins never see your keys unless one of their windows has focus.

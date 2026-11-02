@@ -73,6 +73,11 @@ pub struct ServerOptions {
     pub handle_signals: bool,
     /// Extra environment for every pane (tests set a predictable prompt).
     pub pane_env: Vec<(String, String)>,
+    /// Opens agent windows (see [`DesktopOptions::launcher`]).
+    pub launcher: Option<std::sync::Arc<dyn termos_core::app::Launcher>>,
+    /// The `termos` binary that sandboxes plugins (`termos sandbox run`,
+    /// D-064); `None`: plugins run as they are.
+    pub plugin_sandbox: Option<PathBuf>,
 }
 
 impl ServerOptions {
@@ -92,6 +97,8 @@ impl ServerOptions {
             exit_when_empty: true,
             handle_signals: false,
             pane_env: Vec::new(),
+            launcher: None,
+            plugin_sandbox: None,
         }
     }
 }
@@ -707,6 +714,7 @@ impl Server {
             pane_ids: self.pane_ids.clone(),
             clipboard: std::sync::Arc::clone(&self.clipboard),
             termos_exe: None,
+            launcher: self.opts.launcher.clone(),
             // Lets `termos msg`, `ls` and `detach` inside a pane find us
             // (D-029; supersedes D-027's pid-only value).
             pane_env: std::iter::once((
@@ -1206,6 +1214,13 @@ impl Server {
         if self.sessions.is_empty() {
             return;
         }
+        let sandbox = self
+            .opts
+            .plugin_sandbox
+            .clone()
+            .filter(|_| self.config.plugins.sandbox);
+        self.plugins
+            .set_sandbox(self.opts.paths.state_dir.join("plugins"), sandbox);
         let (problems, closed) = self.plugins.sync(&self.config.plugins.enabled, retry);
         self.close_windows(&closed);
         for p in problems {

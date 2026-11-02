@@ -83,6 +83,14 @@ pub enum Command {
     ClipboardOpen,
     /// Forget the clipboard history (pinned entries stay).
     ClipboardClear,
+    /// A new agent window (a profile name, or empty: the default).
+    AgentOpen(String),
+    /// Resume a saved agent conversation (empty: pick one).
+    AgentResume(String),
+    /// An external CLI agent (Claude Code, Codex…) in a terminal window.
+    AgentExternal(String),
+    /// The agents' audit logs (empty: the newest).
+    AuditOpen(String),
 }
 
 /// Static description of a command name.
@@ -224,6 +232,19 @@ pub const COMMANDS: &[CommandInfo] = &[
     info("settings.open", "Settings"),
     info("clipboard.open", "Clipboard history"),
     info("clipboard.clear", "Forget the clipboard history"),
+    info("agent.open", "AI agent: a new conversation"),
+    CommandInfo {
+        name: "agent.open",
+        description: "AI agent with a profile",
+        arg: Some("default"),
+    },
+    info("agent.resume", "AI agent: resume a conversation"),
+    CommandInfo {
+        name: "agent.external",
+        description: "External agent (Claude Code, Codex…)",
+        arg: Some("claude"),
+    },
+    info("audit.open", "AI agent audit logs"),
     CommandInfo {
         name: "file.open",
         description: "Open a file",
@@ -407,6 +428,15 @@ impl FromStr for Command {
                 None => Err(CommandError("`task` needs a task name".into())),
             },
             "git.open" => no_arg(Command::GitOpen),
+            "agent.open" => Ok(Command::AgentOpen(arg.unwrap_or("").to_owned())),
+            "agent.resume" => Ok(Command::AgentResume(arg.unwrap_or("").to_owned())),
+            "agent.external" => match arg {
+                Some(a) => Ok(Command::AgentExternal(a.to_owned())),
+                None => Err(CommandError(
+                    "`agent.external` needs a name: claude, codex, gemini, aider, opencode or one from [agents.external]".into(),
+                )),
+            },
+            "audit.open" => Ok(Command::AuditOpen(arg.unwrap_or("").to_owned())),
             "settings.open" => no_arg(Command::SettingsOpen),
             "clipboard.open" => no_arg(Command::ClipboardOpen),
             "clipboard.clear" => no_arg(Command::ClipboardClear),
@@ -501,6 +531,13 @@ impl fmt::Display for Command {
             Command::SettingsOpen => f.write_str("settings.open"),
             Command::ClipboardOpen => f.write_str("clipboard.open"),
             Command::ClipboardClear => f.write_str("clipboard.clear"),
+            Command::AgentOpen(p) if p.is_empty() => f.write_str("agent.open"),
+            Command::AgentOpen(p) => write!(f, "agent.open {p}"),
+            Command::AgentResume(id) if id.is_empty() => f.write_str("agent.resume"),
+            Command::AgentResume(id) => write!(f, "agent.resume {id}"),
+            Command::AgentExternal(n) => write!(f, "agent.external {n}"),
+            Command::AuditOpen(id) if id.is_empty() => f.write_str("audit.open"),
+            Command::AuditOpen(id) => write!(f, "audit.open {id}"),
         }
     }
 }

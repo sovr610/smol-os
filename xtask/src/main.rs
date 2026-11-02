@@ -102,6 +102,7 @@ const MACOS_TARGET: &str = "aarch64-apple-darwin";
 /// target. The WASM widgets are left out the same way (wasmtime builds C
 /// for Windows): the native CI jobs check them.
 const CROSS_TEST_CRATES: &[&str] = &[
+    "termos-ai",
     "termos-core",
     "termos-devkit",
     "termos-hw",

@@ -22,7 +22,7 @@ questions (DECISIONS.md, "Open questions").
 | M4b | Apps, `termos-hw`, WASM widgets (D-042, D-050 to D-052) | 🔍 |
 | M5a | Languages and editors: `termos lang` (mise), managed Neovim/Helix with LSP and DAP, templates, task panels, Git UI (D-053 to D-057) | 🔍 |
 | M5b | Dev rootfs, Podman, package manager app (D-053) | ⏳ |
-| M6 | AI agents | ⏳ |
+| M6 | AI agents: providers, agent windows, permissions, sandbox, audit, MCP, external agents, secrets (D-058 to D-064) | 🔍 |
 | M7 | Local models | ⏳ |
 | M8 | Bare-metal images | ⏳ |
 | M9 | Polish and release | ⏳ |
@@ -530,19 +530,23 @@ What was shown, and where:
 ---
 
 ## M6 — AI agents
-**Status:** ⏳ · **Ask first:** O-4 (SDK crates vs our own clients), O-5 (secret store on bare metal).
+**Status:** 🔍 done, awaiting review · Owner answers: O-4 → our own thin clients with shared SSE parsing (D-058); O-5 → an age file with a passphrase where no keyring exists, TPM later (D-058). Design: D-058 to D-064, ARCHITECTURE.md §11, §14, §16 and §17; user guide [agents.md](docs/agents.md).
 
 **Deliverables**
-- **Providers:** the `Provider` trait with Anthropic, OpenAI, Moonshot Kimi, generic OpenAI-compatible and local implementations. Model lists come from the provider APIs; model names are never hardcoded.
-- **Agent windows:** streaming chat windows with tool calling, persisted history, and per-session token and cost tracking.
-- **Tools:** files, commands (PTY-backed), code search, fetch.
+- **Providers** (D-058, D-059):
+  - [x] The `Provider` trait with Anthropic (Messages API 2026-10-21), OpenAI, Moonshot Kimi, generic OpenAI-compatible and local implementations; our own thin clients over one SSE parser (fuzzed: `sse_parse`)
+  - [x] Model lists from the provider APIs (context windows, output limits and listed prices); a model can be typed where a provider cannot list; model names are never hardcoded
+- **Agent windows** (D-059):
+  - [x] Streaming chat windows (`agent.open`, prefix `a`) with tool calling, approvals with diff previews, a live terminal for commands, cancellation (Esc), retries
+  - [x] Persisted history (`agent.resume`, prefix `A`; `termos agent history`) and per-session token and cost tracking
+- **Tools:** [x] files (`read_file`, `write_file`, `edit_file`, `list_dir`), [x] PTY-backed `run_command`, [x] code search (ripgrep's crates), [x] `fetch_url`
 - **Safety:**
-  - the permission engine, profiles and confirmation UI with diff previews;
-  - the bubblewrap + Landlock sandbox;
-  - the hash-chained audit log and its viewer.
-- **MCP:** an `rmcp` client over stdio and HTTP, with allowlisting.
-- **External agents:** launcher presets for Claude Code, Codex CLI and others.
-- **Secrets:** stored in the keyring or the encrypted store, as `secrecy` types.
+  - [x] The permission engine, profiles and the confirmation UI with diff previews (D-060)
+  - [x] The bubblewrap + Landlock sandbox (D-061), also for local MCP servers and, completing D-034, launched plugins (D-064)
+  - [x] The hash-chained audit log, `termos audit list|verify|show` and its viewer (`audit.open`) (D-062)
+- **MCP:** [x] an `rmcp` client over stdio (sandboxed) and streamable HTTP, with a per-profile allowlist (D-063)
+- **External agents:** [x] launcher presets for Claude Code, Codex CLI, Gemini CLI, aider and opencode (`agent.external NAME`), optionally sandboxed (D-063)
+- **Secrets:** [x] the OS keyring or the age-encrypted secrets file, as `secrecy` types; `termos secret set|rm|list` (D-058)
 
 **Acceptance**
 - Contract tests against recorded fixtures and mock servers; no live keys in CI.
@@ -550,7 +554,24 @@ What was shown, and where:
 - Audit-chain verification.
 - A canary-key test: no secret appears in logs, audit records or snapshots.
 
+**Acceptance results**
+- **Contract tests:** the real Anthropic and OpenAI-compatible clients against a mock HTTP server (`crates/termos-ai/tests/providers.rs`): every page of the model list, headers (`x-api-key`, `anthropic-version`, bearer keys), request bodies (snapshots), streamed text, thinking blocks with signatures and tool calls fed in 23- and 37-byte pieces, 401 and 529 errors with the API's message and never the key, a local server without a key. The fixtures follow the providers' documented stream formats with fixture model names; they were not recorded from live APIs (no keys in this environment or in CI).
+- **A whole session** against a scripted provider (`tests/agent.rs`): the secrets file's passphrase (a wrong one first), the model picked from the fetched list, `read_file` allowed by the profile, `edit_file` asked with its diff and approved, `run_command` on a PTY approved, the answer; then the edited file, the audit chain checked against the head the conversation saved, and the conversation itself.
+- **Sandbox** (`crates/termos-cli/tests/agents.rs`, the real binary; required on CI's Linux runners): a write in the workspace succeeds; writes to the home folder and elsewhere outside do not reach the disk; `termos debug connect` to a listener on this machine fails without `--net` and succeeds with it. A sandboxed Python plugin still connects to the session socket while a probe plugin cannot write outside its own folder. Checked here with bubblewrap 0.9 + Landlock ABI 7, and Landlock alone.
+- **Audit:** editing, removing and reordering lines, and cutting the end off, are all found (unit tests); `termos audit verify` exits non-zero on a tampered log.
+- **Canary key:** a real desktop on a PTY, the key in the secrets file *and* in the server's environment; the agent runs `env` (`set` on Windows); afterwards the key is in no log, audit record, conversation, session snapshot, config or runtime file, and in no request the provider received.
+
+**What the tests cover**
+- **Unit:** the SSE parser (every split of a stream gives the same events); both providers' stream states, refusals, cut streams, bad tool input; request bodies (snapshots); costs; the secrets file (round trip, wrong passphrase, mode 0600, no plaintext); the permission engine (scopes, symbolic links out of the workspace, sensitive paths, always-ask actions, session approvals, domains, MCP); the command classifier; the sandbox's command lines and environment filter; redaction; the audit chain; the tools (reads, search, edits with stale-file checks, PTY commands with exit codes and timeouts, HTML to text); MCP against an in-memory server; external presets; history.
+- **Not covered here:** live provider APIs; the OS keyring (CI has no Secret Service session; the secrets file is tested instead); MCP over streamable HTTP against a real server (the stdio path and the protocol are tested); the agent window's drawing beyond the end-to-end tests.
+
 **Demo:** open an agent window, pick a provider and model from the fetched list, and ask it to fix a failing test, approving its edits.
+
+What was shown, and where (live, Linux, in an isolated `tmux -L termos-m6` with its own home; the provider was a scripted OpenAI-compatible mock, since no live keys exist here):
+1. `termos secret set lab` asked for the key without echo, then created the secrets file with a new passphrase.
+2. `C-b a` opened the agent window, which asked for the passphrase, then listed the provider's two models (with context sizes and the listed prices); Enter picked one.
+3. "The tests fail. Please fix the bug." The agent asked to run `cargo test` (approved: two failures, the output streaming into the window), read `src/lib.rs` without asking (the profile allows reads), asked to edit it with the diff `-    a - b` / `+    a + b` (approved), asked to run the tests again (approved: they passed, in bubblewrap + Landlock), and answered. The header showed tokens (with cached input) and cost.
+4. `termos msg audit.open` showed the session's log, verified; `termos audit verify` printed `ok`, and the key was nowhere under the state, config or runtime folders.
 
 ---
 
@@ -633,11 +654,11 @@ Generated from the `TODO(M<n>)` markers in the code. Don't edit by hand; run `ca
 | --- | --- | --- |
 | M5 | `crates/termos-apps/src/lib.rs` | package manager UI over mise, the dev rootfs and the host package manager. |
 | M5 | `crates/termos-devkit/src/lib.rs` | dev rootfs, Podman and the package manager UI (M5b). |
-| M6 | `crates/termos-ai/src/lib.rs` | providers, streaming agent windows, sandboxed tools, permission engine, audit log, MCP, secrets. |
-| M6 | `crates/termos-shell/src/plugins.rs` | run launched plugins under the agent sandbox (bwrap + landlock). |
+| M7 | `crates/termos-ai/src/provider/mod.rs` | find the model router's address and token by itself once `termos models serve` exists. |
 | M7 | `crates/termos-models/src/lib.rs` | HF adapter, hardware-aware recommendations, llama.cpp backend, OpenAI-compatible router. |
 | M8 | `crates/termos-image/src/lib.rs` | Buildroot external tree, image build driver, QEMU boot tests for x86_64 and aarch64 virt. |
 | M8 | `crates/termos-render/src/lib.rs` | DRM/KMS backend with font rasterizer and adjustable font size. |
+| M9 | `crates/termos-ai/src/sandbox.rs` | a Windows sandbox for agent commands (an AppContainer or a restricted token); until then every command asks. |
 | M9 | `crates/termos-cli/src/client.rs` | VT input mode on Windows, for bracketed paste and the Kitty keyboard protocol. |
 | M9 | `crates/termos-hw/src/lib.rs` | GPU temperature and power on macOS (SMC), and for non-NVIDIA GPUs on Windows. |
 | M9 | `crates/termos-image/src/lib.rs` | installer and atomic A/B updates. |

@@ -26,7 +26,8 @@ termos-wm = { path = "crates/termos-wm" }
 termos-term = { path = "crates/termos-term" }
 termos-shell = { path = "crates/termos-shell" }
 termos-apps = { path = "crates/termos-apps" }
-termos-ai = { path = "crates/termos-ai" }
+# Its `tls` feature is chosen by termos-cli (D-058).
+termos-ai = { path = "crates/termos-ai", default-features = false }
 termos-models = { path = "crates/termos-models" }
 termos-devkit = { path = "crates/termos-devkit" }
 termos-image = { path = "crates/termos-image" }
@@ -82,6 +83,29 @@ tracing-appender = "0.2.5"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 unicode-segmentation = "1.13.3"
 unicode-width = "0.2.3"
+
+# Agents (M6, D-058 to D-064). HTTP clients are our own thin ones over
+# reqwest (O-4 -> D-058); TLS is rustls with ring, installed by termos-ai's
+# `tls` feature (aws-lc carries OpenSSL-licensed code, and ring cannot be
+# cross-checked for Windows from Linux).
+reqwest = { version = "0.13.5", default-features = false, features = ["rustls-no-provider", "http2", "charset", "json", "stream", "system-proxy"] }
+rustls = { version = "0.23.35", default-features = false, features = ["std", "tls12", "logging"] }
+secrecy = "0.10.3"
+# API keys in the OS keyring (Secret Service over zbus, Keychain, Credential
+# Manager), or an age file unlocked by a passphrase (O-5 -> D-058).
+keyring = "4.2.0"
+age = { version = "0.11.5", default-features = false }
+# Diff previews for file edits.
+similar = "3.2.1"
+# `search_code`: ripgrep's own crates.
+grep = "0.4.1"
+ignore = "0.4.34"
+shlex = "2.0.1"
+# Redacting key-shaped text from audit records.
+regex = { version = "1.13.1", default-features = false, features = ["std", "perf", "unicode-perl"] }
+landlock = "0.4.7"
+# MCP client over stdio and streamable HTTP.
+rmcp = { version = "3.8.0", default-features = false, features = ["client", "transport-child-process", "transport-streamable-http-client-reqwest", "reqwest-tls-no-provider"] }
 
 # Dev-only crates.
 criterion = "0.8.2"

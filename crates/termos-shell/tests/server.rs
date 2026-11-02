@@ -988,6 +988,11 @@ async fn plugins_add_windows_widgets_and_commands() {
     .expect("thread")
     .expect_err("one connection per plugin");
     assert!(err.to_string().contains("already connected"), "{err}");
+    // The SDK registers its command after showing the window and widget.
+    until_plugin(&srv.socket, "rusty", "rusty's command", |p| {
+        p["commands"] == json!(["rusty.go"])
+    })
+    .await;
     call(&srv.socket, "rusty.go", json!({})).await;
     let (name, session) = sdk.await.expect("sdk thread").expect("sdk calls");
     assert_eq!((name.as_str(), session.as_deref()), ("go", Some("main")));

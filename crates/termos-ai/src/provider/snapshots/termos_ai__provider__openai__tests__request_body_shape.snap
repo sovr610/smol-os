@@ -1,0 +1,53 @@
+---
+source: crates/termos-ai/src/provider/openai.rs
+expression: "serde_json::to_string_pretty(&request_body(&req, ProviderKind::Openai,\nSome(2048))).expect(\"json\")"
+---
+{
+  "max_completion_tokens": 2048,
+  "messages": [
+    {
+      "content": "be brief",
+      "role": "system"
+    },
+    {
+      "content": "hi",
+      "role": "user"
+    },
+    {
+      "content": "Looking.",
+      "role": "assistant",
+      "tool_calls": [
+        {
+          "function": {
+            "arguments": "{\"path\":\".\"}",
+            "name": "list_dir"
+          },
+          "id": "c1",
+          "type": "function"
+        }
+      ]
+    },
+    {
+      "content": "a\nb",
+      "role": "tool",
+      "tool_call_id": "c1"
+    }
+  ],
+  "model": "fixture-model",
+  "stream": true,
+  "stream_options": {
+    "include_usage": true
+  },
+  "tools": [
+    {
+      "function": {
+        "description": "List a folder",
+        "name": "list_dir",
+        "parameters": {
+          "type": "object"
+        }
+      },
+      "type": "function"
+    }
+  ]
+}

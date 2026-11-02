@@ -15,6 +15,9 @@ pub mod env {
     pub const TOKEN: &str = "TERMOS_PLUGIN_TOKEN";
     /// The plugin's name (its directory name).
     pub const NAME: &str = "TERMOS_PLUGIN_NAME";
+    /// A folder the plugin may write, its own (in the sandbox, the only
+    /// one besides a private temporary folder).
+    pub const DATA: &str = "TERMOS_PLUGIN_DATA";
 }
 
 /// Method names.

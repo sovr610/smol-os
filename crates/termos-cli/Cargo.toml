@@ -15,17 +15,22 @@ name = "termos"
 path = "src/main.rs"
 
 [features]
-default = ["wasm-widgets"]
+default = ["wasm-widgets", "tls"]
 # WASM status-line widgets (D-050: in every build; the engine starts only
 # when a widget is configured).
 wasm-widgets = ["termos-shell/wasm-widgets"]
+# HTTPS for agents' providers, fetch_url and MCP (D-058); left out only
+# where ring cannot be built (clippy for Windows from Linux).
+tls = ["termos-ai/tls"]
 
 [dependencies]
 anyhow.workspace = true
 clap.workspace = true
 crossterm.workspace = true
 futures-util.workspace = true
+secrecy.workspace = true
 serde_json.workspace = true
+termos-ai.workspace = true
 termos-core.workspace = true
 termos-devkit.workspace = true
 termos-hw.workspace = true

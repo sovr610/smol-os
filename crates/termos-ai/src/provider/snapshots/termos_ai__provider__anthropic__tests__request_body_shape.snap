@@ -1,0 +1,66 @@
+---
+source: crates/termos-ai/src/provider/anthropic.rs
+expression: "serde_json::to_string_pretty(&request_body(&req, 1000)).expect(\"json\")"
+---
+{
+  "cache_control": {
+    "type": "ephemeral"
+  },
+  "max_tokens": 1000,
+  "messages": [
+    {
+      "content": [
+        {
+          "text": "hi",
+          "type": "text"
+        }
+      ],
+      "role": "user"
+    },
+    {
+      "content": [
+        {
+          "signature": "s",
+          "thinking": "",
+          "type": "thinking"
+        },
+        {
+          "id": "t",
+          "input": {},
+          "name": "list_dir",
+          "type": "tool_use"
+        }
+      ],
+      "role": "assistant"
+    },
+    {
+      "content": [
+        {
+          "content": "a\nb",
+          "is_error": true,
+          "tool_use_id": "t",
+          "type": "tool_result"
+        }
+      ],
+      "role": "user"
+    }
+  ],
+  "model": "fixture-model",
+  "stream": true,
+  "system": [
+    {
+      "text": "be brief",
+      "type": "text"
+    }
+  ],
+  "tools": [
+    {
+      "description": "List a folder",
+      "eager_input_streaming": true,
+      "input_schema": {
+        "type": "object"
+      },
+      "name": "list_dir"
+    }
+  ]
+}

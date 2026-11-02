@@ -127,6 +127,9 @@ pub struct DesktopOptions {
     /// The `termos` program, for panes that run its subcommands (task
     /// panels, the Git UI, the editor); `None`: this program.
     pub termos_exe: Option<PathBuf>,
+    /// Opens agent windows and audit logs (the `termos` binary wires it in;
+    /// `None`: agents are not part of this build).
+    pub launcher: Option<std::sync::Arc<dyn termos_core::app::Launcher>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -962,6 +965,65 @@ impl Desktop {
         }
     }
 
+    /// A window from the launcher (agents, audit logs), in the focused
+    /// pane's folder.
+    fn launch(&mut self, kind: termos_core::app::LaunchKind, arg: &str) {
+        let Some(launcher) = self.opts.launcher.clone() else {
+            self.notify(Level::Error, "AI agents are not part of this build");
+            return;
+        };
+        let cwd = self
+            .focused_cwd()
+            .or_else(|| self.opts.cwd.clone())
+            .or_else(|| std::env::current_dir().ok());
+        let ctx = termos_core::app::LaunchContext {
+            config: &self.config,
+            paths: &self.opts.paths,
+            cwd: cwd.as_deref(),
+        };
+        match launcher.open(kind, arg, &ctx) {
+            Ok(app) => {
+                let id = self.open_app(app);
+                // Agent windows are working windows: give them most of the
+                // screen.
+                let area = self.layout_area();
+                let rect = Rect::new(
+                    area.x + area.w / 20,
+                    area.y + area.h / 20,
+                    area.w - area.w / 10,
+                    area.h - area.h / 10,
+                );
+                self.session.active_mut().set_float_rect(id, rect, area);
+            }
+            Err(e) => self.notify(Level::Error, e),
+        }
+    }
+
+    /// An external CLI agent (`termos agent external NAME`) in a float.
+    fn open_external_agent(&mut self, name: &str, area: Rect) {
+        let Some(exe) = self.termos_exe() else {
+            self.notify(Level::Error, "cannot find the termos program");
+            return;
+        };
+        let cwd = self.focused_cwd();
+        let program = exe.display().to_string();
+        let args = vec!["agent".to_owned(), "external".to_owned(), name.to_owned()];
+        match self.spawn_pane(
+            cwd,
+            (area.w * 9 / 10, area.h * 9 / 10),
+            Some((program, args)),
+        ) {
+            Ok(id) => {
+                if let Some(p) = self.panes.get_mut(&id) {
+                    p.title = format!("agent: {name}");
+                }
+                self.session.active_mut().add_float(id, area);
+                self.animate(anim::Kind::FloatOpen(id), Instant::now());
+            }
+            Err(e) => self.notify(Level::Error, format!("cannot start {name}: {e}")),
+        }
+    }
+
     /// lazygit in a floating window, in the focused pane's folder.
     fn open_git(&mut self, area: Rect) {
         let Some(exe) = self.termos_exe() else {
@@ -1344,6 +1406,13 @@ impl Desktop {
             };
             if let Some(b) = bytes {
                 self.write_to_pane(id, b);
+            } else if let Some(Pane {
+                kind: PaneKind::App(app),
+                ..
+            }) = self.panes.get_mut(&id)
+            {
+                let effect = app.handle_paste(text);
+                self.app_effect(id, effect);
             }
         }
         self.dirty = true;
@@ -1870,6 +1939,12 @@ impl Desktop {
                 }
                 self.notify(Level::Info, "clipboard history cleared (pins kept)");
             }
+            Command::AgentOpen(arg) => self.launch(termos_core::app::LaunchKind::Agent, &arg),
+            Command::AgentResume(arg) => {
+                self.launch(termos_core::app::LaunchKind::AgentResume, &arg)
+            }
+            Command::AuditOpen(arg) => self.launch(termos_core::app::LaunchKind::Audit, &arg),
+            Command::AgentExternal(name) => self.open_external_agent(&name, area),
             Command::FileOpen(path) => {
                 use termos_apps::files::{OpenKind, open_kind};
                 let path = self.resolve_path(&path);

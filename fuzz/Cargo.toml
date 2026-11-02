@@ -11,6 +11,7 @@ cargo-fuzz = true
 
 [dependencies]
 libfuzzer-sys = "0.4.13"
+termos-ai = { path = "../crates/termos-ai", default-features = false }
 termos-apps = { path = "../crates/termos-apps" }
 termos-core = { path = "../crates/termos-core" }
 termos-render = { path = "../crates/termos-render" }
@@ -72,6 +73,13 @@ bench = false
 [[bin]]
 name = "markdown_layout"
 path = "fuzz_targets/markdown_layout.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "sse_parse"
+path = "fuzz_targets/sse_parse.rs"
 test = false
 doc = false
 bench = false
