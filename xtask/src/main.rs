@@ -374,7 +374,7 @@ fn image(args: &[String]) -> Result<()> {
                     }
                 };
                 println!(
-                    "xtask: {} ({}): ready after {:.1}s; screen: {} colours, status bar {:?}; {} MiB of {} MiB in use; data partition {} MiB",
+                    "xtask: {} ({}): ready after {:.1}s; screen: {} colours, status bar {:?}; {} MiB of {} MiB in use; data partition {} MiB; slot {}",
                     t.name,
                     f.name(),
                     r.ready_after.as_secs_f32(),
@@ -382,10 +382,23 @@ fn image(args: &[String]) -> Result<()> {
                     r.screen.status_bar,
                     r.memory.used_kb / 1024,
                     r.memory.total_kb / 1024,
-                    r.data_kb / 1024
+                    r.data_kb / 1024,
+                    r.slot.as_ref().map_or_else(
+                        || "not marked".to_owned(),
+                        |s| format!(
+                            "{} ({}) {}",
+                            s.slot,
+                            s.version,
+                            if s.good { "good" } else { "not good" }
+                        )
+                    )
                 );
+                let problems = r.problems();
+                if !problems.is_empty() {
+                    println!("xtask: the serial log ends with:\n{}", r.tail);
+                }
                 failed.extend(
-                    r.problems()
+                    problems
                         .into_iter()
                         .map(|p| format!("{} ({}): {p}", t.name, f.name())),
                 );

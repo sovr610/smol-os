@@ -14,7 +14,8 @@ cfg=/sys/firmware/qemu_fw_cfg/by_name/opt/termos
 	sleep "$(cat "$cfg/boottest/raw")"
 	awk '/^MemTotal:/ { t = $2 } /^MemAvailable:/ { a = $2 }
 		END { printf "TERMOS-MEM used_kb=%d total_kb=%d\n", t - a, t }' /proc/meminfo >/dev/console
-	df -k /data | awk 'NR == 2 { printf "TERMOS-DATA size_kb=%d\n", $2 }' >/dev/console
+	# -P: one line per file system, however long its device's name.
+	df -kP /data | awk 'NR == 2 { printf "TERMOS-DATA size_kb=%d\n", $2 }' >/dev/console
 	if [ -r "$cfg/boottest-update/raw" ]; then
 		url=$(cat "$cfg/boottest-update/raw")
 		su -s /bin/sh -c "termos update install --yes --restart '$url'" termos >/dev/console 2>&1 ||

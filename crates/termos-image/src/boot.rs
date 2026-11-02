@@ -196,6 +196,10 @@ pub struct Report {
     pub memory: serial::Memory,
     /// The data file system's size, KiB.
     pub data_kb: u64,
+    /// How the booted slot was marked (D-078).
+    pub slot: Option<serial::Slot>,
+    /// The end of the serial log, shown when something failed.
+    pub tail: String,
 }
 
 struct Vm(Child);
@@ -430,6 +434,9 @@ pub fn boot(images: &Path, t: &Target, firmware: Firmware, dir: &Path) -> Result
             serial::data_kb,
         )
         .map_err(|e| run.failed(dir, name, e))?;
+    // The slot is marked a second or two after the first frame, long
+    // before the reports above.
+    let log = run.log();
     run.quit(dir);
     Ok(Report {
         firmware,
@@ -437,6 +444,8 @@ pub fn boot(images: &Path, t: &Target, firmware: Firmware, dir: &Path) -> Result
         screen: findings,
         memory,
         data_kb,
+        slot: serial::slot(&log),
+        tail: serial::tail(&log, 40),
     })
 }
 
@@ -458,6 +467,11 @@ impl Report {
                 "the data partition did not grow: {} MiB on a disk {GROW_BY_MIB} MiB bigger than the image",
                 self.data_kb / 1024
             ));
+        }
+        match &self.slot {
+            Some(s) if s.good => {}
+            Some(s) => p.push(format!("slot {} was not marked good", s.slot)),
+            None => p.push("the booted slot was not marked (no TERMOS-SLOT line)".into()),
         }
         p
     }
