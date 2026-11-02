@@ -10,6 +10,7 @@
 
 mod display;
 mod keyboard;
+mod latency;
 mod pointer;
 mod screen;
 mod seat;
@@ -156,6 +157,8 @@ struct Console {
     ready: bool,
     /// A held key: what it does, and when it next repeats.
     repeat: Option<(Action, u32, Instant)>,
+    /// Input→frame times, reported to the log (M9's Pi measurements).
+    latency: latency::Latency,
 }
 
 impl Console {
@@ -185,7 +188,10 @@ impl Console {
 
     fn act(&mut self, a: Action) -> io::Result<()> {
         match a {
-            Action::Key(k) => self.send(ClientMsg::Key(k)),
+            Action::Key(k) => {
+                self.latency.key(Instant::now());
+                self.send(ClientMsg::Key(k))
+            }
             Action::FontBigger => self.font_size(self.screen.raster.size() * 1.125),
             Action::FontSmaller => self.font_size(self.screen.raster.size() / 1.125),
             Action::FontReset => self.font_size(self.base_size),
@@ -309,6 +315,7 @@ impl Console {
         match msg {
             ServerMsg::Frame(f) => {
                 self.screen.apply(&f);
+                self.latency.frame();
                 self.show()?;
             }
             ServerMsg::Exit { reason } => return Ok(Some(Ended::Exited(reason))),
@@ -326,6 +333,9 @@ impl Console {
     fn flipped(&mut self) -> io::Result<()> {
         if !self.display.events()? {
             return Ok(());
+        }
+        if let Some(report) = self.latency.flipped(Instant::now()) {
+            tracing::info!("{report}");
         }
         if !self.ready {
             self.ready = true;
@@ -398,6 +408,7 @@ pub(crate) async fn run(end: ClientEnd, cfg: &KmsConfig) -> anyhow::Result<Ended
         active: true,
         ready: false,
         repeat: None,
+        latency: latency::Latency::default(),
     };
     c.send(ClientMsg::Hello {
         version: PROTOCOL_VERSION,

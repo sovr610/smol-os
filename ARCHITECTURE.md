@@ -299,6 +299,8 @@ Window = { id, title, source: Pty | App | Plugin | Agent, state: normal | minimi
 - **Widgets:** `[widgets.<name>]` for WASM status-line widgets (§9, D-051).
 - **Agents (§11):** `[agents]` (providers, profiles, MCP servers, external agents) and `[secrets] store`; keys are named (`keyring:<name>`), never written.
 - **Settings app:** writes config.toml itself (toml_edit, comments kept), only after the result parses as a config.
+- **Network app (D-081):** links from `termos_hw::net` (sysfs and `sysinfo`); on images, Wi-Fi through iwd's D-Bus interface (zbus), networks saved as iwd's files through `termos system wifi-add`, the passphrase on its standard input.
+- **Selected rows** draw their text in the theme's `fg` (`ThemeColors::selected`): every preset's text colours are tested against their backgrounds, AAA for high contrast and AA otherwise.
 - **Session persistence (D-011, D-033):**
   - **Where:** snapshots go to `$XDG_STATE_HOME/termos/sessions/<server>/<session>.json`, with a versioned schema, mode 0600, written atomically.
   - **What:** the layout of every workspace and, per pane, the directory, the foreground program, and optionally (`save-scrollback`) the text. Command lines are kept only for allowlisted programs.
@@ -446,12 +448,16 @@ termos-ai holds all of it; the CLI hands the server a launcher for its windows (
   3. mounts: the read-only squashfs root in slot A, the data partition on `/data` (`/home`, iwd's networks, D-Bus's machine ID and dhcpcd's leases bound from it);
   4. eudev, D-Bus, iwd, dhcpcd, seatd;
   5. `termos --kms` on tty1 as the user `termos`, respawned if it stops;
-  6. first-run setup (the tutorial).
+  6. first-run setup (the tutorial);
+  7. once the console's first frame is up, the booted slot is marked good (D-078).
 - **Partitions (MBR):** boot, rootfs A, rootfs B, data (label `termos-data`). The data partition holds home, Wi-Fi networks, and later the dev rootfs, models and containers. Updates (M9) are atomic A/B with RAUC (D-078): signed bundles, the kernel inside each slot, and boot-loader fallback (GRUB's environment; the Pi's tryboot).
+- **Updates (D-078):** `termos update` checks GitHub Releases only when asked, downloads a RAUC bundle (verity, signed, `compatible=termos-<target>`) and has `termos system` (root, through one sudo rule) install it into the other slot. GRUB runs RAUC's slot-selection script over a `grubenv` on the boot partition and loads the kernel from the chosen slot's squashfs; a Pi uses RAUC's custom backend over the firmware's tryboot, with each slot's boot files under `slot-a/` and `slot-b/`. A slot that is not marked good within five minutes, or panics, is tried once and then left for the other.
+- **Install (D-080):** the x86_64 live ISO (xorriso after the disk image; GRUB for BIOS, USB and UEFI) runs the root file system as an initramfs (`termos.live`: no disk touched) and carries the disk image, which `termos install` writes to a whole disk. Any image grows its data partition to the end of its disk on first boot.
 - **QEMU boot tests (D-076):** x86_64 (OVMF and SeaBIOS) and aarch64 virt (AAVMF) with virtio-gpu as the only display.
   - TermOS prints `TERMOS-READY` on the serial console after its first frame.
   - The harness takes a QMP `screendump` and checks the desktop's structure: not blank, and the status bar row present.
   - Idle RAM is reported by the image after it settles, asked for through `fw_cfg`, and must stay under 150 MB (D-019).
+  - The disk is a qcow2 overlay 1 GiB bigger than the image, so the data partition's growth is checked too. `--update` installs a newer bundle over HTTP and starts it, then a broken one and sees the fallback; `--install` installs from the ISO onto an empty disk, which then starts alone with each firmware.
 
 ---
 
@@ -470,7 +476,7 @@ termos-ai holds all of it; the CLI hands the server a launcher for its windows (
 - **Listeners:** nothing listens on the network by default. The model router (D-068) binds 127.0.0.1 or a 0600 Unix socket and needs a per-start token, which only the 0600 endpoint file in the runtime folder holds (hidden from agents' commands). Each llama-server gets its own key through its environment, not its command line, and is stopped if it does not check it.
 - **Supply chain:** cargo-deny checks licenses, advisories and sources (crates.io only, plus patched copies of crates in `third_party/`, each listed with its change in its README, D-070); `Cargo.lock` is committed; Actions are pinned to major versions (SHA pinning to be reconsidered in M9).
 - **Developer tools (D-053, D-056):** the only download TermOS makes itself is mise, over HTTPS only (`curl --proto =https --tlsv1.2`), checked against SHA-256 sums compiled in before it is used. Everything else is mise's to download and verify. The `mise.toml` files TermOS writes list only tools and are marked trusted; TermOS never trusts a project's own mise config for you. Neovim plugins are pinned to commits.
-- **Bare metal:** a read-only root with signed A/B updates.
+- **Bare metal:** a read-only root with signed A/B updates (bundles must chain to the image's keyring, checked for the code-signing purpose). The desktop's user reaches root only through `termos system`, which one sudo rule allows and which does a fixed set of things with checked arguments: install a bundle or the disk image, restart, power off, the Pi's boot-loader backend, save or forget a Wi-Fi network (D-078, D-081). The live system touches no disk until `termos install` is told which.
 
 ---
 
@@ -526,8 +532,8 @@ termos-ai holds all of it; the CLI hands the server a launcher for its windows (
   - local models (`models`, D-065–D-068): real pulls from the Hugging Face Hub (a 260K-parameter GGUF and all-MiniLM-L6-v2), llama.cpp's release installed through mise, chat (plain and streamed) and embeddings (semantic similarity checked) through the router, the agents' `local` provider starting it, then stop, `rm` and `gc`;
   - the language CI (D-053, D-056, `languages.yml`): `termos lang check` for every language on ubuntu-24.04 and ubuntu-24.04-arm, nightly, on developer-environment changes and on demand; Rust, Python and Go on x86_64 on every push.
 - **Test builds** on every push (D-041): Linux x86_64/aarch64 (glibc 2.31) and macOS arm64 `.tar.gz`, Windows x86_64 `.zip` (static C runtime), each with a `BUILDINFO.txt`, kept 14 days. The Linux builds are downloaded and smoke-run on matching runners.
-- **Later CI jobs:**
-  - releases (M9): hosted binaries for x86_64/aarch64 Linux and macOS, an x86_64 ISO, an aarch64 UEFI image, Raspberry Pi `.img` files, checksums and signatures.
+  - static musl builds for x86_64 and aarch64 Linux next to the glibc ones, smoke-run and held to the same performance budgets (`perf-musl`, D-079).
+- **Releases** (`release.yml`, D-077): a `v<version>` tag matching the workspace version builds the hosted binaries (Linux glibc and musl, macOS arm64 and x86_64, Windows), every image with its update bundle and license report, signed with the owner's keys from CI secrets, then a draft GitHub release with `SHA256SUMS` and build provenance attestations. docs/releasing.md.
 
 ---
 

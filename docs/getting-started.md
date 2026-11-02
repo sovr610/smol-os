@@ -5,15 +5,40 @@ you already know most of it: a prefix key, panes, windows in a status
 line, copy mode. On top of that it adds floating windows you can drag
 around, a command palette, key hints, and a mouse that works everywhere.
 
-> **Status:** milestone M4b (hosted mode on Linux, macOS and Windows, with
-> sessions you can detach from and restore, images and themes, built-in
-> apps and WASM widgets). See [ROADMAP.md](../ROADMAP.md).
+> **Status:** milestone M9 (releases: TermOS in a terminal on Linux, macOS
+> and Windows, and as a whole system on PCs, Arm machines and Raspberry
+> Pis, with A/B updates). See [ROADMAP.md](../ROADMAP.md).
 
 ## Install and run
 
-The quickest way to try it is a [test build](#test-builds) from CI. To build
-it yourself you need Rust (the toolchain pinned in `rust-toolchain.toml`
-installs automatically through rustup) on Linux, macOS, Windows or WSL2.
+TermOS comes two ways:
+
+- **In your terminal**, on Linux, macOS, Windows or WSL2: a download from the
+  repository's **Releases** page (below), a [test build](#test-builds), or
+  built yourself.
+- **As the whole system** on a PC, an Arm machine or a Raspberry Pi: it
+  boots straight into the desktop and updates itself in two halves, so a
+  bad update falls back. See [bare-metal.md](bare-metal.md): try the live
+  ISO, then `termos install`.
+
+From a release, pick the file for your system:
+
+| File | System |
+| --- | --- |
+| `termos-<version>-linux-x86_64.tar.gz` | Linux on x86_64, glibc 2.31 or newer (Ubuntu 20.04+, Debian 11+, WSL2) |
+| `termos-<version>-linux-aarch64.tar.gz` | Linux on arm64, glibc 2.31 or newer (Raspberry Pi OS 64-bit, …) |
+| `termos-<version>-linux-x86_64-musl.tar.gz`, `…-aarch64-musl.tar.gz` | Any Linux, older or without glibc (Alpine, …): static, without NVIDIA readings in the system monitor |
+| `termos-<version>-macos-arm64.tar.gz`, `…-macos-x86_64.tar.gz` | macOS 11 or newer |
+| `termos-<version>-windows-x86_64.zip` | Windows 10 1809 or newer, Windows 11 |
+
+Check a download against the release's `SHA256SUMS`, and, if you like,
+where it was built: `gh attestation verify <file> --repo sovr610/smol-os`.
+Then unpack it and run `termos`. The programs are not code-signed for macOS
+or Windows yet; see [below](#test-builds) for opening them anyway.
+
+To build it yourself you need Rust (the toolchain pinned in
+`rust-toolchain.toml` installs automatically through rustup) on Linux,
+macOS, Windows or WSL2.
 
 ```bash
 cargo install --path crates/termos-cli
@@ -203,6 +228,7 @@ releases: unsigned, and kept for 14 days.
    | --- | --- |
    | `termos-<commit>-linux-x86_64.tar.gz` | Linux on x86_64, glibc 2.31 or newer (Ubuntu 20.04+, Debian 11+, WSL2) |
    | `termos-<commit>-linux-aarch64.tar.gz` | Linux on arm64, glibc 2.31 or newer (Raspberry Pi OS 64-bit, …) |
+   | `termos-<commit>-linux-x86_64-musl.tar.gz`, `…-aarch64-musl.tar.gz` | Any Linux (static) |
    | `termos-<commit>-macos-arm64.tar.gz` | macOS 11 or newer on Apple silicon |
    | `termos-<commit>-windows-x86_64.zip` | Windows 10 1809 or newer, Windows 11 |
 
@@ -216,7 +242,8 @@ unzip termos-*-linux-x86_64.zip && tar -xzf termos-*-linux-x86_64.tar.gz
 ./termos-*-linux-x86_64/termos
 ```
 
-The builds are not signed yet (signed releases come with M9), so:
+Neither test builds nor releases are code-signed for macOS or Windows yet
+(releases carry checksums and build attestations instead), so:
 
 - **macOS** blocks a downloaded program the first time. Clear the quarantine
   flag once:

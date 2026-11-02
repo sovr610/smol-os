@@ -9,6 +9,7 @@ move, resize, minimize or tile like any other. Open them from the palette
 | Files | "Files" | `files.open [FOLDER]` | |
 | System monitor | "System monitor" | `monitor.open` | |
 | Clipboard history | "Clipboard history" | `clipboard.open` | prefix `=` |
+| Network | "Network: connections and Wi-Fi" | `network.open` | |
 | Settings | "Settings" | `settings.open` | |
 | Markdown viewer | | `markdown.open FILE` | |
 | Image viewer | | `image.open FILE` | |
@@ -113,6 +114,25 @@ by default (`[clipboard] history`; `0` keeps none), at most 1 MiB each.
 
 TermOS does not read your system's clipboard; it only knows what was copied
 inside it.
+
+## Network
+
+Connections and Wi-Fi (`network.open`, "Network" in the palette). Each
+network interface is listed with whether it is wired or Wi-Fi, connected,
+and its addresses; on a TermOS machine (bare metal) the Wi-Fi networks in
+range follow, strongest first, with their security and signal.
+
+| Key | Does |
+| --- | --- |
+| `↑` `↓` | choose a network |
+| `Enter` | join it: a passphrase is asked for (shown as dots) unless it is open |
+| `d` | forget a saved network |
+| `r` | scan again |
+| `Esc`, `q` | close |
+
+A saved network is joined whenever it is in range. Elsewhere (TermOS in a
+terminal) Wi-Fi belongs to the system's own network tools, and the page
+shows the connections only.
 
 ## Settings
 

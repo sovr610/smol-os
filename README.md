@@ -60,7 +60,8 @@ That checks the latency, idle-CPU and memory budgets on a release build
 
 - [docs/getting-started.md](docs/getting-started.md): using TermOS.
 - [docs/agents.md](docs/agents.md): AI agents: providers, keys, permissions, the sandbox, audit logs.
-- [docs/bare-metal.md](docs/bare-metal.md): the bare-metal images: building, booting in QEMU, the console.
+- [docs/bare-metal.md](docs/bare-metal.md): TermOS as the whole system: installing from the live ISO, updates, Wi-Fi, building images, booting them in QEMU, the console.
+- [docs/releasing.md](docs/releasing.md): making a release: the signing keys, the tag, the draft.
 - [docs/models.md](docs/models.md): local models: Hugging Face downloads, what fits your machine, llama.cpp, the model router.
 - [ARCHITECTURE.md](ARCHITECTURE.md): how the system is put together.
 - [ROADMAP.md](ROADMAP.md): milestones M0–M9b and open work.
