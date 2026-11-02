@@ -358,11 +358,21 @@ fn main() -> ExitCode {
     };
     match result {
         Ok(code) => code,
+        // The reader went away (`termos model list | head -1`).
+        Err(e) if broken_pipe(&e) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("termos: {e:#}");
             ExitCode::FAILURE
         }
     }
+}
+
+/// Whether `e` is a write to a closed pipe.
+fn broken_pipe(e: &anyhow::Error) -> bool {
+    e.chain().any(|c| {
+        c.downcast_ref::<std::io::Error>()
+            .is_some_and(|io| io.kind() == std::io::ErrorKind::BrokenPipe)
+    })
 }
 
 fn run(cli: &Cli, paths: &Paths, config_path: &Path, t: &Target) -> anyhow::Result<ExitCode> {

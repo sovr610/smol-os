@@ -713,6 +713,22 @@ rewrite history.
   - **Accelerator limits,** documented in docs/models.md and printed by `termos model recommend`: Coral runs only small int8 TFLite models (no LLMs); Hailo runs compiled HEF models through its own runtime (TermOS runs no LLMs on it); Cloud TPUs need the vLLM sidecar with TPU support.
 - **Alternatives:** llama-server's own multi-model mode (recent, GGUF only: no candle models or sidecars behind the same endpoint); agents talking to each llama-server directly (no eviction, no embeddings, a port per model).
 
+## D-069: D-021 is confirmed
+- **Status:** Accepted (owner, at the M7 review) · 2026-11-02
+- **Decision:** D-021 stands as implemented in M7 (D-065, D-068): models live in the `huggingface_hub` cache, and `termos models serve` is a separate process with one OpenAI-compatible endpoint that agents use like any other provider.
+
+## D-070: A patched `gemm-common` until upstream fixes aarch64 Linux
+- **Status:** Accepted (lead) · 2026-11-02
+- **Context:** CI's aarch64 Linux job could not build candle (D-067): `gemm-common` 0.19.0's FP16 inline-assembly helpers lack the `fp16` target feature that the kernels calling them have, and where LLVM emits them out of line (debug builds) it rejects the instructions. No newer release exists. Turning FP16 on for the whole target is not an option: the Raspberry Pi 4's Cortex-A72 has no FP16.
+- **Decision:** `third_party/gemm-common` is a copy of 0.19.0 with `#[target_feature(enable = "fp16")]` on those seven helpers, used through `[patch.crates-io]`. The kernels are chosen at run time only where the CPU has FP16, as before. `third_party/` is outside the workspace and the repo checks (its own licenses and markers), and its README lists each patch and when it can go: as soon as a `gemm-common` release has the fix.
+- **Alternatives:** leaving candle out on aarch64 Linux (no embeddings on a Pi); `-C target-feature=+fp16` (binaries that can fault on ARMv8.0 CPUs).
+
+## D-071: llama.cpp is installed from a pinned nightly build
+- **Status:** Accepted (lead; supersedes the `@latest` in D-065) · 2026-11-02
+- **Context:** CI showed that llama.cpp's latest GitHub release is now a versioned one (`v0.8.0`) with no binaries: since its `v0.x` releases, each names the nightly build (`b…`) that carries them.
+- **Decision:** TermOS installs `github:ggml-org/llama.cpp[asset_pattern=…]@<build>` with the build pinned in `termos_models::llama::VERSION` (`b11960`, v0.8.0's), which TermOS moves as it is tested, as for jdtls (D-057). `[models] llama-cpp-version` installs another build. CI prints the pinned build's assets.
+- **Alternatives:** resolving "the newest nightly with our asset" at run time (an untested llama.cpp on every machine, and a GitHub API call TermOS would make itself); reading `nightly-tag.txt` from the latest release (the same, one step removed).
+
 ---
 
 ## Open questions (the owner will be asked before the milestone that needs each one)

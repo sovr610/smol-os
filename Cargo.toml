@@ -5,7 +5,8 @@ members = ["crates/*", "xtask"]
 # reached through the `cargo xtask` alias (see .cargo/config.toml).
 default-members = ["crates/*"]
 # cargo-fuzz targets need a nightly toolchain; they live outside the workspace.
-exclude = ["fuzz"]
+# third_party/ holds patched copies of dependencies (see [patch.crates-io]).
+exclude = ["fuzz", "third_party"]
 
 [workspace.package]
 version = "0.0.0"
@@ -145,3 +146,10 @@ undocumented_unsafe_blocks = "deny"
 lto = "thin"
 codegen-units = 1
 strip = "debuginfo"
+
+# Patched copies of dependencies, each with a README saying what changed
+# and when it can go.
+[patch.crates-io]
+# FP16 assembly that does not build for aarch64 Linux without the feature
+# on its helpers (D-070).
+gemm-common = { path = "third_party/gemm-common" }

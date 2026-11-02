@@ -13,9 +13,14 @@ pub(crate) fn root() -> PathBuf {
         .map_or_else(|| PathBuf::from("."), Path::to_path_buf)
 }
 
+/// Patched copies of other projects' crates: their own license headers
+/// and work markers, not ours to check.
+pub(crate) const THIRD_PARTY: &str = "third_party";
+
 /// Tracked files plus untracked files that are not ignored, relative to
-/// `root`, sorted. Using git keeps `target/`, Buildroot output and other
-/// ignored trees out of every check without a hand-maintained skip list.
+/// `root`, sorted, without [`THIRD_PARTY`]. Using git keeps `target/`,
+/// Buildroot output and other ignored trees out of every check without a
+/// hand-maintained skip list.
 pub(crate) fn files(root: &Path) -> Result<Vec<PathBuf>> {
     let out = Command::new("git")
         .args([
@@ -42,6 +47,7 @@ pub(crate) fn files(root: &Path) -> Result<Vec<PathBuf>> {
         .map(PathBuf::from)
         // `--cached` still lists files deleted from the working tree.
         .filter(|p| root.join(p).is_file())
+        .filter(|p| !p.starts_with(THIRD_PARTY))
         .collect();
     files.sort();
     files.dedup();

@@ -19,6 +19,13 @@ use termos_hw::accel::Accelerators;
 /// The llama.cpp repository mise installs from.
 pub const REPO: &str = "ggml-org/llama.cpp";
 
+/// The llama.cpp build TermOS installs: the nightly release that carries
+/// the binaries of llama.cpp v0.8.0. llama.cpp's versioned releases
+/// (`v0.x`, its "latest") have no binaries; each names a nightly build
+/// that has them (D-071). TermOS moves this pin; `[models]
+/// llama-cpp-version` overrides it.
+pub const VERSION: &str = "b11960";
+
 /// The build to use: the config's choice, else one from the hardware.
 pub fn choose(config: LlamaBuild, hw: &Accelerators) -> LlamaBuild {
     if config != LlamaBuild::Auto {
@@ -257,8 +264,8 @@ mod tests {
     #[test]
     fn assets_and_tools() {
         assert_eq!(
-            mise_tool(LlamaBuild::Cpu, "linux", "x86_64", "latest").expect("tool"),
-            "github:ggml-org/llama.cpp[asset_pattern=llama-*-bin-ubuntu-x64.*]@latest"
+            mise_tool(LlamaBuild::Cpu, "linux", "x86_64", VERSION).expect("tool"),
+            "github:ggml-org/llama.cpp[asset_pattern=llama-*-bin-ubuntu-x64.*]@b11960"
         );
         assert!(
             asset_pattern(LlamaBuild::Cuda, "linux", "x86_64")

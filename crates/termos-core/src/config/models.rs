@@ -28,6 +28,9 @@ pub struct ModelsConfig {
     pub context: u32,
     /// Which llama.cpp build: chosen from the hardware, or forced.
     pub llama_cpp: LlamaBuild,
+    /// The llama.cpp build to install (a release tag such as `b11960`);
+    /// `None`: the one this TermOS was tested with (D-071).
+    pub llama_cpp_version: Option<String>,
     /// Your own `llama-server` (a CUDA or ROCm build, say); none: TermOS
     /// installs the official build with mise.
     pub llama_server: Option<PathBuf>,
@@ -48,6 +51,7 @@ impl Default for ModelsConfig {
             token: None,
             context: 4096,
             llama_cpp: LlamaBuild::Auto,
+            llama_cpp_version: None,
             llama_server: None,
             memory_budget: None,
             port: 0,

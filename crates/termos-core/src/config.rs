@@ -605,6 +605,7 @@ store = "auto"
 # "local" provider or `termos models serve`.
 context = 4096           # tokens of context llama.cpp gets
 llama-cpp = "auto"       # auto | cpu | vulkan | cuda | rocm | metal
+# llama-cpp-version = "b11960"   # the llama.cpp build to install (default: tested one)
 port = 0                 # the router's port; 0 picks a free one
 # cache = "~/.cache/huggingface/hub"   # shared with huggingface_hub
 # cache-limit = "100G"   # `termos model gc` keeps the cache under this

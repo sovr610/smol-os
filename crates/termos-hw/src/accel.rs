@@ -393,12 +393,16 @@ pub fn tpu_chips(root: &Path) -> usize {
 mod tests {
     use super::*;
 
+    #[cfg(unix)]
     fn write(root: &Path, rel: &str, text: &str) {
         let p = root.join(rel);
         std::fs::create_dir_all(p.parent().expect("dir")).expect("mkdir");
         std::fs::write(p, text).expect("write");
     }
 
+    // The tree has Linux's names (`1-1:1.0`), which Windows does not allow;
+    // these probes only run on Linux anyway.
+    #[cfg(unix)]
     #[test]
     fn boards_and_accelerators_in_a_fake_tree() {
         let dir = tempfile::tempdir().expect("tempdir");

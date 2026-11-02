@@ -155,8 +155,11 @@ the router refuses to use a llama-server that does not check it.
 
 ## llama.cpp
 
-TermOS uses llama.cpp's official release for your machine, installed by
-mise on first use:
+TermOS uses llama.cpp's official binaries for your machine, installed by
+mise on first use. It installs the build it was tested with (`b11960`, the
+binaries of llama.cpp v0.8.0); `[models] llama-cpp-version = "b…"` picks
+another of llama.cpp's [nightly builds](https://github.com/ggml-org/llama.cpp/releases)
+(its `v0.x` releases carry no binaries of their own).
 
 | `[models] llama-cpp` | Used when (`auto`) | Release builds exist for |
 | --- | --- | --- |

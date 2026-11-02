@@ -576,7 +576,7 @@ What was shown, and where (live, Linux, in an isolated `tmux -L termos-m6` with 
 ---
 
 ## M7 — Local models
-**Status:** 🔍 done, awaiting review · Owner answers: O-6 → `llama-server` subprocesses (D-065); O-7 → candle first, for embedding models (D-065, D-067). D-021 was followed as proposed and is to be confirmed at this review. Design: D-065 to D-068, ARCHITECTURE.md §12, §14, §16 and §17; user guide [models.md](docs/models.md).
+**Status:** 🔍 done, awaiting review · Owner answers: O-6 → `llama-server` subprocesses (D-065); O-7 → candle first, for embedding models (D-065, D-067). D-021 confirmed by the owner (D-069). Design: D-065 to D-068, ARCHITECTURE.md §12, §14, §16 and §17; user guide [models.md](docs/models.md).
 
 **Deliverables**
 - **CLI:** [x] `termos model search|info|pull|list|rm|gc|recommend`; [x] `termos models serve|status|stop|setup|sidecar`

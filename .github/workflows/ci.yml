@@ -325,9 +325,13 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - uses: actions-rust-lang/setup-rust-toolchain@v1
-      # What the asset patterns in termos-models/src/llama.rs must match.
-      - name: llama.cpp's latest release assets
-        run: gh release view --repo ggml-org/llama.cpp --json tagName,assets --jq '.tagName, .assets[].name'
+      # What the asset patterns in termos-models/src/llama.rs must match:
+      # the assets of the build TermOS pins (llama::VERSION).
+      - name: The pinned llama.cpp build's assets
+        run: |
+          tag="$(sed -n 's/^pub const VERSION: &str = "\(.*\)";$/\1/p' crates/termos-models/src/llama.rs)"
+          test -n "$tag"
+          gh release view "$tag" --repo ggml-org/llama.cpp --json tagName,assets --jq '.tagName, .assets[].name'
       - name: Build
         run: cargo build --locked -p termos-cli
       - name: Models end to end

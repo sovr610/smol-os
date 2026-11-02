@@ -22,6 +22,15 @@ use termos_models::fit;
 use termos_models::hub::Hub;
 use termos_models::llama;
 
+/// `println!` that returns write errors instead of panicking, so
+/// `termos model list | head -1` ends quietly (main treats a broken pipe
+/// as success).
+macro_rules! out {
+    ($($arg:tt)*) => {
+        writeln!(std::io::stdout(), $($arg)*)?
+    };
+}
+
 #[derive(Debug, Subcommand)]
 pub(crate) enum ModelCmd {
     /// Search the Hugging Face Hub (GGUF models; --all for every kind).
@@ -160,8 +169,8 @@ fn gib(b: u64) -> String {
     human_bytes(b)
 }
 
-fn print_estimate(e: &fit::Estimate, p: fit::Placement) {
-    println!(
+fn print_estimate(e: &fit::Estimate, p: fit::Placement) -> std::io::Result<()> {
+    out!(
         "  needs about {} ({} weights + {} KV cache at {} tokens + {} overhead): {}",
         gib(e.total()),
         gib(e.weights),
@@ -170,6 +179,7 @@ fn print_estimate(e: &fit::Estimate, p: fit::Placement) {
         gib(e.overhead),
         p.describe()
     );
+    Ok(())
 }
 
 pub(crate) fn model_command(
@@ -185,16 +195,18 @@ pub(crate) fn model_command(
             let hub = Hub::new(hf_token(&config, paths)?)?;
             let found = rt()?.block_on(hub.search(query, !all, *limit))?;
             if found.is_empty() {
-                println!("nothing found for `{query}`");
+                out!("nothing found for `{query}`");
             }
             for f in found {
                 let task = f
                     .pipeline_tag
                     .map(|t| format!("  [{t}]"))
                     .unwrap_or_default();
-                println!(
+                out!(
                     "{:<60} {:>10} downloads {:>6} likes{task}",
-                    f.id, f.downloads, f.likes
+                    f.id,
+                    f.downloads,
+                    f.likes
                 );
             }
         }
@@ -211,7 +223,7 @@ pub(crate) fn model_command(
                 llama::uses_gpu(build),
                 context,
             ))?;
-            println!(
+            out!(
                 "{} at {}",
                 plan.repo,
                 &plan.commit[..12.min(plan.commit.len())]
@@ -221,7 +233,7 @@ pub(crate) fn model_command(
                     rt.block_on(catalog::remote_header(&hub, &plan.repo, &plan.commit, file))
             {
                 let s = h.shape();
-                println!(
+                out!(
                     "  {} ({}): {} layers, trained context {}",
                     h.name().unwrap_or("?"),
                     h.architecture().unwrap_or("?"),
@@ -230,14 +242,14 @@ pub(crate) fn model_command(
                         .map_or_else(|| "?".into(), |c| c.to_string())
                 );
             }
-            println!("on this machine (llama.cpp {build} build):");
+            out!("on this machine (llama.cpp {build} build):");
             for c in &plan.choices {
                 let mark = if matches!(&plan.kind, Kind::Gguf { file } if *file == c.file) {
                     "→"
                 } else {
                     " "
                 };
-                println!(
+                out!(
                     " {mark} {:<55} {:>10}  {}",
                     c.file,
                     gib(c.estimate.weights),
@@ -247,11 +259,11 @@ pub(crate) fn model_command(
             if plan.choices.is_empty()
                 && let (Some(e), Some(p)) = (plan.estimate, plan.placement)
             {
-                println!(
+                out!(
                     "  an embedding model for candle, {} to download",
                     gib(plan.bytes())
                 );
-                print_estimate(&e, p);
+                print_estimate(&e, p)?;
             }
         }
         ModelCmd::Pull {
@@ -276,9 +288,9 @@ pub(crate) fn model_command(
                 Kind::Embedding => "an embedding model".into(),
                 Kind::Server { name } => format!("files for {name}"),
             };
-            println!("{} ({what}): {} to download", plan.repo, gib(plan.bytes()));
+            out!("{} ({what}): {} to download", plan.repo, gib(plan.bytes()));
             if let (Some(e), Some(p)) = (plan.estimate, plan.placement) {
-                print_estimate(&e, p);
+                print_estimate(&e, p)?;
             }
             if !yes && std::io::stdin().is_terminal() {
                 eprint!("Download? [Y/n] ");
@@ -325,16 +337,16 @@ pub(crate) fn model_command(
                 .filter(|m| m.repo == plan.repo)
                 .map(|m| m.id.as_str())
                 .collect();
-            println!(
+            out!(
                 "pulled into {}",
                 cache.snapshot_dir(&plan.repo, &plan.commit).display()
             );
-            println!("serve it as: {}", ids.join(", "));
+            out!("serve it as: {}", ids.join(", "));
         }
         ModelCmd::List => {
             let models = catalog::scan(&cache, &config.models.servers);
             if models.is_empty() {
-                println!(
+                out!(
                     "no models in {} (`termos model pull <repo>`)",
                     cache.dir.display()
                 );
@@ -345,9 +357,9 @@ pub(crate) fn model_command(
                     Kind::Embedding => "candle, embeddings".into(),
                     Kind::Server { name } => format!("server {name}"),
                 };
-                println!("{:<60} {:>10}  {kind}", m.id, gib(m.size));
+                out!("{:<60} {:>10}  {kind}", m.id, gib(m.size));
             }
-            println!("cache: {} in {}", gib(cache.size()), cache.dir.display());
+            out!("cache: {} in {}", gib(cache.size()), cache.dir.display());
         }
         ModelCmd::Rm { model } => {
             let r = ModelRef::parse(model, None).map_err(|e| anyhow::anyhow!(e))?;
@@ -355,9 +367,9 @@ pub(crate) fn model_command(
                 None => {
                     let freed = cache.remove(&r.repo)?;
                     if freed == 0 {
-                        println!("{} is not downloaded", r.repo);
+                        out!("{} is not downloaded", r.repo);
                     } else {
-                        println!("removed {} ({})", r.repo, gib(freed));
+                        out!("removed {} ({})", r.repo, gib(freed));
                     }
                 }
                 Some(_) => {
@@ -371,7 +383,7 @@ pub(crate) fn model_command(
                     std::fs::remove_file(&path)
                         .with_context(|| format!("cannot remove {}", path.display()))?;
                     let (freed, _) = cache.gc(None);
-                    println!("removed {model} ({})", gib(freed));
+                    out!("removed {model} ({})", gib(freed));
                 }
             }
         }
@@ -386,9 +398,9 @@ pub(crate) fn model_command(
             };
             let (freed, removed) = cache.gc(limit);
             for r in &removed {
-                println!("removed {r}");
+                out!("removed {r}");
             }
-            println!(
+            out!(
                 "freed {}; the cache holds {}",
                 gib(freed),
                 gib(cache.size())
@@ -397,13 +409,13 @@ pub(crate) fn model_command(
         ModelCmd::Recommend { query } => {
             let hw = hardware();
             let build = llama::choose(config.models.llama_cpp, &hw);
-            println!("This machine:");
+            out!("This machine:");
             for l in hw.describe() {
-                println!("  {l}");
+                out!("  {l}");
             }
-            println!("llama.cpp build: {build}");
+            out!("llama.cpp build: {build}");
             for l in accelerator_notes(&hw) {
-                println!("  {l}");
+                out!("  {l}");
             }
             // The largest weights that fit, for a typical model shape at the
             // configured context (8 KV heads of 128, 32 layers).
@@ -430,23 +442,23 @@ pub(crate) fn model_command(
                 lo
             };
             if llama::uses_gpu(build) && (hw.best_gpu_free().is_some() || hw.metal) {
-                println!(
+                out!(
                     "Fully on the GPU: models with up to about {} of weights (at {context} tokens of context).",
                     gib(largest(true))
                 );
             }
-            println!(
+            out!(
                 "At all (CPU, or split with the GPU): up to about {} of weights.",
                 gib(largest(false))
             );
-            println!(
+            out!(
                 "As a guide, Q4_K_M files take about 0.6 GB per billion parameters, Q8_0 about 1.1 GB."
             );
             if let Some(q) = query {
                 let hub = Hub::new(hf_token(&config, paths)?)?;
                 let rt = rt()?;
                 let found = rt.block_on(hub.search(q, true, 8))?;
-                println!("\nGGUF models on the Hub for `{q}`, the best file each:");
+                out!("\nGGUF models on the Hub for `{q}`, the best file each:");
                 for f in found {
                     let r = ModelRef {
                         repo: f.id.clone(),
@@ -461,7 +473,7 @@ pub(crate) fn model_command(
                         context,
                     )) {
                         Ok(plan) => match plan.choices.first() {
-                            Some(c) => println!(
+                            Some(c) => out!(
                                 "  {}:{:<10} {:>10}  {}",
                                 f.id,
                                 c.quant
@@ -471,9 +483,9 @@ pub(crate) fn model_command(
                                 gib(c.estimate.weights),
                                 c.placement.describe()
                             ),
-                            None => println!("  {}  (no GGUF files)", f.id),
+                            None => out!("  {}  (no GGUF files)", f.id),
                         },
-                        Err(e) => println!("  {}  ({e})", f.id),
+                        Err(e) => out!("  {}  ({e})", f.id),
                     }
                 }
             }
@@ -522,7 +534,12 @@ fn llama_source(
     if let Some(p) = std::env::var_os("TERMOS_LLAMA_SERVER").filter(|v| !v.is_empty()) {
         return Ok(llama::Source::Path(PathBuf::from(p)));
     }
-    let tool = llama::mise_tool(build, &hw.os, &hw.arch, "latest")?;
+    let version = config
+        .models
+        .llama_cpp_version
+        .as_deref()
+        .unwrap_or(llama::VERSION);
+    let tool = llama::mise_tool(build, &hw.os, &hw.arch, version)?;
     let mise = termos_devkit::mise::ensure(&paths.data_dir, &mut |m| tracing::info!("{m}"))
         .map_err(|e| format!("cannot get mise to install llama.cpp: {e}"))?;
     Ok(llama::Source::Mise {
@@ -545,7 +562,7 @@ pub(crate) fn models_command(
         } => serve(&config, paths, *port, socket.as_deref(), *daemon),
         ModelsCmd::Status => {
             let Some(e) = running(paths) else {
-                println!("the model router is not running (`termos models serve`)");
+                out!("the model router is not running (`termos models serve`)");
                 return Ok(ExitCode::FAILURE);
             };
             let rt = rt()?;
@@ -560,14 +577,14 @@ pub(crate) fn models_command(
                     .await
                     .map_err(|e| termos_models::hub::HubError::Protocol(e.to_string()))
             })?;
-            println!("the model router runs at {} (pid {})", e.url, e.pid);
+            out!("the model router runs at {} (pid {})", e.url, e.pid);
             for m in v["data"].as_array().into_iter().flatten() {
                 let loaded = if m["termos"]["loaded"] == true {
                     "loaded"
                 } else {
                     ""
                 };
-                println!(
+                out!(
                     "  {:<60} {:<10} {loaded}",
                     m["id"].as_str().unwrap_or("?"),
                     m["termos"]["kind"].as_str().unwrap_or("")
@@ -577,7 +594,7 @@ pub(crate) fn models_command(
         }
         ModelsCmd::Stop => {
             let Some(e) = running(paths) else {
-                println!("the model router is not running");
+                out!("the model router is not running");
                 return Ok(ExitCode::SUCCESS);
             };
             rt()?.block_on(async {
@@ -592,17 +609,17 @@ pub(crate) fn models_command(
             while models_endpoint::read(paths).is_some() && Instant::now() < deadline {
                 std::thread::sleep(Duration::from_millis(100));
             }
-            println!("stopped the model router");
+            out!("stopped the model router");
             Ok(ExitCode::SUCCESS)
         }
         ModelsCmd::Setup => {
             let hw = hardware();
             let build = llama::choose(config.models.llama_cpp, &hw);
-            println!("llama.cpp build for this machine: {build}");
+            out!("llama.cpp build for this machine: {build}");
             let source =
                 llama_source(&config, paths, &hw, build).map_err(|e| anyhow::anyhow!(e))?;
             let bin = source.binary().map_err(|e| anyhow::anyhow!(e))?;
-            println!("llama-server: {}", bin.display());
+            out!("llama-server: {}", bin.display());
             Ok(ExitCode::SUCCESS)
         }
         ModelsCmd::Sidecar { kind, models } => sidecar(kind, models, paths),
@@ -679,7 +696,7 @@ fn serve(
         models_endpoint::write(paths, &endpoint).context("cannot write the endpoint file")?;
         tracing::info!("the model router listens on {addr} ({build} llama.cpp)");
         if !daemon {
-            println!("the model router listens on http://{addr}/v1 (llama.cpp {build} build); the token is in {}", models_endpoint::path(paths).display());
+            out!("the model router listens on http://{addr}/v1 (llama.cpp {build} build); the token is in {}", models_endpoint::path(paths).display());
         }
         #[cfg(unix)]
         if let Some(sock) = socket {
@@ -770,9 +787,9 @@ fn sidecar(kind: &str, models: &[String], paths: &Paths) -> anyhow::Result<ExitC
         }
         Ok(())
     };
-    println!("creating {} …", venv.display());
+    out!("creating {} …", venv.display());
     uv(&["venv", "--python", "3.12", &venv.display().to_string()])?;
-    println!("installing {package} (large; several minutes) …");
+    out!("installing {package} (large; several minutes) …");
     let python = venv.join("bin").join("python");
     uv(&[
         "pip",
@@ -793,14 +810,14 @@ fn sidecar(kind: &str, models: &[String], paths: &Paths) -> anyhow::Result<ExitC
         .collect();
     let quoted: Vec<String> = argv.iter().map(|a| format!("{a:?}")).collect();
     let served: Vec<String> = models.iter().map(|m| format!("{m:?}")).collect();
-    println!("\nAdd this to config.toml (and `termos model pull` the repositories it serves):\n");
-    println!(
+    out!("\nAdd this to config.toml (and `termos model pull` the repositories it serves):\n");
+    out!(
         "[models.servers.{kind}]\ncommand = [{}]\nmodels = [{}]",
         quoted.join(", "),
         served.join(", ")
     );
     if kind == "vllm" {
-        println!("env = {{ VLLM_API_KEY = \"{{token}}\" }}");
+        out!("env = {{ VLLM_API_KEY = \"{{token}}\" }}");
     }
     Ok(ExitCode::SUCCESS)
 }
