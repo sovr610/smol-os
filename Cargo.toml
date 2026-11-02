@@ -88,7 +88,10 @@ unicode-width = "0.2.3"
 swash = "0.2.10"
 drm = "0.15.0"
 input = { version = "0.10.0", default-features = false, features = ["udev", "libinput_1_21"] }
-libseat = "0.2.4"
+# Without its default `custom_logger`, whose build script compiles C with
+# `-I /usr/local/include`, which a cross compiler must not see (and the
+# console does not use the logger).
+libseat = { version = "0.2.4", default-features = false }
 xkbcommon = { version = "0.9.0", default-features = false }
 
 # Agents (M6, D-058 to D-064). HTTP clients are our own thin ones over
