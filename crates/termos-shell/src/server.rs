@@ -706,6 +706,7 @@ impl Server {
             env_shell: self.opts.env_shell.clone(),
             pane_ids: self.pane_ids.clone(),
             clipboard: std::sync::Arc::clone(&self.clipboard),
+            termos_exe: None,
             // Lets `termos msg`, `ls` and `detach` inside a pane find us
             // (D-029; supersedes D-027's pid-only value).
             pane_env: std::iter::once((

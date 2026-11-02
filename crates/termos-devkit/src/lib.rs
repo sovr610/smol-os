@@ -7,12 +7,15 @@
 //!   and debuggers;
 //! - [`lang`]: `termos lang install|use|list|remove` over mise;
 //! - [`editor`]: TermOS's Neovim and Helix, with the installed servers
-//!   and debuggers.
+//!   and debuggers;
+//! - [`templates`]: `termos create <template> [dir]`;
+//! - [`tasks`]: build, run and test for a project.
 
 pub mod editor;
 pub mod lang;
 pub mod langs;
 pub mod mise;
+pub mod tasks;
+pub mod templates;
 
-// TODO(M5): project templates, build/run/test panels, Git UI.
 // TODO(M5): dev rootfs, Podman and the package manager UI (M5b).

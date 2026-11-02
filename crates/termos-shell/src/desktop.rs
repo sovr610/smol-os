@@ -124,6 +124,9 @@ pub struct DesktopOptions {
     pub cwd: Option<PathBuf>,
     /// Server-wide clipboard history (D-050), shared by every session.
     pub clipboard: SharedClipboard,
+    /// The `termos` program, for panes that run its subcommands (task
+    /// panels, the Git UI, the editor); `None`: this program.
+    pub termos_exe: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -277,6 +280,8 @@ pub struct Desktop {
     wasm_widgets: Vec<(String, Cells)>,
     /// Both, as the status line draws them.
     status_widgets: Vec<Cells>,
+    /// The panel of each project task that ran (a re-run replaces it).
+    task_panes: BTreeMap<String, PaneId>,
     dirty: bool,
     /// The workspace/pane structure changed since the last snapshot.
     layout_changed: bool,
@@ -377,6 +382,7 @@ impl Desktop {
             plugin_commands: Vec::new(),
             wasm_widgets: Vec::new(),
             status_widgets: Vec::new(),
+            task_panes: BTreeMap::new(),
             dirty: true,
             layout_changed: true,
             quit: None,
@@ -907,10 +913,73 @@ impl Desktop {
         match self.config.dev.editor {
             EditorChoice::Env => editor_command(env),
             EditorChoice::Auto if has_env => editor_command(env),
-            _ => match std::env::current_exe() {
-                Ok(exe) => (exe.display().to_string(), vec!["edit".to_owned()]),
-                Err(_) => editor_command(env),
+            _ => match self.termos_exe() {
+                Some(exe) => (exe.display().to_string(), vec!["edit".to_owned()]),
+                None => editor_command(env),
             },
+        }
+    }
+
+    fn termos_exe(&self) -> Option<PathBuf> {
+        self.opts
+            .termos_exe
+            .clone()
+            .or_else(|| std::env::current_exe().ok())
+    }
+
+    /// A panel at the bottom running `termos task NAME`; a task's earlier
+    /// panel goes.
+    fn open_task(&mut self, name: &str, area: Rect) {
+        let Some(exe) = self.termos_exe() else {
+            self.notify(Level::Error, "cannot find the termos program");
+            return;
+        };
+        if let Some(old) = self.task_panes.remove(name)
+            && self.panes.contains_key(&old)
+        {
+            self.close_pane(old);
+        }
+        let cwd = self.focused_cwd();
+        let args = vec!["task".to_owned(), name.to_owned(), "--wait".to_owned()];
+        let program = exe.display().to_string();
+        match self.spawn_pane(cwd, (area.w, area.h / 3), Some((program, args))) {
+            Ok(id) => {
+                if let Some(p) = self.panes.get_mut(&id) {
+                    p.title = format!("task: {name}");
+                }
+                if self
+                    .session
+                    .active_mut()
+                    .add_split(id, SplitHow::Down, area)
+                {
+                    self.task_panes.insert(name.to_owned(), id);
+                } else {
+                    self.close_pane(id);
+                    self.notify(Level::Warn, "no space for the task panel");
+                }
+            }
+            Err(e) => self.notify(Level::Error, format!("cannot run the task: {e}")),
+        }
+    }
+
+    /// lazygit in a floating window, in the focused pane's folder.
+    fn open_git(&mut self, area: Rect) {
+        let Some(exe) = self.termos_exe() else {
+            self.notify(Level::Error, "cannot find the termos program");
+            return;
+        };
+        let cwd = self.focused_cwd();
+        let program = exe.display().to_string();
+        match self.spawn_pane(
+            cwd,
+            (area.w * 9 / 10, area.h * 9 / 10),
+            Some((program, vec!["git".to_owned()])),
+        ) {
+            Ok(id) => {
+                self.session.active_mut().add_float(id, area);
+                self.animate(anim::Kind::FloatOpen(id), Instant::now());
+            }
+            Err(e) => self.notify(Level::Error, format!("cannot start the Git UI: {e}")),
         }
     }
 
@@ -1782,6 +1851,8 @@ impl Desktop {
                 };
                 self.open_app(Box::new(termos_apps::FileManager::open(dir)));
             }
+            Command::Task(name) => self.open_task(&name, area),
+            Command::GitOpen => self.open_git(area),
             Command::MonitorOpen => {
                 self.open_app(Box::new(termos_apps::SystemMonitor::open()));
             }
@@ -1943,6 +2014,8 @@ impl Desktop {
                 | Command::MarkdownOpen(_)
                 | Command::FileOpen(_)
                 | Command::FileEdit(_) => continue,
+                // `task <name>` is typed; build, run and test are listed.
+                Command::Task(ref t) if !matches!(t.as_str(), "build" | "run" | "test") => continue,
                 _ => {}
             }
             items.push(PaletteItem {

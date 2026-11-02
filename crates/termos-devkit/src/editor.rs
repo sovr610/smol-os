@@ -23,6 +23,13 @@ pub const NEOVIM: Tool = Tool {
     cmd: &["nvim"],
 };
 
+/// The Git UI (D-053).
+pub const LAZYGIT: Tool = Tool {
+    spec: "lazygit",
+    version: "latest",
+    cmd: &["lazygit"],
+};
+
 /// Helix, when chosen instead (`[dev] editor = "helix"`).
 pub const HELIX: Tool = Tool {
     spec: "helix",
@@ -363,9 +370,9 @@ pub struct Launch {
     pub env: Vec<(String, String)>,
 }
 
-/// Installs `tool` at its pinned version unless mise has it; returns the
-/// version to run.
-fn ensure_tool(
+/// Installs `tool` at its pinned version unless mise has it; returns
+/// what mise has installed and the version to run.
+pub fn ensure_tool(
     tool: &Tool,
     mise: &mut dyn Runner,
     say: &mut dyn FnMut(&str),

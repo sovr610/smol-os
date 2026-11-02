@@ -585,6 +585,14 @@ rewrite history.
   - **Debuggers:** delve (Go), codelldb (Rust, C, C++, Zig), debugpy (Python), js-debug (Node, Bun), netcoredbg (.NET). Java, Kotlin, Lua and shell have none yet.
 - **Alternatives:** runtimes only per project (panes would find nothing outside projects); servers on `PATH` through shims (needs every server in the global config); a plugin manager such as lazy.nvim (one more moving part now that Neovim has `vim.pack`); always TermOS's Neovim (ignoring a user's `$EDITOR`).
 
+## D-055: Templates are `termos create`; task panels and the Git UI are panes running `termos`
+- **Status:** Accepted (lead) · 2026-11-02
+- **Decision:**
+  - **`termos create <template> [dir]`** instead of the planned `termos new <template>`: `termos new` already creates sessions, as tmux's does. Templates are embedded files, one per language (`rust-cli`, `go-cli`, `python-cli`, `node-cli`, `bun-cli`, `deno-cli`, `c-cli`, `cpp-cli`, `zig-cli`, `java-cli`, `kotlin-cli`, `csharp-cli`, `lua-cli`, `shell-script`, `web-page`), so a project builds the same next year; Zig and .NET use their own generators (`zig init`, `dotnet new console`), whose files change between versions. Each project gets a `mise.toml` pinning the version installed. Only new or empty folders.
+  - **Tasks:** build, run and test come from the project's files (Cargo, Go, Deno, npm or Bun, Python, CMake, .NET, Gradle, Maven, Zig, single-file Java, Kotlin, Lua, shell), the nearest such folder up; `[tasks]` in a `termos.toml` there overrides them and adds more. `termos task NAME` runs one in a shell in the project folder.
+  - **Panels:** `task.build`, `task.run`, `task.test` and `task NAME` open a pane at the bottom running `termos task NAME --wait` (it waits for Enter, so the output stays); a task's next run replaces its panel. `git.open` (prefix `g`) opens `termos git` (lazygit through mise) in a float. The desktop runs the `termos` binary itself, which keeps termos-devkit out of termos-shell (ARCHITECTURE.md §4).
+- **Alternatives:** `termos new` doing both (a session name and a template name would be ambiguous); generating every project with each language's own tool (results drift with versions); task detection inside the shell crate (would put devkit below the shell).
+
 ---
 
 ## Open questions (the owner will be asked before the milestone that needs each one)

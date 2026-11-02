@@ -46,7 +46,17 @@ impl Harness {
         Self::with_options(extra, tutorial, false)
     }
 
+    /// A harness whose panes run `exe` for `termos` subcommands.
+    #[cfg(unix)]
+    fn with_termos(exe: PathBuf) -> Self {
+        Self::build("", false, false, Some(exe))
+    }
+
     fn with_options(extra: &str, tutorial: bool, animations: bool) -> Self {
+        Self::build(extra, tutorial, animations, None)
+    }
+
+    fn build(extra: &str, tutorial: bool, animations: bool, termos_exe: Option<PathBuf>) -> Self {
         let dir = tempfile::tempdir().expect("tempdir");
         let paths = Paths {
             config_dir: dir.path().join("config"),
@@ -66,6 +76,7 @@ impl Harness {
         let clipboard = termos_core::clipboard::ClipboardHistory::shared(50);
         let opts = DesktopOptions {
             clipboard: std::sync::Arc::clone(&clipboard),
+            termos_exe,
             session_name: "test".into(),
             config_path: paths.config_file(),
             paths,
@@ -548,6 +559,34 @@ async fn settings_change_the_config() {
     h.wait_text("config reloaded").await;
 }
 
+/// Task panels and the Git UI run `termos` subcommands in panes: here a
+/// stand-in that prints its arguments and waits.
+#[cfg(unix)]
+#[tokio::test]
+async fn task_panels_and_git_run_termos() {
+    use std::os::unix::fs::PermissionsExt;
+    use termos_shell::commands::Command;
+
+    let stub_dir = tempfile::tempdir().expect("tempdir");
+    let stub = stub_dir.path().join("termos");
+    std::fs::write(&stub, "#!/bin/sh\necho \"stub-termos $*\"\nsleep 30\n").expect("write");
+    std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+    let mut h = Harness::with_termos(stub);
+    h.desktop.run(Command::Task("build".into()));
+    h.wait_text("stub-termos task build --wait").await;
+    assert_eq!(h.panes().len(), 2, "the panel is a pane of its own");
+    // Running it again replaces the panel instead of adding one.
+    h.desktop.run(Command::Task("build".into()));
+    h.wait_text("stub-termos task build --wait").await;
+    assert_eq!(h.panes().len(), 2);
+    h.desktop.run(Command::Task("test".into()));
+    h.wait_text("stub-termos task test --wait").await;
+    assert_eq!(h.panes().len(), 3);
+    h.keys("C-b g");
+    h.wait_text("stub-termos git").await;
+    assert_eq!(h.panes().len(), 4);
+}
+
 #[tokio::test]
 async fn split_right_type_and_see_separator() {
     let mut h = Harness::new("");
@@ -960,6 +999,7 @@ async fn snapshots_keep_layout_and_scrollback() {
     let (tx, _rx) = mpsc::channel(1024);
     let opts = DesktopOptions {
         clipboard: termos_core::clipboard::ClipboardHistory::shared(50),
+        termos_exe: None,
         session_name: "again".into(),
         config_path: h.config_path(),
         paths: Paths {

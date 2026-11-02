@@ -119,6 +119,26 @@ enum Cmd {
         #[command(subcommand)]
         action: ConfigCmd,
     },
+    /// Start a project from a template (`termos create --list` shows them).
+    Create {
+        /// e.g. go-cli, rust-cli, python-cli.
+        template: Option<String>,
+        /// The new (or empty) folder; default: the current one.
+        dir: Option<PathBuf>,
+        /// List the templates.
+        #[arg(long)]
+        list: bool,
+    },
+    /// Run a project task (build, run, test, or one from termos.toml);
+    /// without a name, list them.
+    Task {
+        name: Option<String>,
+        /// Wait for Enter when it ends (TermOS's task panels).
+        #[arg(long)]
+        wait: bool,
+    },
+    /// The Git UI (lazygit), installed with mise when missing.
+    Git,
     /// Edit files with the editor `[dev] editor` names (TermOS's Neovim by
     /// default, set up with the installed language servers).
     Edit { files: Vec<String> },
@@ -247,6 +267,13 @@ fn main() -> ExitCode {
         Some(Cmd::Config { action }) => config_command(action, &config_path),
         Some(Cmd::Lang { action }) => lang_command(action, &paths),
         Some(Cmd::Edit { files }) => edit_command(files, &paths, &config_path),
+        Some(Cmd::Create {
+            template,
+            dir,
+            list,
+        }) => create_command(template.as_deref(), dir.as_deref(), *list, &paths),
+        Some(Cmd::Task { name, wait }) => task_command(name.as_deref(), *wait),
+        Some(Cmd::Git) => git_command(&paths),
         Some(Cmd::Debug {
             what: DebugCmd::Caps { raw },
         }) => debug_caps(*raw),
@@ -359,9 +386,15 @@ fn run(cli: &Cli, paths: &Paths, config_path: &Path, t: &Target) -> anyhow::Resu
             }
         }
         Some(Cmd::Server) => run_server(paths, config_path, t),
-        Some(Cmd::Config { .. } | Cmd::Debug { .. } | Cmd::Lang { .. } | Cmd::Edit { .. }) => {
-            Ok(ExitCode::SUCCESS)
-        }
+        Some(
+            Cmd::Config { .. }
+            | Cmd::Debug { .. }
+            | Cmd::Lang { .. }
+            | Cmd::Edit { .. }
+            | Cmd::Create { .. }
+            | Cmd::Task { .. }
+            | Cmd::Git,
+        ) => Ok(ExitCode::SUCCESS),
     }
 }
 
@@ -407,6 +440,185 @@ fn pane_path(paths: &Paths) -> Option<(String, String)> {
     let path = std::env::var_os(&key);
     let value = termos_devkit::mise::pane_path(&get, &paths.data_dir, path.as_ref())?;
     Some((key, value.to_string_lossy().into_owned()))
+}
+
+/// Runs `cmd`, becoming it on Unix.
+fn run_as(mut cmd: std::process::Command, what: &str) -> anyhow::Result<ExitCode> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        let err = cmd.exec();
+        bail!("cannot start {what}: {err}")
+    }
+    #[cfg(not(unix))]
+    {
+        let status = cmd
+            .status()
+            .with_context(|| format!("cannot start {what}"))?;
+        Ok(if status.success() {
+            ExitCode::SUCCESS
+        } else {
+            ExitCode::FAILURE
+        })
+    }
+}
+
+/// `termos create <template> [dir]`.
+fn create_command(
+    template: Option<&str>,
+    dir: Option<&Path>,
+    list: bool,
+    paths: &Paths,
+) -> anyhow::Result<ExitCode> {
+    use termos_devkit::templates;
+    let names: Vec<&str> = templates::TEMPLATES.iter().map(|t| t.name).collect();
+    if list || template.is_none() {
+        for t in templates::TEMPLATES {
+            println!("{:<14} {}", t.name, t.about);
+        }
+        return Ok(ExitCode::SUCCESS);
+    }
+    let name = template.unwrap_or_default();
+    let t = templates::find(name)
+        .with_context(|| format!("no template {name:?}; there are {}", names.join(", ")))?;
+    let dir = match dir {
+        Some(d) => d.to_owned(),
+        None => std::env::current_dir()?,
+    };
+    let lang = templates::language(t).context("the template's language")?;
+    // Pin what is installed; mise is needed only when the language has a
+    // runtime or the template has a generator.
+    let mut pins = Vec::new();
+    let mut runner = None;
+    if let Some(rt) = &lang.runtime {
+        let mise = termos_devkit::mise::ensure(&paths.data_dir, &mut |m| println!("{m}"))?;
+        let mut r = termos_devkit::lang::MiseRunner { mise };
+        let have = termos_devkit::lang::installed(&mut r)?;
+        let version = have
+            .get(rt.spec)
+            .and_then(|v| v.iter().find(|i| i.active).or_else(|| v.last()))
+            .map(|i| i.version.clone());
+        match version {
+            Some(v) => pins.push((rt.spec.to_owned(), v)),
+            None => {
+                println!(
+                    "termos: {} is not installed yet (termos lang install {}); pinning {}",
+                    lang.title, lang.name, rt.version
+                );
+                pins.push((rt.spec.to_owned(), rt.version.to_owned()));
+            }
+        }
+        runner = Some(r);
+    }
+    let files = templates::write(t, &dir, &pins)?;
+    if let Some(generate) = templates::generator(t, &dir) {
+        let r = runner.as_mut().context("a generator needs mise")?;
+        let mut args = vec!["exec".to_owned()];
+        args.extend(pins.iter().map(|(s, v)| format!("{s}@{v}")));
+        args.push("--".to_owned());
+        args.extend(generate);
+        use termos_devkit::lang::Runner;
+        if !r.run(&args, Some(&dir))? {
+            bail!("the {} generator failed in {}", t.name, dir.display());
+        }
+    }
+    println!(
+        "termos: created {} ({}) in {}: {}",
+        templates::project_name(&dir),
+        t.name,
+        dir.display(),
+        files
+            .iter()
+            .filter_map(|f| f.strip_prefix(&dir).ok())
+            .map(|f| f.display().to_string())
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+    println!("termos: build, run and test with `termos task build|run|test` or the palette");
+    Ok(ExitCode::SUCCESS)
+}
+
+/// `termos task [NAME] [--wait]`.
+fn task_command(name: Option<&str>, wait: bool) -> anyhow::Result<ExitCode> {
+    use termos_devkit::tasks;
+    let here = std::env::current_dir()?;
+    let pause = |code: ExitCode| -> anyhow::Result<ExitCode> {
+        if wait {
+            println!("\n[press Enter to close]");
+            let mut line = String::new();
+            let _ = std::io::stdin().read_line(&mut line);
+        }
+        Ok(code)
+    };
+    let project = match tasks::find(&here) {
+        Ok(Some(p)) => p,
+        Ok(None) => {
+            eprintln!(
+                "termos: no project in {} or above (no Cargo.toml, go.mod, package.json, … and no termos.toml)",
+                here.display()
+            );
+            return pause(ExitCode::FAILURE);
+        }
+        Err(e) => {
+            eprintln!("termos: {e}");
+            return pause(ExitCode::FAILURE);
+        }
+    };
+    let Some(name) = name else {
+        println!("{} ({}):", project.root.display(), project.kind);
+        for (n, cmd) in &project.tasks {
+            println!("  {n:<10} {cmd}");
+        }
+        return Ok(ExitCode::SUCCESS);
+    };
+    let Some(cmd) = project.tasks.get(name) else {
+        let known: Vec<&str> = project.tasks.keys().map(String::as_str).collect();
+        eprintln!(
+            "termos: this {} project has no {name:?} task; it has {}",
+            project.kind,
+            known.join(", ")
+        );
+        return pause(ExitCode::FAILURE);
+    };
+    println!("▶ {cmd}   (in {})", project.root.display());
+    let (program, args) = tasks::shell(cmd);
+    let status = std::process::Command::new(program)
+        .args(args)
+        .current_dir(&project.root)
+        .status();
+    let code = match status {
+        Ok(s) if s.success() => {
+            println!("\n✓ {name} finished");
+            ExitCode::SUCCESS
+        }
+        Ok(s) => {
+            println!("\n✗ {name} failed ({s})");
+            ExitCode::FAILURE
+        }
+        Err(e) => {
+            println!("\n✗ cannot run the shell: {e}");
+            ExitCode::FAILURE
+        }
+    };
+    pause(code)
+}
+
+/// `termos git`: lazygit, installed with mise when missing.
+fn git_command(paths: &Paths) -> anyhow::Result<ExitCode> {
+    use termos_devkit::editor;
+    let mise = termos_devkit::mise::ensure(&paths.data_dir, &mut |m| println!("{m}"))?;
+    let path = mise.path.clone();
+    let mut runner = termos_devkit::lang::MiseRunner { mise };
+    let (_, version) =
+        editor::ensure_tool(&editor::LAZYGIT, &mut runner, &mut |m| println!("{m}"))?;
+    let mut cmd = std::process::Command::new(&path);
+    cmd.args([
+        "exec",
+        &format!("{}@{version}", editor::LAZYGIT.spec),
+        "--",
+        "lazygit",
+    ]);
+    run_as(cmd, "lazygit")
 }
 
 /// `$VISUAL`, else `$EDITOR`, split into a program and its arguments.

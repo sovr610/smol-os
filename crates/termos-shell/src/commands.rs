@@ -74,6 +74,11 @@ pub enum Command {
     FileEdit(String),
     MonitorOpen,
     SettingsOpen,
+    /// Run a project task (build, run, test, or one from termos.toml) in
+    /// a panel.
+    Task(String),
+    /// The Git UI (lazygit, D-053).
+    GitOpen,
     /// The clipboard history (D-050).
     ClipboardOpen,
     /// Forget the clipboard history (pinned entries stay).
@@ -207,6 +212,15 @@ pub const COMMANDS: &[CommandInfo] = &[
     },
     info("files.open", "Files: browse this folder"),
     info("monitor.open", "System monitor"),
+    info("task.build", "Build this project"),
+    info("task.run", "Run this project"),
+    info("task.test", "Test this project"),
+    CommandInfo {
+        name: "task",
+        description: "Run a project task",
+        arg: Some("lint"),
+    },
+    info("git.open", "Git (lazygit)"),
     info("settings.open", "Settings"),
     info("clipboard.open", "Clipboard history"),
     info("clipboard.clear", "Forget the clipboard history"),
@@ -385,6 +399,14 @@ impl FromStr for Command {
             "notifications" => no_arg(Command::Notifications),
             "tutorial" => no_arg(Command::Tutorial),
             "monitor.open" => no_arg(Command::MonitorOpen),
+            "task.build" => no_arg(Command::Task("build".into())),
+            "task.run" => no_arg(Command::Task("run".into())),
+            "task.test" => no_arg(Command::Task("test".into())),
+            "task" => match arg {
+                Some(t) => Ok(Command::Task(t.to_owned())),
+                None => Err(CommandError("`task` needs a task name".into())),
+            },
+            "git.open" => no_arg(Command::GitOpen),
             "settings.open" => no_arg(Command::SettingsOpen),
             "clipboard.open" => no_arg(Command::ClipboardOpen),
             "clipboard.clear" => no_arg(Command::ClipboardClear),
@@ -471,6 +493,11 @@ impl fmt::Display for Command {
             Command::FileOpen(p) => write!(f, "file.open {p}"),
             Command::FileEdit(p) => write!(f, "file.edit {p}"),
             Command::MonitorOpen => f.write_str("monitor.open"),
+            Command::Task(t) if matches!(t.as_str(), "build" | "run" | "test") => {
+                write!(f, "task.{t}")
+            }
+            Command::Task(t) => write!(f, "task {t}"),
+            Command::GitOpen => f.write_str("git.open"),
             Command::SettingsOpen => f.write_str("settings.open"),
             Command::ClipboardOpen => f.write_str("clipboard.open"),
             Command::ClipboardClear => f.write_str("clipboard.clear"),

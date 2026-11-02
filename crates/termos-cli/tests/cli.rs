@@ -209,3 +209,70 @@ fn edit_starts_termos_neovim_through_mise() {
     assert!(cfg.join("termos-nvim/init.lua").is_file());
     assert!(cfg.join("termos-nvim/lua/termos/generated.lua").is_file());
 }
+
+/// `termos create` writes a project, pinning the installed version, and
+/// `termos task` builds, runs and tests it from its files.
+#[cfg(unix)]
+#[test]
+fn create_and_run_tasks() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let fake = dir.path().join("mise");
+    std::fs::write(
+        &fake,
+        "#!/bin/sh\ncase \"$1\" in\n--version) echo '2026.10.14';;\n\
+         ls) echo '{\"go\": [{\"version\": \"1.23.2\", \"install_path\": \"/m/go\", \"active\": true}]}';;\n\
+         esac\n",
+    )
+    .expect("write");
+    std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+    let run = |args: &[&str], cwd: &std::path::Path| {
+        Command::new(env!("CARGO_BIN_EXE_termos"))
+            .args(args)
+            .current_dir(cwd)
+            .env("TERMOS_MISE", &fake)
+            .env("XDG_DATA_HOME", dir.path().join("data"))
+            .output()
+            .expect("runs")
+    };
+    // A Go project pins the Go that is installed.
+    let out = run(&["create", "go-cli", "hello-go"], dir.path());
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let pins = std::fs::read_to_string(dir.path().join("hello-go/mise.toml")).expect("pins");
+    assert!(pins.contains("go = \"1.23.2\""), "{pins}");
+    let listed = run(&["task"], &dir.path().join("hello-go"));
+    let text = String::from_utf8_lossy(&listed.stdout);
+    assert!(
+        text.contains("go build ./...") && text.contains("go test ./..."),
+        "{text}"
+    );
+    // A shell script needs no runtime: create it and run it.
+    let out = run(&["create", "shell-script", "hello-sh"], dir.path());
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let ran = run(&["task", "run"], &dir.path().join("hello-sh"));
+    let text = String::from_utf8_lossy(&ran.stdout);
+    assert!(ran.status.success(), "{text}");
+    assert!(
+        text.contains("Hello from hello-sh!") && text.contains("✓ run finished"),
+        "{text}"
+    );
+    // Unknown tasks and folders that are not projects say so.
+    let bad = run(&["task", "deploy"], &dir.path().join("hello-sh"));
+    assert!(!bad.status.success());
+    assert!(String::from_utf8_lossy(&bad.stderr).contains("no \"deploy\" task"));
+    let none = tempfile::tempdir().expect("tempdir");
+    let out = run(&["task", "build"], none.path());
+    assert!(!out.status.success());
+    // Not over an existing project.
+    let again = run(&["create", "shell-script", "hello-sh"], dir.path());
+    assert!(!again.status.success());
+    assert!(String::from_utf8_lossy(&again.stderr).contains("not empty"));
+}
