@@ -30,6 +30,7 @@ termos-ai = { path = "crates/termos-ai" }
 termos-models = { path = "crates/termos-models" }
 termos-devkit = { path = "crates/termos-devkit" }
 termos-image = { path = "crates/termos-image" }
+termos-hw = { path = "crates/termos-hw" }
 termos-plugin = { path = "crates/termos-plugin" }
 
 # Third-party crates. Pin versions here so every member uses the same one.
@@ -49,6 +50,10 @@ nucleo-matcher = "0.3.1"
 postcard = { version = "1.1.3", default-features = false, features = ["use-std"] }
 portable-pty = "0.9.0"
 ratatui-core = { version = "0.1.2", features = ["std"] }
+# CPU, memory, temperatures, disks, network, processes and GPUs; no rayon.
+sysinfo = { version = "0.40.1", default-features = false, features = ["system", "component", "disk", "network", "gpu"] }
+# NVIDIA temperature and power, through NVML loaded at run time.
+nvml-wrapper = "0.13.0"
 rustix = { version = "1.1.6", features = ["event", "process"] }
 getrandom = "0.4.3"
 # Image decoding (png, jpeg, gif, webp, bmp) without rayon threads.

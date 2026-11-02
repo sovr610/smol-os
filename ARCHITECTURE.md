@@ -100,7 +100,7 @@ agents and models. A frontend is only a *client* of the server (D-007).
 | `termos-image` | Buildroot external tree, image build driver, QEMU boot tests | M8 |
 | `termos-cli` | The `termos` binary: server, clients, every subcommand | M0 |
 | `termos-plugin` | Plugin protocol types and a blocking Rust SDK (D-034); WIT definitions for widgets later (M4) | M3 |
-| `termos-hw` *(planned)* | CPU/GPU/accelerator/RAM/thermal probing, shared by the system monitor and models | M4 |
+| `termos-hw` | CPU, GPU, memory, temperature, disk, network and process readings (sysinfo plus sysfs and NVML probes, D-050), shared by the system monitor and models | M4 |
 | `xtask` | Repo automation: `ci`, `check-todos`, `todos` | M0 |
 
 **Dependency direction.** These are the edges we intend. There are no cycles, and a

@@ -21,6 +21,7 @@ crossterm.workspace = true
 futures-util.workspace = true
 serde_json.workspace = true
 termos-core.workspace = true
+termos-hw.workspace = true
 termos-render.workspace = true
 termos-shell.workspace = true
 tokio = { workspace = true, features = ["rt", "macros", "sync", "time"] }

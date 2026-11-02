@@ -1,0 +1,24 @@
+[package]
+name = "termos-hw"
+description = "TermOS hardware probing: CPU, GPU, memory, temperatures, disks and network"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[dependencies]
+sysinfo.workspace = true
+tracing.workspace = true
+
+[target.'cfg(any(target_os = "linux", windows))'.dependencies]
+nvml-wrapper.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

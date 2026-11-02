@@ -135,6 +135,8 @@ enum DebugCmd {
         #[arg(long)]
         raw: bool,
     },
+    /// Print the hardware TermOS sees (what the system monitor shows).
+    Hw,
 }
 
 #[derive(Debug, Subcommand)]
@@ -208,6 +210,7 @@ fn main() -> ExitCode {
         Some(Cmd::Debug {
             what: DebugCmd::Caps { raw },
         }) => debug_caps(*raw),
+        Some(Cmd::Debug { what: DebugCmd::Hw }) => debug_hw(),
         _ => resolve_target(&cli, &paths).and_then(|t| run(&cli, &paths, &config_path, &t)),
     };
     match result {
@@ -347,6 +350,19 @@ fn debug_caps(raw: bool) -> anyhow::Result<ExitCode> {
     if raw {
         println!("raw replies: {:?}", String::from_utf8_lossy(&bytes));
     }
+    Ok(ExitCode::SUCCESS)
+}
+
+/// `termos debug hw`: the machine as `termos-hw` reads it, and one sample
+/// taken a second later (CPU load needs two readings).
+fn debug_hw() -> anyhow::Result<ExitCode> {
+    use termos_hw::Source;
+    let mut sampler = termos_hw::Sampler::new().context("cannot read this machine")?;
+    println!("{:#?}", sampler.inventory());
+    std::thread::sleep(Duration::from_secs(1));
+    let mut sample = sampler.sample();
+    sample.processes.truncate(5);
+    println!("{sample:#?}");
     Ok(ExitCode::SUCCESS)
 }
 

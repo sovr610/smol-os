@@ -19,7 +19,7 @@ questions (DECISIONS.md, "Open questions").
 | M3 | Session server, detach/attach, persistence, plugin API | 🔍 |
 | M3.5 | Native Windows and CI test builds (D-035 to D-041) | 🔍 |
 | M4a | Graphics and themes: capability probe, images, themes, animations, Kitty keyboard (D-042 to D-049) | 🔍 |
-| M4b | Apps, `termos-hw`, WASM widgets (D-042) | ⏳ |
+| M4b | Apps, `termos-hw`, WASM widgets (D-042, D-050) | 🚧 |
 | M5 | Developer environment | ⏳ |
 | M6 | AI agents | ⏳ |
 | M7 | Local models | ⏳ |
@@ -363,7 +363,7 @@ All 13 CI jobs passed for the last code commit, including the Windows tests and 
 ---
 
 ## M4b — Apps, termos-hw, WASM widgets
-**Status:** ⏳ · Owner answers: O-8 → wasmtime (D-042).
+**Status:** 🚧 · Owner answers: O-8 → wasmtime (D-042); sysinfo plus our own GPU probes, delete to the trash, clipboard history in memory only, WASM widgets in every build (D-050).
 
 **Deliverables**
 - **Widgets:** chart and image widgets for apps.
@@ -511,6 +511,7 @@ Generated from the `TODO(M<n>)` markers in the code. Don't edit by hand; run `ca
 | M8 | `crates/termos-image/src/lib.rs` | Buildroot external tree, image build driver, QEMU boot tests for x86_64 and aarch64 virt. |
 | M8 | `crates/termos-render/src/lib.rs` | DRM/KMS backend with font rasterizer and adjustable font size. |
 | M9 | `crates/termos-cli/src/client.rs` | VT input mode on Windows, for bracketed paste and the Kitty keyboard protocol. |
+| M9 | `crates/termos-hw/src/lib.rs` | GPU temperature and power on macOS (SMC), and for non-NVIDIA GPUs on Windows. |
 | M9 | `crates/termos-image/src/lib.rs` | installer and atomic A/B updates. |
 | M9 | `crates/termos-shell/src/server.rs` | a hidden window for WM_ENDSESSION, so logoff and shutdown always save. |
 | M9 | `crates/termos-term/src/intercept.rs` | images from programs in panes on Windows, where ConPTY can filter APC and DCS sequences out. |

@@ -533,6 +533,16 @@ rewrite history.
 - **Decision:** `App::images()` reports images (a shared `Picture`, a key, a cell rect to fit in); `AppWaker` lets an app ask for a redraw from another thread (it reaches the desktop as a pane event). The image viewer (`image.open PATH`, also `termos msg image.open '{"arg": "…"}'`) decodes on its own thread within a 64 MiB file limit, pages through the folder's images and toggles fit/1:1. It is the first app in `termos-apps`.
 - **Alternatives:** decoding on the server loop (a large image would stall every session); a separate viewer process (no occlusion or per-client ladder).
 
+
+## D-050: M4b owner answers: hardware readings, trash, clipboard history, WASM in every build
+- **Status:** Accepted (owner) · 2026-11-02
+- **Decision:**
+  - **`termos-hw` (a new crate, below `termos-apps` and `termos-models`):** the `sysinfo` crate for CPU, memory, temperatures, disks, network and processes on every platform, without its rayon feature. GPUs: sysinfo 0.40 lists them itself on Linux, Windows and macOS (name, load, video memory); our own probes add what it lacks: temperature and power from Linux sysfs (each DRM card's `hwmon`), GPUs that are not on PCI such as the Raspberry Pi's, and NVIDIA temperature and power through NVML loaded at run time (`nvml-wrapper`; no CUDA needed to build or run). GPU temperature and power on macOS, and for non-NVIDIA GPUs on Windows, are `TODO(M9)`. The same crate tells M7 which accelerators exist; `termos debug hw` prints what it reads. (Refined while building: the owner chose sysinfo plus our own GPU probes when sysinfo was thought to have no GPU support; its own list now covers more platforms, so the probes only fill in.)
+  - **File manager deletes to the trash** (`trash` crate: freedesktop trash, the Recycle Bin, the macOS Trash). Where no trash is available it asks again and then deletes permanently.
+  - **The clipboard manager keeps what was copied inside TermOS** (copy mode, mouse selection, programs using OSC 52, apps), in memory only: never written to disk, logs or snapshots, and gone when the server stops. TermOS does not read the operating system's clipboard.
+  - **WASM widgets are in every build:** the `wasm-widgets` feature is on by default. The engine is created only when a widget is configured, so without widgets RAM and CPU are unchanged; the binary grows (measured in M4b).
+- **Alternatives:** our own `/proc` and `/sys` readers (Linux only); `sysinfo` without GPUs; permanent deletion after confirming; reading the desktop clipboard with `arboard` (only works on the same graphical desktop, not over SSH or on bare metal); an opt-in saved history; widgets only in builds made with the feature.
+
 ---
 
 ## Open questions (the owner will be asked before the milestone that needs each one)
