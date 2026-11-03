@@ -865,6 +865,12 @@ rewrite history.
   - **`tos`:** the `termos` binary run under the name `tos` (still one binary: D-002 makes `termos-cli` the only one). The server makes `<data>/bin/tos` (a symbolic link on Unix; a hard link, else a copy with a stamp of the source's size and time, remade when stale, on Windows) and puts that folder first on panes' `PATH`. Verbs act on `$TERMOS_PANE` through new control methods (`pane.command`, `pane.open`, `pane.rename`, `clipboard.copy`, `clipboard.get`); unknown verbs run as `termos` subcommands. Web addresses go to the system's opener (`xdg-open`, `open`, `start`).
 - **Alternatives:** shell functions injected into each shell (fragile across bash, zsh, fish, PowerShell and cmd); a separate `tos` binary (two binaries to ship and update); `.cmd` shims on Windows (cmd quoting breaks arguments from PowerShell); releasing a menu item on button release (a right-click's release would hit the first item of the menu it opened).
 
+## D-086: On Windows the server runs from its own copy of termos.exe
+- **Status:** Accepted (lead) · 2026-11-03
+- **Context:** the owner's `cargo install` failed with "Access is denied" replacing `termos.exe`: Windows does not replace an executable a process runs from, and the server (and, since D-085, `tos.exe`, a hard link to the server's executable) outlives every terminal.
+- **Decision:** on Windows the client starts the server from a copy in `<data>\bin\server\termos-<size>-<mtime>.exe`, made when that build has no copy yet; copies of older builds are removed when nothing runs from them. If the copy cannot be made, the server runs from `termos.exe` as before. `tos.exe` links to the server's copy, so it no longer holds `termos.exe` either. An attached client still runs from `termos.exe`; the Windows notes say to detach first, or to rename the running file aside (which Windows allows) before reinstalling from inside TermOS.
+- **Alternatives:** the client relaunching itself from a copy (two processes per attached terminal); a TermOS installer command that renames the running file aside (users install with cargo or by unzipping, which TermOS does not run); leaving it to `termos kill-server` (it ends the sessions the user may be installing from).
+
 ---
 
 ## Open questions (the owner will be asked before the milestone that needs each one)

@@ -296,6 +296,20 @@ known gaps listed below).
 - **Closing the terminal** leaves the server and its sessions running, as on
   Linux: `termos` brings them back. The server runs without a window; stop
   it with `termos kill-server`.
+- **Reinstalling or updating:** the server runs from its own copy of
+  `termos.exe` (in `%LOCALAPPDATA%\termos\data\bin\server`), so
+  `cargo install` or unpacking a new build can replace `termos.exe` while
+  your sessions keep running. A terminal still attached runs `termos.exe`
+  itself, so detach (`C-b d`) or close it first. To reinstall from a pane
+  inside TermOS, move the running file aside first; Windows allows that, and
+  the old file can be deleted once TermOS restarts:
+
+  ```powershell
+  Rename-Item "$env:USERPROFILE\.cargo\bin\termos.exe" termos.old.exe
+  ```
+
+  The running server keeps its version until `termos kill-server` (sessions
+  are saved and restored).
 - **Not there yet on Windows** (planned for M9b):
   - bracketed paste: a pasted block arrives as typed keys;
   - the Kitty keyboard protocol from the outer terminal;

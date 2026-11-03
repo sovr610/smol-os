@@ -17,6 +17,8 @@ mod install;
 mod kms;
 mod models;
 mod probe;
+#[cfg(any(windows, test))]
+mod shadow;
 mod tos;
 mod tryboot;
 mod update;
@@ -1004,6 +1006,14 @@ fn ensure_server(paths: &Paths, t: &Target, config_path: &Path) -> anyhow::Resul
         return Ok(false);
     }
     let exe = std::env::current_exe().context("cannot find the termos executable")?;
+    // Windows: from a copy, so the installed termos.exe can be replaced
+    // while the server runs (D-086).
+    #[cfg(windows)]
+    let exe =
+        shadow::server_exe(&paths.data_dir.join("bin").join("server"), &exe).unwrap_or_else(|e| {
+            tracing::warn!("running the server from {} itself: {e}", exe.display());
+            exe.clone()
+        });
     let mut cmd = std::process::Command::new(exe);
     cmd.arg("server")
         .arg("-S")
