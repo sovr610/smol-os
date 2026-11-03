@@ -337,7 +337,7 @@ impl Termos {
 
     pub fn wait_ready(&self) {
         self.wait_for("the status line", Duration::from_secs(20), |s| {
-            s.lines().last().is_some_and(|l| l.starts_with("[main]"))
+            s.lines().last().is_some_and(|l| l.contains("[main]"))
         });
     }
 

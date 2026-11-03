@@ -25,6 +25,7 @@ pub mod copymode;
 pub mod desktop;
 pub mod images;
 pub mod keys;
+pub mod menu;
 pub mod notify;
 pub mod palette;
 pub mod plugins;

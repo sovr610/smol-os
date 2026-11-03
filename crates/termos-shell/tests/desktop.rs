@@ -216,7 +216,9 @@ async fn starts_with_a_shell_and_a_status_line() {
     h.type_text(&format!("{}\n", common::echo_split("he", "llo")));
     let screen = h.wait_text("hello\n").await;
     let status = screen.lines().last().unwrap_or("");
-    assert!(status.starts_with("[test]  0:"), "{status:?}");
+    // The start button, the session, the tabs and a `+` for a new one.
+    assert!(status.starts_with(" ◆ Menu  [test]  0:"), "{status:?}");
+    assert!(status.contains("*  +"), "{status:?}");
     assert_eq!(h.panes().len(), 1);
 }
 
@@ -793,6 +795,183 @@ async fn config_hot_reload_and_errors() {
     );
     let toast = h.desktop.toast().unwrap_or_default().to_owned();
     assert!(toast.contains("config.toml:1:"), "{toast}");
+}
+
+/// The row of `text` on `screen`, and its column.
+fn find(screen: &str, text: &str) -> Option<(u16, u16)> {
+    screen.lines().enumerate().find_map(|(y, line)| {
+        line.find(text).map(|byte| {
+            let x = unicode_width::UnicodeWidthStr::width(&line[..byte]);
+            (
+                u16::try_from(x).expect("narrow"),
+                u16::try_from(y).expect("short"),
+            )
+        })
+    })
+}
+
+#[tokio::test]
+async fn the_menu_and_context_menus_work_with_the_mouse() {
+    let mut h = Harness::new("");
+    h.type_text(&format!("{}\n", common::echo_split("rea", "dy")));
+    h.wait_text("ready\n").await;
+    let status = ROWS - 1;
+    // The start button opens the TermOS menu above the status line.
+    h.mouse(MouseKind::Down(MouseButton::Left), 2, status);
+    let screen = h.screen();
+    assert!(
+        screen.contains("TermOS") && screen.contains("New terminal"),
+        "{screen}"
+    );
+    // Hovering "Apps" opens it beside; a press runs one of its items.
+    let (x, y) = find(&screen, "Apps").expect("Apps listed");
+    h.mouse(MouseKind::Moved, x, y);
+    let screen = h.screen();
+    let (fx, fy) = find(&screen, "System monitor").expect("the Apps submenu");
+    assert!(fx > x, "beside the menu:\n{screen}");
+    h.mouse(MouseKind::Down(MouseButton::Left), fx, fy);
+    assert_eq!(h.panes().len(), 2, "the monitor opened");
+    let screen = h.screen();
+    assert!(
+        !screen.contains("New terminal"),
+        "the menu closed:\n{screen}"
+    );
+    // Close it again from its title bar's context menu.
+    let title_y = find(&screen, "System monitor")
+        .map(|(_, y)| y)
+        .expect("its title");
+    let title_x = find(&screen, "System monitor").expect("title").0;
+    h.mouse(MouseKind::Down(MouseButton::Right), title_x, title_y);
+    let screen = h.screen();
+    assert!(screen.contains("Maximize or restore"), "{screen}");
+    let (cx, cy) = find(&screen, "Close").expect("Close");
+    h.mouse(MouseKind::Down(MouseButton::Left), cx, cy);
+    assert_eq!(h.panes().len(), 1);
+
+    // A right-click in the shell: what can be done with it.
+    h.mouse(MouseKind::Down(MouseButton::Right), 10, 5);
+    let screen = h.screen();
+    assert!(
+        screen.contains("Split right") && screen.contains("Paste"),
+        "{screen}"
+    );
+    let (sx, sy) = find(&screen, "Split right").expect("Split right");
+    h.mouse(MouseKind::Down(MouseButton::Left), sx, sy);
+    assert_eq!(h.panes().len(), 2, "split");
+    // Esc closes a menu without running anything; so does a press elsewhere.
+    h.mouse(MouseKind::Down(MouseButton::Right), 10, 5);
+    h.key("Escape");
+    assert!(!h.screen().contains("Split right"));
+    h.mouse(MouseKind::Down(MouseButton::Right), 10, 5);
+    h.mouse(MouseKind::Down(MouseButton::Left), 90, 20);
+    assert!(!h.screen().contains("Split right"));
+    assert_eq!(h.panes().len(), 2);
+
+    // The keyboard: prefix Enter opens the menu; arrows and Enter run.
+    h.keys("C-b Enter");
+    assert!(h.screen().contains("New floating terminal"));
+    h.keys("Down Down Enter");
+    assert_eq!(h.panes().len(), 3, "a floating terminal");
+
+    // The `+` tab makes a workspace; a right-click on a tab offers Rename.
+    let screen = h.screen();
+    let plus = screen
+        .lines()
+        .last()
+        .and_then(|l| l.find("  +"))
+        .expect("+");
+    let plus = u16::try_from(unicode_width::UnicodeWidthStr::width(
+        &screen.lines().last().unwrap_or("")[..plus],
+    ))
+    .expect("narrow")
+        + 3;
+    h.mouse(MouseKind::Down(MouseButton::Left), plus, status);
+    assert_eq!(h.desktop.session().workspaces.len(), 2);
+    let screen = h.screen();
+    let (tx, _) = find(&screen, " 0:").expect("tab 0");
+    h.mouse(MouseKind::Down(MouseButton::Right), tx + 1, status);
+    let screen = h.screen();
+    assert!(screen.contains("Rename"), "{screen}");
+    assert_eq!(
+        h.desktop.session().active_index(),
+        0,
+        "the tab was selected"
+    );
+}
+
+#[tokio::test]
+async fn hover_redraws_only_when_the_target_changes_and_double_clicks() {
+    let mut h = Harness::new("");
+    h.type_text(&format!("{}\n", common::echo_split("rea", "dy")));
+    h.wait_text("ready\n").await;
+    h.screen();
+    let status = ROWS - 1;
+    // Over the shell, the pointer costs nothing.
+    h.desktop.take_dirty();
+    h.mouse(MouseKind::Moved, 10, 5);
+    h.mouse(MouseKind::Moved, 11, 5);
+    assert!(
+        !h.desktop.take_dirty(),
+        "moving over a shell does not redraw"
+    );
+    // Onto the start button: one redraw; along it: none.
+    h.mouse(MouseKind::Moved, 1, status);
+    assert!(h.desktop.take_dirty());
+    h.mouse(MouseKind::Moved, 3, status);
+    assert!(!h.desktop.take_dirty());
+
+    // A double-click on a floating window's title maximizes it, and
+    // another gives it its size back.
+    h.keys("C-b F");
+    let area_w = COLS;
+    let before = h
+        .desktop
+        .session()
+        .active()
+        .float_rect(h.desktop.focused().expect("the float"))
+        .expect("a float");
+    let tx = before.x + 2;
+    let ty = before.y;
+    h.mouse(MouseKind::Down(MouseButton::Left), tx, ty);
+    h.mouse(MouseKind::Up(MouseButton::Left), tx, ty);
+    h.mouse(MouseKind::Down(MouseButton::Left), tx, ty);
+    h.mouse(MouseKind::Up(MouseButton::Left), tx, ty);
+    let pane = h.desktop.focused().expect("still focused");
+    let max = h
+        .desktop
+        .session()
+        .active()
+        .float_rect(pane)
+        .expect("float");
+    assert_eq!(max.w, area_w, "maximized: {max:?}");
+    h.mouse(MouseKind::Down(MouseButton::Left), max.x + 2, max.y);
+    h.mouse(MouseKind::Up(MouseButton::Left), max.x + 2, max.y);
+    h.mouse(MouseKind::Down(MouseButton::Left), max.x + 2, max.y);
+    let back = h
+        .desktop
+        .session()
+        .active()
+        .float_rect(pane)
+        .expect("float");
+    assert_eq!(back, before, "restored");
+
+    // The palette: a press on a command runs it.
+    h.key("C-Space");
+    h.type_text("workspace");
+    let screen = h.screen();
+    let (x, y) = find(&screen, "New workspace").expect("listed");
+    h.mouse(MouseKind::Down(MouseButton::Left), x, y);
+    assert_eq!(h.desktop.session().workspaces.len(), 2);
+    assert!(!h.screen().contains("Command palette"));
+
+    // The key list (prefix ?): a click on a command runs it.
+    let before = h.panes().len();
+    h.keys("C-b ?");
+    let screen = h.screen();
+    let (x, y) = find(&screen, "Split: new pane below").expect("listed");
+    h.mouse(MouseKind::Down(MouseButton::Left), x, y);
+    assert_eq!(h.panes().len(), before + 1);
+    assert!(!h.screen().contains("Key bindings"));
 }
 
 #[tokio::test]

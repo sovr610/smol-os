@@ -2176,6 +2176,110 @@ impl Server {
                 }
                 Ok(json!({ "sessions": keys.len() }))
             }
+            // `tos` (D-085): acting on the pane it runs in.
+            "pane.command" => {
+                #[derive(Deserialize)]
+                struct P {
+                    command: String,
+                    #[serde(default)]
+                    session: Option<String>,
+                    #[serde(default)]
+                    pane: Option<u64>,
+                }
+                let p: P = req.params_as()?;
+                let cmd: Command = p
+                    .command
+                    .parse()
+                    .map_err(|e: CommandError| RpcError::invalid_params(e.0))?;
+                let key = self.session_with(p.session.as_deref(), p.pane)?;
+                let client = self.clients_of(key).into_iter().max();
+                let text = cmd.to_string();
+                let e = self
+                    .sessions
+                    .get_mut(&key)
+                    .ok_or_else(|| RpcError::not_found("no such session"))?;
+                e.desktop
+                    .focus_pane(p.pane.map(PaneId))
+                    .map_err(RpcError::not_found)?;
+                e.desktop.run_as(client, cmd);
+                Ok(json!({ "ran": text }))
+            }
+            "pane.open" => {
+                #[derive(Deserialize)]
+                struct P {
+                    argv: Vec<String>,
+                    #[serde(default, rename = "where")]
+                    place: Option<String>,
+                    #[serde(default)]
+                    cwd: Option<PathBuf>,
+                    #[serde(default)]
+                    session: Option<String>,
+                    #[serde(default)]
+                    pane: Option<u64>,
+                }
+                let p: P = req.params_as()?;
+                let key = self.session_with(p.session.as_deref(), p.pane)?;
+                let e = self
+                    .sessions
+                    .get_mut(&key)
+                    .ok_or_else(|| RpcError::not_found("no such session"))?;
+                let id = e
+                    .desktop
+                    .open_program(
+                        p.pane.map(PaneId),
+                        p.place.as_deref().unwrap_or("auto"),
+                        p.argv,
+                        p.cwd,
+                    )
+                    .map_err(RpcError::invalid_params)?;
+                Ok(json!({ "pane": id.0 }))
+            }
+            "pane.rename" => {
+                #[derive(Deserialize)]
+                struct P {
+                    pane: u64,
+                    #[serde(default)]
+                    name: String,
+                    #[serde(default)]
+                    session: Option<String>,
+                }
+                let p: P = req.params_as()?;
+                let key = self.session_with(p.session.as_deref(), Some(p.pane))?;
+                let e = self
+                    .sessions
+                    .get_mut(&key)
+                    .ok_or_else(|| RpcError::not_found("no such session"))?;
+                e.desktop
+                    .rename_pane(PaneId(p.pane), &p.name)
+                    .map_err(RpcError::not_found)?;
+                Ok(json!({ "pane": p.pane }))
+            }
+            "clipboard.copy" => {
+                #[derive(Deserialize)]
+                struct P {
+                    text: String,
+                    #[serde(default)]
+                    session: Option<String>,
+                }
+                let p: P = req.params_as()?;
+                let key = self.target(p.session.as_deref())?;
+                let bytes = p.text.len();
+                if let Some(e) = self.sessions.get_mut(&key) {
+                    e.desktop.copy_from_command(p.text);
+                }
+                Ok(json!({ "bytes": bytes }))
+            }
+            "clipboard.get" => {
+                let newest = self
+                    .clipboard
+                    .lock()
+                    .ok()
+                    .and_then(|h| h.entries().next().map(|e| e.text.clone()));
+                Ok(match newest {
+                    Some(text) => json!({ "text": text }),
+                    None => json!({}),
+                })
+            }
             "command.run" => {
                 #[derive(Deserialize)]
                 struct P {
@@ -2275,6 +2379,24 @@ impl Server {
             }
         }
         Ok(json!({ "ok": true }))
+    }
+
+    /// The session named, else the one holding `pane`, else the default.
+    fn session_with(
+        &self,
+        session: Option<&str>,
+        pane: Option<u64>,
+    ) -> Result<SessionKey, RpcError> {
+        match (session, pane) {
+            (Some(s), _) => self.target(Some(s)),
+            (None, Some(id)) => self
+                .sessions
+                .iter()
+                .find(|(_, e)| e.desktop.has_pane(PaneId(id)))
+                .map(|(k, _)| *k)
+                .ok_or_else(|| RpcError::not_found(format!("no pane {}", PaneId(id)))),
+            (None, None) => self.target(None),
+        }
     }
 
     fn run_command(&mut self, session: Option<&str>, cmd: Command) -> Result<Value, RpcError> {

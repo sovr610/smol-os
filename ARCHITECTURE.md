@@ -240,13 +240,16 @@ Window = { id, title, source: Pty | App | Plugin | Agent, state: normal | minimi
 
 - **Z-order:** the tiled layer sits below the floating layer. Focusing a floating window raises it. Overlays and notifications are always on top.
 - **Input routing:** decoded input goes, in order, to:
-  1. open shell overlays (palette, which-key);
+  1. open shell overlays (prompts, menus, the palette, which-key);
   2. global bindings;
   3. the focused window. Keys are re-encoded in the mode the child asked for: legacy or Kitty keyboard protocol.
-- **Mouse:**
+- **Mouse (D-085):**
   - SGR mouse reporting (1006) with motion tracking (1003).
   - Hit tests run top-down. Dragging a title bar moves the window; dragging an edge or corner resizes it; clicking focuses; the wheel scrolls scrollback.
-  - When a child has enabled mouse reporting, events inside its content are forwarded with translated coordinates, in the child's encoding.
+  - When a child has enabled mouse reporting, events inside its content are forwarded with translated coordinates, in the child's encoding; Shift keeps them for TermOS.
+  - **Menus** (`termos_shell::menu`): the TermOS menu behind the status line's start button (and prefix `Enter`, the `menu` command), and context menus on a right-click in a pane, on a floating title bar or on a tab. A menu is a stack of levels; the pointer selects, an item with a submenu opens it beside, a press runs an item and a press elsewhere closes. Every item is a named command and shows its key. Menus are per client and take all input while open.
+  - **Hover:** each client keeps what the pointer is over (a menu row, a window button, a status-line target); a motion event redraws only when that changes, so a still or slowly moving pointer costs nothing.
+  - **Double clicks** (two presses on one cell within 400 ms): a floating title maximizes or restores (the size before is remembered), a tab opens its rename prompt. The palette and the key list take clicks and the wheel; the status line has `+` (new workspace) and a clickable message (the notification center).
 - **Snapping:** drag a window to a screen edge or corner to get halves or quarters; snap commands do the same from the keyboard. Minimized windows go to a task strip in the status bar.
 - **Commands:** every action is a named command, such as `pane.split-right`, `pane.resize-left 5` or `layout.select tiled`. Commands can be bound in config, run from the palette (Ctrl+Space or prefix `:`, fuzzy-matched) and called over JSON-RPC (`termos msg pane.split-right`). The which-key overlay lists the bindings available after the prefix.
 - **tmux-style keys (D-023):** prefix `C-b`, then tmux's default keys (`%`, `"`, arrows, `z`, `x`, `c`, `n`, `p`, `0`–`9`, `[`, `]`, …), plus TermOS keys for floats (`f`, `F`, `m`, `M`). Resize keys repeat without the prefix for `repeat-time-ms`. A TermOS *workspace* is a tmux *window* (a tab in the status line); a *pane* is a tmux *pane*.
@@ -276,12 +279,14 @@ Window = { id, title, source: Pty | App | Plugin | Agent, state: normal | minimi
   - server: `server.info`, `server.kill`, `config.reload`;
   - sessions: `session.list/new/kill/rename/restore/saved`;
   - clients: `client.list/detach`;
-  - panes: `pane.list/send-text/send-keys/kill`;
+  - panes: `pane.list/send-text/send-keys/kill`, and for `tos`: `pane.command` (a named command on a given pane), `pane.open` (a program in a new split or float), `pane.rename`;
+  - the clipboard: `clipboard.copy`, `clipboard.get` (the newest entry);
   - other: `notify.send`, `command.run`, `plugin.list`.
   - Every named command and plugin command is also a method of its own name.
   - Event subscriptions (`subscribe`) are not built: nothing needs them yet (the agents of M6 run inside the server).
 - **Plugin stream:** JSON-RPC as well; see §9 and D-034.
-- **Inside panes:** `TERMOS=<socket>,<server pid>,$<session id>` lets CLI commands run in a pane find their server and session.
+- **Inside panes:** `TERMOS=<socket>,<server pid>,$<session id>` lets CLI commands run in a pane find their server and session, and `TERMOS_PANE` names the pane.
+- **`tos` (D-084, D-085):** the `termos` binary answers to the name `tos` as well. The server keeps a `tos` link to itself in `<data>/bin` (a symbolic link on Unix; a hard link, else a copy, on Windows, remade when the executable changes) and puts that folder first on every pane's `PATH`, so one command works in every shell on every OS. Its verbs act on the calling pane through the methods above; anything else is a `termos` subcommand. Guide: [docs/tos.md](docs/tos.md).
 - **Over SSH:** `ssh -t host termos` runs a client on the remote host and attaches to (or starts) that host's server; detaching leaves everything running there. Later, a local client could attach to a remote server through a forwarded socket so that local capabilities such as Kitty graphics apply; the protocol is transport-agnostic.
 
 ---

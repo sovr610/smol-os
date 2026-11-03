@@ -116,8 +116,25 @@ key for each command.
 
 ## Mouse
 
+Everything can be done with the mouse alone.
+
+- **◆ Menu**, at the left of the status line, opens the TermOS menu: new
+  terminals, the apps, AI agents, project tasks, layouts, themes, workspaces
+  and sessions, help, detach and quit. Point at an item with `▸` to open it;
+  each item shows the key that does the same. (Keyboard: `C-b Enter`, then
+  the arrows and Enter.)
+- **Right-click** for what can be done where you clicked: in a terminal
+  (paste, select text, split, zoom, float, rename, browse its folder,
+  close), on a floating window's title (maximize, snap to a half, minimize,
+  tile, close) or on a workspace tab (rename, layout, close). In programs
+  that use the mouse themselves, hold **Shift**.
 - **Click** a pane to focus it. Click a tab in the status line to switch
-  workspace, and a `▾name` chip to restore a minimized window.
+  workspace, `+` for a new one, a message to open the notification center,
+  and a `▾name` chip to restore a minimized window.
+- **Double-click** a floating window's title to maximize it, and again to
+  give it its size back; double-click a tab to rename it.
+- In the **command palette** and the **key list** (`C-b ?`), click a command
+  to run it; the wheel scrolls the palette.
 - **Drag** the line between two panes to resize them.
 - **Floating windows:**
   - drag the title bar to move one; drop it on the left or right edge to snap
@@ -211,7 +228,8 @@ Images, the image viewer, themes and animations are described in
 history, settings and markdown viewer are in [apps.md](apps.md), and
 status-line widgets in WebAssembly in [widgets.md](widgets.md). Languages,
 editors, project templates, build/run/test panels and the Git UI are in
-[languages.md](languages.md).
+[languages.md](languages.md). The `tos` command, which every pane has, is in
+[tos.md](tos.md).
 
 ## Test builds
 

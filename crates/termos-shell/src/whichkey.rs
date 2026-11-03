@@ -12,6 +12,11 @@ use crate::ui::{Chrome, panel, truncate, width};
 /// `(key, description)` rows for the prefix table, with the digit and
 /// layout-preset runs collapsed.
 pub fn entries(keys: &KeyTables) -> Vec<(String, String)> {
+    commands(keys).into_iter().map(|(k, d, _)| (k, d)).collect()
+}
+
+/// The entries with the command each runs (`None` for collapsed groups).
+fn commands(keys: &KeyTables) -> Vec<(String, String, Option<Command>)> {
     let mut out = Vec::new();
     let mut saw_digits = false;
     let mut saw_presets = false;
@@ -19,20 +24,22 @@ pub fn entries(keys: &KeyTables) -> Vec<(String, String)> {
         match &b.command {
             Command::WorkspaceSelect(n) if *n <= 9 && b.key.to_string() == n.to_string() => {
                 if !saw_digits {
-                    out.push(("0-9".into(), "Go to workspace N".into()));
+                    out.push(("0-9".into(), "Go to workspace N".into(), None));
                     saw_digits = true;
                 }
             }
             Command::LayoutSelect(_) if b.key.to_string().starts_with("M-") => {
                 if !saw_presets {
-                    out.push(("M-1..5".into(), "Layout presets".into()));
+                    out.push(("M-1..5".into(), "Layout presets".into(), None));
                     saw_presets = true;
                 }
             }
-            Command::SendPrefix => {
-                out.push((b.key.to_string(), "Send the prefix to the pane".into()))
-            }
-            c => out.push((b.key.to_string(), c.description())),
+            Command::SendPrefix => out.push((
+                b.key.to_string(),
+                "Send the prefix to the pane".into(),
+                Some(Command::SendPrefix),
+            )),
+            c => out.push((b.key.to_string(), c.description(), Some(c.clone()))),
         }
     }
     out
@@ -48,21 +55,39 @@ pub fn draw(
     keys: &KeyTables,
     full: bool,
     chrome: Chrome,
-) -> Option<Rect> {
-    let mut items = entries(keys);
+) -> (Option<Rect>, Vec<(Rect, Command)>) {
+    let mut items = commands(keys);
     if full {
         for b in &keys.root {
-            items.push((format!("{} (no prefix)", b.key), b.command.description()));
+            items.push((
+                format!("{} (no prefix)", b.key),
+                b.command.description(),
+                Some(b.command.clone()),
+            ));
         }
-        items.push(("mouse".into(), "click focus · drag border resize".into()));
-        items.push(("mouse".into(), "drag title move · wheel scroll".into()));
+        items.push((
+            "mouse".into(),
+            "click focus · drag border resize".into(),
+            None,
+        ));
+        items.push((
+            "mouse".into(),
+            "drag title move · wheel scroll".into(),
+            None,
+        ));
+        items.push((
+            "mouse".into(),
+            "right-click: menus · ◆ Menu: everything".into(),
+            None,
+        ));
     }
+    let mut regions = Vec::new();
     if items.is_empty() || area.w < 20 || area.h < 4 {
-        return None;
+        return (None, regions);
     }
     let key_w = items
         .iter()
-        .map(|(k, _)| width(k))
+        .map(|(k, _, _)| width(k))
         .max()
         .unwrap_or(1)
         .min(14);
@@ -84,7 +109,7 @@ pub fn draw(
         format!("{} …", keys.prefix_key)
     };
     let inner = panel(grid, rect, area, theme, &title, chrome);
-    for (i, (k, d)) in items.iter().enumerate() {
+    for (i, (k, d, cmd)) in items.iter().enumerate() {
         let Ok(i) = u16::try_from(i) else { break };
         let (col, row) = (i / nrows.max(1), i % nrows.max(1));
         if col >= ncols {
@@ -101,8 +126,11 @@ pub fn draw(
             theme.overlay,
             end,
         );
+        if let Some(c) = cmd {
+            regions.push((Rect::new(x, y, col_w, 1), c.clone()));
+        }
     }
-    Some(rect)
+    (Some(rect), regions)
 }
 
 #[cfg(test)]
@@ -125,13 +153,22 @@ mod tests {
     fn draws_inside_the_area() {
         let (keys, _) = KeyTables::from_config(&Config::default());
         let mut g = Grid::new(100, 30);
-        draw(
+        let (_, regions) = draw(
             &mut g,
             Rect::new(0, 0, 100, 29),
             &Theme::default(),
             &keys,
             false,
             Chrome::default(),
+        );
+        // Each command can be clicked where it is drawn.
+        let split = regions
+            .iter()
+            .find(|(_, c)| *c == Command::Split(termos_wm::workspace::SplitHow::Right))
+            .expect("split right is listed");
+        assert!(
+            g.row_text(split.0.y)
+                .contains("Split: new pane to the right")
         );
         let text = g.to_text();
         assert!(text.contains("C-b …"));

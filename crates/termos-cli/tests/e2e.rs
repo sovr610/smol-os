@@ -33,12 +33,7 @@ fn split_type_close_and_exit() {
     // C-b % splits; the new pane is on the right.
     t.send(b"\x02%");
     let screen = t.wait_for("a vertical separator", T, |s| s.contains('│'));
-    assert!(
-        screen
-            .lines()
-            .last()
-            .is_some_and(|l| l.starts_with("[main]"))
-    );
+    assert!(screen.lines().last().is_some_and(|l| l.contains("[main]")));
     t.send(echo_split("ri", "ght").as_bytes());
     // The output is in the right-hand cell of a row (after the separator).
     t.wait_for("output in the right pane", T, |s| {
@@ -144,7 +139,7 @@ fn detach_ls_attach_msg_and_kill_server() {
     };
     t2.send(format!("{} {rename}\r", env!("CARGO_BIN_EXE_termos")).as_bytes());
     t2.wait_for("the renamed session", T, |s| {
-        s.lines().last().is_some_and(|l| l.starts_with("[work]"))
+        s.lines().last().is_some_and(|l| l.contains("[work]"))
     });
     t2.send(format!("{} detach\r", env!("CARGO_BIN_EXE_termos")).as_bytes());
     t2.wait_exit(T);

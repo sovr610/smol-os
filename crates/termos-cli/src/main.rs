@@ -17,6 +17,7 @@ mod install;
 mod kms;
 mod models;
 mod probe;
+mod tos;
 mod tryboot;
 mod update;
 mod wifi;
@@ -344,6 +345,10 @@ fn resolve_target(cli: &Cli, paths: &Paths) -> anyhow::Result<Target> {
 }
 
 fn main() -> ExitCode {
+    // Started through the `tos` link in a pane (D-085).
+    if tos::invoked_as_tos() {
+        return tos::main();
+    }
     // The sandbox helper (D-061): Landlock, then the command in its place.
     // Its arguments are not TermOS's, so it is handled before parsing.
     let args: Vec<String> = std::env::args().collect();
@@ -351,10 +356,23 @@ fn main() -> ExitCode {
         let code = termos_ai::sandbox::helper_main(&args[2..]);
         return ExitCode::from(u8::try_from(code).unwrap_or(1));
     }
-    let cli = Cli::parse();
+    match run_cli(args) {
+        Ok(code) => code,
+        // The reader went away (`termos model list | head -1`).
+        Err(e) if broken_pipe(&e) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("termos: {e:#}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// `termos` with these arguments (the first is the program's name).
+fn run_cli(args: impl IntoIterator<Item = String>) -> anyhow::Result<ExitCode> {
+    let cli = Cli::parse_from(args);
     let paths = Paths::detect();
     let config_path = cli.config.clone().unwrap_or_else(|| paths.config_file());
-    let result = match &cli.command {
+    match &cli.command {
         Some(Cmd::Config { action }) => config_command(action, &config_path),
         Some(Cmd::Lang { action }) => lang_command(action, &paths),
         Some(Cmd::Edit { files }) => edit_command(files, &paths, &config_path),
@@ -382,15 +400,6 @@ fn main() -> ExitCode {
             what: DebugCmd::Connect { addr },
         }) => debug_connect(addr),
         _ => resolve_target(&cli, &paths).and_then(|t| run(&cli, &paths, &config_path, &t)),
-    };
-    match result {
-        Ok(code) => code,
-        // The reader went away (`termos model list | head -1`).
-        Err(e) if broken_pipe(&e) => ExitCode::SUCCESS,
-        Err(e) => {
-            eprintln!("termos: {e:#}");
-            ExitCode::FAILURE
-        }
     }
 }
 
@@ -561,7 +570,13 @@ fn pane_path(paths: &Paths) -> Option<(String, String)> {
         .find(|k| k.eq_ignore_ascii_case("PATH"))
         .unwrap_or_else(|| "PATH".to_owned());
     let path = std::env::var_os(&key);
-    let value = termos_devkit::mise::pane_path(&get, &paths.data_dir, path.as_ref())?;
+    let base = termos_devkit::mise::pane_path(&get, &paths.data_dir, path.as_ref()).or(path)?;
+    // `tos` first (D-085), then mise's shims.
+    let value = match tos::ensure_link(paths) {
+        Some(dir) => std::env::join_paths(std::iter::once(dir).chain(std::env::split_paths(&base)))
+            .unwrap_or(base),
+        None => base,
+    };
     Some((key, value.to_string_lossy().into_owned()))
 }
 

@@ -39,14 +39,17 @@ use crate::apps::{NotificationCenter, Tutorial};
 use crate::commands::{COMMANDS, Command};
 use crate::copymode::{CopyAction, CopyMode};
 use crate::keys::KeyTables;
+use crate::menu::Menu;
 use crate::notify::{Level, Notifications};
-use crate::palette::{Palette, PaletteAction, PaletteItem};
+use crate::palette::{Palette, PaletteItem};
 use crate::plugins::{Cells, PluginCommand};
 use crate::prompt::{Confirmed, Prompt, PromptAction, PromptKind};
 use crate::snapshot::{self, PaneSnapshot, Relaunch, SNAPSHOT_VERSION, SavedKind, SessionSnapshot};
 use crate::status::{self, StatusInfo, StatusRegions, TabInfo};
 use crate::ui::Chrome;
 use crate::whichkey;
+
+mod menus;
 
 /// What a pane shows.
 pub enum PaneKind {
@@ -70,12 +73,17 @@ pub struct Pane {
     pub size: (u16, u16),
     /// Rang the bell while not visible.
     pub bell: bool,
+    /// A name given with Rename or `tos title`, over the program's own.
+    pub name: Option<String>,
 }
 
 impl Pane {
-    /// A short name: the foreground program (Linux), else the title, else
-    /// the app title.
+    /// A short name: the one given, else the foreground program (Linux),
+    /// else the title, else the app title.
     pub fn display_name(&self) -> String {
+        if let Some(n) = &self.name {
+            return n.clone();
+        }
         match &self.kind {
             PaneKind::Term { pty, .. } => pty
                 .foreground_name()
@@ -86,6 +94,9 @@ impl Pane {
     }
 
     fn title_for_border(&self) -> String {
+        if let Some(n) = &self.name {
+            return n.clone();
+        }
         match &self.kind {
             PaneKind::Term { .. } if !self.title.is_empty() => self.title.clone(),
             _ => self.display_name(),
@@ -169,6 +180,16 @@ enum Drag {
     },
 }
 
+/// What the pointer is over, for hover highlights (D-085).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum Hover {
+    #[default]
+    None,
+    /// Something on the status line (`StatusRegions::target_at`).
+    Status(u32),
+    FloatButton(PaneId, Button),
+}
+
 /// One attached client's UI state (D-032): every terminal has its own
 /// prefix state, overlays, drags and size.
 #[derive(Debug)]
@@ -193,6 +214,15 @@ struct ClientUi {
     mouse_owner: Option<PaneId>,
     status_regions: StatusRegions,
     title_sent: String,
+    /// The open menu and its submenus (D-085).
+    menu: Option<Menu>,
+    /// Where the pointer was last seen, and what is under it.
+    pointer: Option<(u16, u16)>,
+    hover: Hover,
+    /// The last left press, for double clicks.
+    last_click: Option<(Instant, u16, u16)>,
+    /// Where the key list's commands are drawn, for clicks.
+    whichkey_regions: Vec<(Rect, Command)>,
 }
 
 impl Default for ClientUi {
@@ -214,6 +244,11 @@ impl Default for ClientUi {
             mouse_owner: None,
             status_regions: StatusRegions::default(),
             title_sent: String::new(),
+            menu: None,
+            pointer: None,
+            hover: Hover::None,
+            last_click: None,
+            whichkey_regions: Vec::new(),
         }
     }
 }
@@ -285,6 +320,8 @@ pub struct Desktop {
     status_widgets: Vec<Cells>,
     /// The panel of each project task that ran (a re-run replaces it).
     task_panes: BTreeMap<String, PaneId>,
+    /// Floating windows' sizes before they were maximized.
+    max_restore: BTreeMap<PaneId, Rect>,
     dirty: bool,
     /// The workspace/pane structure changed since the last snapshot.
     layout_changed: bool,
@@ -386,6 +423,7 @@ impl Desktop {
             wasm_widgets: Vec::new(),
             status_widgets: Vec::new(),
             task_panes: BTreeMap::new(),
+            max_restore: BTreeMap::new(),
             dirty: true,
             layout_changed: true,
             quit: None,
@@ -866,6 +904,7 @@ impl Desktop {
                 id,
                 kind: PaneKind::Term { vt, pty },
                 title: String::new(),
+                name: None,
                 cwd: None,
                 size: (w, h),
                 bell: false,
@@ -892,6 +931,7 @@ impl Desktop {
                 id,
                 kind: PaneKind::App(app),
                 title: String::new(),
+                name: None,
                 cwd: None,
                 size: (0, 0),
                 bell: false,
@@ -1467,24 +1507,12 @@ impl Desktop {
             }
             return;
         }
+        if self.menu_key(k) {
+            return;
+        }
         if let Some(palette) = &mut self.ui.palette {
             let action = palette.handle_key(k);
-            self.dirty = true;
-            match action {
-                PaletteAction::None => {}
-                PaletteAction::Close => self.ui.palette = None,
-                PaletteAction::Run(cmd) => {
-                    self.ui.palette = None;
-                    match cmd.parse::<Command>() {
-                        Ok(c) => self.run(c),
-                        Err(_) if self.plugin_commands.iter().any(|c| c.name == cmd) => {
-                            self.requests
-                                .push(SessionRequest::PluginCommand { name: cmd });
-                        }
-                        Err(e) => self.notify(Level::Error, e.to_string()),
-                    }
-                }
-            }
+            self.palette_action(action);
             return;
         }
         if self.ui.whichkey_full {
@@ -1624,6 +1652,9 @@ impl Desktop {
                         ws.auto_name = false;
                     }
                 }
+            }
+            PromptKind::RenamePane(id) => {
+                let _ = self.rename_pane(id, &text);
             }
             PromptKind::RenameSession => {
                 if !text.is_empty() {
@@ -1831,6 +1862,9 @@ impl Desktop {
             Command::SwapPrev => self.session.active_mut().swap_cycle(false),
             Command::Resize(d, n) => self.session.active_mut().resize_focused(d, n, area),
             Command::Zoom => self.session.active_mut().toggle_zoom(),
+            Command::MaximizeToggle => self.toggle_maximize(),
+            Command::PaneRename => self.prompt_pane_name(),
+            Command::Menu => self.open_start_menu(),
             Command::ToggleFloat => {
                 if let Some(id) = self.focused() {
                     if !self.session.active_mut().toggle_float(id, area) {
@@ -2252,12 +2286,40 @@ impl Desktop {
 
     fn on_mouse(&mut self, m: MouseEvent) {
         let area = self.layout_area();
+        // Menus, the palette and the key list take the mouse first.
+        if self.menu_mouse(m) {
+            self.ui.pointer = Some((m.x, m.y));
+            return;
+        }
+        if self.ui.palette.is_some() && self.palette_mouse(m) {
+            return;
+        }
+        if self.whichkey_mouse(m) {
+            return;
+        }
+        // Moving the pointer redraws only when what it is over changes.
+        if m.kind == MouseKind::Moved && self.ui.drag.is_none() {
+            self.pointer_moved(m);
+            return;
+        }
         self.dirty = true;
         // Status line.
         if m.y == self.status_y() && self.ui.drag.is_none() {
-            if let MouseKind::Down(MouseButton::Left) = m.kind {
-                if let Some(idx) = self.ui.status_regions.tab_at(m.x, m.y) {
+            if let MouseKind::Down(MouseButton::Right) = m.kind {
+                self.status_context(m);
+            } else if let MouseKind::Down(MouseButton::Left) = m.kind {
+                let double = self.double_click(&m);
+                if self.ui.status_regions.start_at(m.x, m.y) {
+                    self.open_start_menu();
+                } else if self.ui.status_regions.new_tab_at(m.x, m.y) {
+                    self.run(Command::WorkspaceNew);
+                } else if self.ui.status_regions.message_at(m.x, m.y) {
+                    self.run(Command::Notifications);
+                } else if let Some(idx) = self.ui.status_regions.tab_at(m.x, m.y) {
                     self.session.select(idx);
+                    if double {
+                        self.run(Command::WorkspaceRename);
+                    }
                 } else if let Some(p) = self.ui.status_regions.minimized_at(m.x, m.y) {
                     self.session.active_mut().toggle_minimize(p);
                 } else if let Some((i, column)) = self.ui.status_regions.widget_at(m.x, m.y)
@@ -2293,17 +2355,25 @@ impl Desktop {
     fn mouse_down(&mut self, m: MouseEvent, button: MouseButton, area: Rect) {
         let hit = self.placement().hit(m.x, m.y);
         if button != MouseButton::Left {
-            if let Hit::Pane { pane, .. } = hit {
-                if self.pane_wants_mouse(pane, &m) {
+            match hit {
+                Hit::Pane { pane, .. } if self.pane_wants_mouse(pane, &m) => {
                     self.ui.mouse_owner = Some(pane);
                     self.forward_mouse(pane, m);
-                } else if button == MouseButton::Middle {
+                }
+                // Right-click (Shift+right-click over programs that use
+                // the mouse): what can be done here.
+                _ if button == MouseButton::Right => {
+                    self.layout_context(m, &hit);
+                }
+                Hit::Pane { pane, .. } if button == MouseButton::Middle => {
                     self.session.active_mut().set_focus(pane);
                     self.run(Command::Paste);
                 }
+                _ => {}
             }
             return;
         }
+        let double = self.double_click(&m);
         match hit {
             Hit::Nothing => {}
             Hit::FloatButton(pane, Button::Close) => {
@@ -2315,6 +2385,10 @@ impl Desktop {
             }
             Hit::FloatTitle(pane) => {
                 self.session.active_mut().set_focus(pane);
+                if double {
+                    self.toggle_maximize();
+                    return;
+                }
                 if let Some(r) = self.session.active().float_rect(pane) {
                     self.ui.drag = Some(Drag::Move {
                         pane,
@@ -2873,6 +2947,8 @@ impl Desktop {
                 .prompt
                 .as_ref()
                 .map(|p| (p.label.as_str(), p.input.as_str())),
+            start_button: true,
+            pointer: self.status_pointer(),
         }
     }
 
@@ -3055,6 +3131,7 @@ impl Desktop {
             }
         }
 
+        self.draw_hover(grid, &placement);
         let status_y = self.status_y();
         let mut info = self.status_info();
         if animates {
@@ -3066,14 +3143,18 @@ impl Desktop {
         let mut overlays: Vec<Rect> = Vec::new();
         let chrome = Chrome::of(&self.config.floats);
         if self.ui.whichkey_visible || self.ui.whichkey_full {
-            overlays.extend(whichkey::draw(
+            let (rect, regions) = whichkey::draw(
                 grid,
                 area,
                 &self.ui.theme,
                 &self.keys,
                 self.ui.whichkey_full,
                 chrome,
-            ));
+            );
+            overlays.extend(rect);
+            self.ui.whichkey_regions = regions;
+        } else {
+            self.ui.whichkey_regions.clear();
         }
         if let Some(p) = &self.ui.palette {
             overlays.push(p.rect(area));
@@ -3083,6 +3164,10 @@ impl Desktop {
             .palette
             .as_ref()
             .map(|p| p.render(grid, area, &self.ui.theme, chrome));
+        if let Some(m) = &self.ui.menu {
+            overlays.extend(m.rects());
+            m.render(grid, &self.ui.theme, chrome);
+        }
         self.ui.pixel_images = self.place_pixel_images(
             grid, &placement, &overlays, candidates, protocol, image_bg, animates,
         );
@@ -3102,6 +3187,9 @@ impl Desktop {
         };
         if let Some(x) = prompt_cursor {
             return Some(bar(x, status_y));
+        }
+        if self.ui.menu.is_some() {
+            return None;
         }
         if let Some((x, y)) = palette_cursor {
             return Some(bar(x, y));

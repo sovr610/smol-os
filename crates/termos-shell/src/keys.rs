@@ -95,6 +95,7 @@ pub fn default_prefix_bindings() -> Vec<Binding> {
         b("g", C::GitOpen),
         b("a", C::AgentOpen(String::new())),
         b("A", C::AgentResume(String::new())),
+        b("Enter", C::Menu),
         b(":", C::Palette),
         b("?", C::Keys),
         b("N", C::Notifications),

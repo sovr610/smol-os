@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//! The tmux-style status line: session, workspace tabs, minimized windows,
-//! and on the right the prefix/copy-mode badges, messages and a clock.
+//! The tmux-style status line: the start button, session, workspace tabs
+//! and a `+` for a new one, minimized windows, and on the right the
+//! prefix/copy-mode badges, messages and a clock. What is under the
+//! pointer is highlighted (D-085).
 
 use termos_core::ids::PaneId;
 use termos_render::cell::Cell;
@@ -40,6 +42,10 @@ pub struct StatusInfo<'a> {
     pub widgets: &'a [Vec<(String, termos_render::cell::Style)>],
     /// An open prompt: (label, input). Replaces the whole line, like tmux.
     pub prompt: Option<(&'a str, &'a str)>,
+    /// Draw the start button (the TermOS menu) at the left.
+    pub start_button: bool,
+    /// The pointer's column when it is on the status line.
+    pub pointer: Option<u16>,
 }
 
 /// Clickable regions of the drawn status line.
@@ -51,9 +57,53 @@ pub struct StatusRegions {
     pub minimized: Vec<(u16, u16, PaneId)>,
     /// `(x_start, x_end_exclusive, widget index)`: where each widget is.
     pub widgets: Vec<(u16, u16, usize)>,
+    /// The start button.
+    pub start: Option<(u16, u16)>,
+    /// The `+` after the tabs (a new workspace).
+    pub new_tab: Option<(u16, u16)>,
+    /// The message shown at the right.
+    pub message: Option<(u16, u16)>,
+}
+
+fn within(span: Option<(u16, u16)>, x: u16) -> bool {
+    span.is_some_and(|(a, b)| x >= a && x < b)
 }
 
 impl StatusRegions {
+    pub fn start_at(&self, x: u16, y: u16) -> bool {
+        y == self.y && within(self.start, x)
+    }
+
+    pub fn new_tab_at(&self, x: u16, y: u16) -> bool {
+        y == self.y && within(self.new_tab, x)
+    }
+
+    pub fn message_at(&self, x: u16, y: u16) -> bool {
+        y == self.y && within(self.message, x)
+    }
+
+    /// Something clickable at (`x`, `y`), as an id that changes when the
+    /// pointer moves from one thing to another (for hover highlights).
+    pub fn target_at(&self, x: u16, y: u16) -> Option<u32> {
+        if y != self.y {
+            return None;
+        }
+        if within(self.start, x) {
+            return Some(1);
+        }
+        if within(self.new_tab, x) {
+            return Some(2);
+        }
+        if within(self.message, x) {
+            return Some(3);
+        }
+        if let Some(i) = self.tab_at(x, y) {
+            return Some(100 + u32::try_from(i).unwrap_or(u32::MAX - 100));
+        }
+        self.minimized_at(x, y)
+            .map(|p| 1_000 + u32::try_from(p.0 % 1_000_000).unwrap_or(0))
+    }
+
     pub fn tab_at(&self, x: u16, y: u16) -> Option<usize> {
         (y == self.y)
             .then(|| {
@@ -112,6 +162,7 @@ pub fn draw(
 
     // Right side first, so the left side can be truncated to fit.
     let mut right: Vec<(String, termos_render::cell::Style)> = Vec::new();
+    let mut message_index = None;
     if info.copy_mode {
         right.push((" COPY ".into(), theme.copy_mode_badge));
     }
@@ -132,6 +183,7 @@ pub fn draw(
             }
             _ => text,
         };
+        message_index = Some(right.len());
         right.push((text, style));
     }
     // Which entries of `right` each widget is (for clicks).
@@ -158,8 +210,22 @@ pub fn draw(
     let right_w: u16 = right.iter().map(|(s, _)| width(s)).sum();
     let left_limit = cols.saturating_sub(right_w);
 
+    let hovered = |a: u16, b: u16| info.pointer.is_some_and(|p| p >= a && p < b);
+    let mut x = 0;
+    if info.start_button {
+        let label = if cols >= 80 { " ◆ Menu " } else { " ◆ " };
+        let end = width(label).min(left_limit);
+        let style = if hovered(0, end) {
+            theme.status_tab_active
+        } else {
+            theme.status_prefix
+        };
+        x = grid.put_str(0, y, label, style, left_limit);
+        regions.start = Some((0, x));
+        x = grid.put_str(x, y, " ", theme.status, left_limit);
+    }
     let mut x = grid.put_str(
-        0,
+        x,
         y,
         &format!("[{}] ", info.session),
         theme.status_message,
@@ -179,7 +245,7 @@ pub fn draw(
             flag.push('Z');
         }
         let text = format!(" {}:{}{} ", tab.index, truncate(&tab.name, 16), flag);
-        let style = if tab.active {
+        let style = if tab.active || hovered(x, x + width(&text)) {
             theme.status_tab_active
         } else {
             theme.status_tab
@@ -190,6 +256,16 @@ pub fn draw(
         if x >= left_limit {
             break;
         }
+    }
+    if info.start_button && x + 3 <= left_limit {
+        let style = if hovered(x, x + 3) {
+            theme.status_tab_active
+        } else {
+            theme.status_tab
+        };
+        let start = x;
+        x = grid.put_str(x, y, " + ", style, left_limit);
+        regions.new_tab = Some((start, x));
     }
     for (pane, name) in &info.minimized {
         if x >= left_limit {
@@ -213,6 +289,9 @@ pub fn draw(
         rx = grid.put_str(rx, y, text, *style, cols);
     }
     starts.push(rx);
+    if let Some(i) = message_index {
+        regions.message = Some((starts[i], starts[i + 1]));
+    }
     for (i, (first, end)) in widget_spans.into_iter().enumerate() {
         if first < end {
             regions.widgets.push((starts[first], starts[end], i));
@@ -224,6 +303,56 @@ pub fn draw(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_start_button_the_plus_and_hover() {
+        let theme = Theme::default();
+        let tab = TabInfo {
+            index: 0,
+            name: "sh".into(),
+            active: true,
+            last: false,
+            bell: false,
+            zoomed: false,
+        };
+        let mut info = StatusInfo {
+            session: "main",
+            tabs: vec![tab],
+            message: Some(("built", Level::Info)),
+            start_button: true,
+            ..StatusInfo::default()
+        };
+        let mut g = Grid::new(100, 1);
+        let (r, _) = draw(&mut g, 0, &theme, &info);
+        let text = g.row_text(0);
+        assert!(text.starts_with(" ◆ Menu  [main]  0:sh*  + "), "{text:?}");
+        assert!(r.start_at(1, 0) && !r.start_at(9, 0));
+        let plus = u16::try_from(text.find(" + ").expect("+")).expect("narrow") - 2;
+        assert!(r.new_tab_at(plus + 1, 0), "{r:?}");
+        let msg = u16::try_from(unicode_width::UnicodeWidthStr::width(
+            &text[..text.find("built").expect("msg")],
+        ))
+        .expect("narrow");
+        assert!(r.message_at(msg, 0));
+        // Each thing has its own hover target; empty space has none.
+        let targets = [
+            r.target_at(1, 0),
+            r.target_at(plus + 1, 0),
+            r.target_at(msg, 0),
+        ];
+        assert!(targets.iter().all(Option::is_some));
+        assert!(targets[0] != targets[1] && targets[1] != targets[2]);
+        assert_eq!(r.target_at(60, 0), None);
+        // The pointer over `+` draws it like the active tab.
+        info.pointer = Some(plus + 1);
+        let mut h = Grid::new(100, 1);
+        draw(&mut h, 0, &theme, &info);
+        assert_eq!(
+            h.get(plus + 1, 0).map(|c| c.style),
+            Some(theme.status_tab_active)
+        );
+        assert_eq!(g.get(plus + 1, 0).map(|c| c.style), Some(theme.status_tab));
+    }
 
     #[test]
     fn tabs_badges_and_regions() {

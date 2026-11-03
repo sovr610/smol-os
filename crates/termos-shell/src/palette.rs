@@ -159,6 +159,31 @@ impl Palette {
         rect
     }
 
+    /// The match shown on the row at (`x`, `y`), if any (for clicks).
+    pub fn row_at(&self, area: Rect, x: u16, y: u16) -> Option<usize> {
+        let inner = self.rect(area).inset(1);
+        if !inner.contains(x, y) || y < inner.y + 2 {
+            return None;
+        }
+        let row = usize::from(y - inner.y - 2);
+        let rows = usize::from(self.list_rows(area));
+        if row >= rows {
+            return None;
+        }
+        let first = self.selected.saturating_sub(rows.saturating_sub(1));
+        let i = first + row;
+        (i < self.matches.len()).then_some(i)
+    }
+
+    /// Selects the `i`th match; whether the selection changed.
+    pub fn select(&mut self, i: usize) -> bool {
+        let changed = i < self.matches.len() && i != self.selected;
+        if changed {
+            self.selected = i;
+        }
+        changed
+    }
+
     fn list_rows(&self, area: Rect) -> u16 {
         u16::try_from(self.items.len())
             .unwrap_or(u16::MAX)

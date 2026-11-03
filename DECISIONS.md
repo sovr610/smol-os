@@ -854,6 +854,17 @@ rewrite history.
   - **Claude Code and Codex CLI:** TermOS installs them from their official sources on every platform, including bare metal, and runs a TermOS MCP server so they can use TermOS's features with permission; their usage shows in the command center. They are not shipped inside the images.
 - **Alternatives:** short separate commands (clashes such as macOS `open`); a read-only or live-only command center; installing the agents without the MCP server; preinstalling them in the images (their licenses may not allow redistribution); M10 after M5b and M9b.
 
+## D-085: Menus, hover and double clicks; `tos` is a name of the `termos` binary
+- **Status:** Accepted (lead) · 2026-11-03
+- **Decision:**
+  - **The TermOS menu:** a `◆ Menu` start button at the left of the status line (also prefix `Enter`, the `menu` command and `tos menu`) opens one menu of everything: new terminals, the apps, AI agents (TermOS's own and the external presets), project tasks, layouts, themes, workspaces and sessions, help, detach and quit. Submenus open beside on hover. Every item is a named command and shows its key, so the menu also teaches the keyboard.
+  - **Context menus:** a right-click in a terminal or app pane, on a floating window's title bar or on a workspace tab. In programs that use the mouse, Shift+right-click, as Shift already keeps selection for TermOS. Menu items act on the pane or tab clicked (it is focused or selected first).
+  - **Behaviour:** menus are per client and modal; the pointer selects, a press runs (left or right button, so a context menu can be used in one gesture pair), a press elsewhere closes without passing the click on.
+  - **Hover:** motion events (already reported, 1003) redraw only when what is under the pointer changes; the status line's targets and window buttons are highlighted. Idle cost stays at zero (D-028).
+  - **Double clicks:** two presses on the same cell within 400 ms. A floating title maximizes and restores, a new `pane.maximize` command (the size before is kept in memory); a tab opens its rename prompt. `pane.rename` names panes (also `tos title`); the name is not saved with snapshots yet.
+  - **`tos`:** the `termos` binary run under the name `tos` (still one binary: D-002 makes `termos-cli` the only one). The server makes `<data>/bin/tos` (a symbolic link on Unix; a hard link, else a copy with a stamp of the source's size and time, remade when stale, on Windows) and puts that folder first on panes' `PATH`. Verbs act on `$TERMOS_PANE` through new control methods (`pane.command`, `pane.open`, `pane.rename`, `clipboard.copy`, `clipboard.get`); unknown verbs run as `termos` subcommands. Web addresses go to the system's opener (`xdg-open`, `open`, `start`).
+- **Alternatives:** shell functions injected into each shell (fragile across bash, zsh, fish, PowerShell and cmd); a separate `tos` binary (two binaries to ship and update); `.cmd` shims on Windows (cmd quoting breaks arguments from PowerShell); releasing a menu item on button release (a right-click's release would hit the first item of the menu it opened).
+
 ---
 
 ## Open questions (the owner will be asked before the milestone that needs each one)

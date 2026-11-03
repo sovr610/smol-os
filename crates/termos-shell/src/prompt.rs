@@ -21,6 +21,7 @@ pub enum Confirmed {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PromptKind {
     RenameWorkspace(usize),
+    RenamePane(PaneId),
     RenameSession,
     Confirm(Confirmed),
 }
@@ -46,6 +47,14 @@ impl Prompt {
         Self {
             kind: PromptKind::RenameWorkspace(index),
             label: "(rename-workspace) ".into(),
+            input: current.to_owned(),
+        }
+    }
+
+    pub fn rename_pane(pane: PaneId, current: &str) -> Self {
+        Self {
+            kind: PromptKind::RenamePane(pane),
+            label: "(rename-pane) ".into(),
             input: current.to_owned(),
         }
     }
