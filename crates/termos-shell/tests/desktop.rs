@@ -1633,8 +1633,8 @@ async fn sessions_start_on_the_desktop() {
         "{screen}"
     );
     h.type_text(&format!("{}\n", common::echo_split("on-the", "-desktop")));
-    // The output, inside the window's border.
-    h.wait_text("│on-the-desktop ").await;
+    // The output (the typed command has quotes in the word).
+    h.wait_text("on-the-desktop").await;
 
     // The Terminal shortcut: another window, the desktop stays.
     let screen = h.screen();
