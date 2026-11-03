@@ -245,7 +245,7 @@ impl App for About {
             buf.set_string(x, y, format!("{k:>key_w$}"), key_style);
             let vx = x + u16::try_from(key_w).unwrap_or(0) + 2;
             let room = usize::from(area.right().saturating_sub(vx + 1));
-            buf.set_stringn(vx, y, v, room, value_style);
+            buf.set_stringn(vx, y, tail(v, room), room, value_style);
             y += 1;
         }
         if area.height > 0 {
@@ -258,6 +258,26 @@ impl App for About {
             Line::from(Span::styled("q close", tui_style(theme.border))).render(footer, buf);
         }
     }
+}
+
+/// `text` in `room` columns: whole, or `…` and its end (a long path keeps
+/// its file name).
+fn tail(text: &str, room: usize) -> String {
+    use unicode_width::UnicodeWidthStr;
+    if text.width() <= room {
+        return text.to_owned();
+    }
+    let mut kept: Vec<char> = Vec::new();
+    let mut used = 1;
+    for ch in text.chars().rev() {
+        let w = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
+        if used + w > room {
+            break;
+        }
+        used += w;
+        kept.push(ch);
+    }
+    std::iter::once('…').chain(kept.into_iter().rev()).collect()
 }
 
 /// The notification center: recent notifications, newest first.
@@ -370,6 +390,8 @@ mod tests {
         assert!(text.contains(env!("CARGO_PKG_VERSION")), "{text}");
         assert!(text.contains("config.toml") && text.contains("GPL-3.0-or-later"));
         assert!(text.contains('█'), "the logo");
+        assert_eq!(tail("/a/very/long/path/config.toml", 13), "…/config.toml");
+        assert_eq!(tail("short", 14), "short");
         assert_eq!(app.handle_key(KeyEvent::ch('q')), AppEffect::Close);
     }
     use std::time::Instant;

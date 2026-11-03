@@ -803,6 +803,31 @@ Not shown: Windows and macOS by hand; CI runs the `tos` end-to-end test on both 
 - **Desktop, end to end:** a 256-colour and a truecolor terminal on the same session get a flat and a shaded title bar; `[ui] icons = "ascii"` reaches the titles and the start button; the wallpaper shows only with nothing tiled, its shortcuts light up and open apps, and a right-click on it opens the menu; a picture wallpaper (relative to the config) is decoded off the loop and drawn, `none` draws nothing; the splash shows on attach, ends by itself with its timer, and a key ends another client's splash at once; About opens with the version; the CPU chart goes to a Kitty client in pixels with the braille beneath cleared, while a block-only client keeps the braille; a busy window spins and the spinner keeps a timer only where something animates.
 - **Charts:** the rasterized chart (line, fill, guides, clamping, empty data); shaded meters change colour along the bar.
 
+**Budgets** (`cargo xtask perf 60`, release build, Linux x86_64, this container while other builds ran):
+
+| | M10b | Budget |
+| --- | --- | --- |
+| Keystroke→screen p50 / p99 | 0.39 / 1.90 ms | p99 < 16 ms |
+| Idle CPU, 60 s (also with a 4K picture open, the monitor closed, a WASM widget) | 0.000% | < 1% |
+| CPU with the system monitor open, 60 s | 0.50% | < 1% |
+| RSS, server + client | 24.8 MB | < 150 MB |
+| RSS with a 4K picture open | 79.0 MB | < 150 MB |
+| 300 000-line flood | 162 ms | no regression (162 ms in M9) |
+
+**Demo** (live, Linux, release build, in an isolated `tmux -L termos-m10b` with its own TermOS home, truecolor, clicks sent as SGR mouse events):
+
+1. On attach, the splash: the logo on a card, gone after a moment.
+2. `tos float` floats the only shell: the wallpaper appears behind it, with the shortcuts at the left and the logo and hint at the bottom right; `◆ Menu` and the tab show their gradients (`#e5a54b` to `#eec58a` on the button).
+3. The pointer over Files lights it with a gradient; a click opens the file manager with icons by kind (`■` folders, `≡` text, `□` other files). A click on Monitor opens the monitor: braille CPU chart (tmux shows no pixels), and the disk bar at 95% shades from the accent (108,182,255) through orange to red (244,112,103).
+4. `◆ Menu` opens the menu with an icon per item and submenu; Help → About TermOS shows the logo, version 0.0.0, linux x86_64, the config, log and data folders, the licence and the source.
+5. A right-click on the wallpaper opens the TermOS menu at the pointer.
+6. A second terminal without truecolor attaches to the same session: the same chrome in flat 256-colour palette colours (one colour per bar).
+7. Changing `icons = "ascii"` in the config switches every icon live (`>` terminal, `/` files, `%` monitor, `*` menu).
+
+The demo found that About cut long paths at the right, hiding the file name; long values now keep their end (`…/termos/config.toml`), with a test.
+
+Not shown here: pixel graphics (the CPU chart as a picture, a picture wallpaper) need a terminal that shows images; the desktop tests drive them for a Kitty client. To try them by hand: kitty, WezTerm or Ghostty, then Apps → System monitor.
+
 ---
 
 ## M10c — The command center
