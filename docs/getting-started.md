@@ -342,6 +342,11 @@ known gaps listed below).
 - **Colours look wrong:** set `COLORTERM=truecolor` if your terminal supports
   24-bit colour. Otherwise force a colour depth with `TERMOS_COLOR=256` or
   `TERMOS_COLOR=16`.
+- **Keys repeat or go missing:** run `termos debug keys` in the same terminal
+  (outside TermOS) and type. It prints every key event as TermOS receives it
+  and what it sends on. If a key is missing or doubled there, the terminal
+  delivered it that way; if it is right there but wrong in a pane, it is
+  TermOS's side. Either way, send the output along with a bug report.
 - **Ctrl+B is taken by tmux** when you run TermOS inside tmux: set another
   prefix, e.g. `prefix = "C-a"`.
 - **Logs** are in `~/.local/state/termos/log/` (Windows:

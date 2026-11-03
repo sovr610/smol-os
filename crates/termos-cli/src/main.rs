@@ -275,6 +275,9 @@ enum DebugCmd {
         #[arg(long)]
         raw: bool,
     },
+    /// Print every key event as TermOS's client receives it, and what it
+    /// sends on (for keys that repeat or go missing). Ctrl+C ends it.
+    Keys,
     /// Print the hardware TermOS sees (what the system monitor shows).
     Hw,
     /// Try a TCP connection (can this sandbox reach the network?).
@@ -398,6 +401,9 @@ fn run_cli(args: impl IntoIterator<Item = String>) -> anyhow::Result<ExitCode> {
             what: DebugCmd::Caps { raw },
         }) => debug_caps(*raw),
         Some(Cmd::Debug { what: DebugCmd::Hw }) => debug_hw(),
+        Some(Cmd::Debug {
+            what: DebugCmd::Keys,
+        }) => debug_keys(),
         Some(Cmd::Debug {
             what: DebugCmd::Connect { addr },
         }) => debug_connect(addr),
@@ -960,6 +966,63 @@ fn debug_connect(addr: &str) -> anyhow::Result<ExitCode> {
             Ok(ExitCode::FAILURE)
         }
     }
+}
+
+/// `termos debug keys`: the key events the client gets, in the same
+/// terminal modes and through the same event stream as when attached, so
+/// a key the terminal loses or repeats shows here.
+fn debug_keys() -> anyhow::Result<ExitCode> {
+    use crossterm::event::{
+        DisableFocusChange, DisableMouseCapture, EnableFocusChange, EnableMouseCapture, Event,
+        EventStream, KeyCode, KeyModifiers,
+    };
+    use futures_util::StreamExt;
+
+    if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
+        bail!("stdin and stdout must be a terminal");
+    }
+    println!("Type; each key event is printed as it arrives. Ctrl+C ends.");
+    crossterm::terminal::enable_raw_mode().context("cannot set up the terminal")?;
+    let mut stdout = std::io::stdout();
+    let _ = crossterm::execute!(stdout, EnableMouseCapture, EnableFocusChange);
+    let result = runtime().and_then(|rt| {
+        rt.block_on(async {
+            let mut events = EventStream::new();
+            // Wakes the loop the way frames do when attached, so the event
+            // stream is polled, dropped and polled again as there.
+            let mut tick = tokio::time::interval(Duration::from_millis(16));
+            let mut n = 0u64;
+            loop {
+                tokio::select! {
+                    ev = events.next() => {
+                        let Some(ev) = ev else { return Ok(()) };
+                        let ev = ev.context("reading the terminal")?;
+                        if let Event::Key(k) = &ev
+                            && k.code == KeyCode::Char('c')
+                            && k.modifiers.contains(KeyModifiers::CONTROL)
+                        {
+                            return Ok(());
+                        }
+                        if matches!(&ev, Event::Mouse(m) if m.kind == crossterm::event::MouseEventKind::Moved) {
+                            continue;
+                        }
+                        n += 1;
+                        let sent = match client::convert(ev.clone()) {
+                            Some(msg) => format!("{msg:?}"),
+                            None => "(ignored)".to_owned(),
+                        };
+                        print!("{n:>4}  {ev:?}\r\n      sent: {sent}\r\n");
+                        let _ = stdout.flush();
+                    }
+                    _ = tick.tick() => {}
+                }
+            }
+        })
+    });
+    let _ = crossterm::execute!(stdout, DisableMouseCapture, DisableFocusChange);
+    let _ = crossterm::terminal::disable_raw_mode();
+    result?;
+    Ok(ExitCode::SUCCESS)
 }
 
 fn debug_hw() -> anyhow::Result<ExitCode> {
