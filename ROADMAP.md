@@ -26,7 +26,7 @@ questions (DECISIONS.md, "Open questions").
 | M7 | Local models: Hugging Face downloads, fit estimates, llama.cpp, candle embeddings, the router, agents' local provider (D-065 to D-068) | 🔍 |
 | M8 | Bare-metal images: the KMS console, Buildroot images for x86_64, aarch64 and the Pis, QEMU boot tests (D-072 to D-076) | 🔍 |
 | M9 | Release: A/B updates, the live ISO and installer, the network page, the release pipeline with musl builds, docs (D-077 to D-083) | 🔍 |
-| M10a | Mouse-first desktop: menus, context menus, hover and double-click; the `tos` command in every pane (D-084) | 🚧 |
+| M10a | Mouse-first desktop: menus, context menus, hover and double-click; the `tos` command in every pane (D-084, D-085) | 🔍 |
 | M10b | Graphics: richer chrome, icons, wallpaper, pixel charts where the terminal can show them (D-084) | ⏳ |
 | M10c | The command center: live views and history of the AI and the OS, with actions (D-084) | ⏳ |
 | M10d | Claude Code and Codex CLI: installed by TermOS, with a TermOS MCP server (D-084) | ⏳ |
@@ -732,16 +732,42 @@ What was shown, and where (Linux, in an isolated `tmux -L termos-m7` with its ow
 ---
 
 ## M10a — Mouse-first desktop and the `tos` command
-**Status:** 🚧 · Owner answers: M10 in four parts, next (D-084); one `tos` command (D-084).
+**Status:** 🔍 done, awaiting review · Owner answers: M10 in four parts, next (D-084); one `tos` command (D-084). Design: D-085, ARCHITECTURE.md §6 and §7; user guides [getting-started.md](docs/getting-started.md#mouse) and [tos.md](docs/tos.md).
 
 **Deliverables**
-- **Menus:** a start button at the left of the status line (and prefix `Enter`, `tos menu`) opening the TermOS menu: new terminals, the apps, AI agents (TermOS's, Claude Code, Codex), project tasks, layouts, themes, workspaces and sessions, help, detach and quit; submenus open on hover; each item shows its key.
-- **Context menus:** right-click a terminal (Shift+right-click in programs that use the mouse), an app, a floating window's title or a workspace tab for what can be done with it.
-- **Mouse polish:** hover highlights for menu items, window buttons, tabs and status buttons (redrawn only when what is under the pointer changes); double-click a floating title to maximize or restore it and a tab to rename it; click and scroll the palette and the key list; a `+` tab for a new workspace; a click on a message opens the notification center.
-- **`tos`:** one command in every TermOS pane, the same in PowerShell, cmd, bash, zsh and fish on Linux, macOS and Windows, acting on the pane it runs in: split, float, run a program in a new pane, close, zoom, rename, open files by kind, the apps, the clipboard, notifications, themes, layouts, workspaces, the menu, and every `termos` subcommand (`tos lang …`, `tos task …`).
-- **Docs:** the mouse in getting-started, a `tos` guide.
+- **Menus** (D-085):
+  - [x] A `◆ Menu` start button at the left of the status line (also prefix `Enter`, the `menu` command, `tos menu`) opening the TermOS menu: new terminals, the apps, AI agents (TermOS's own, Claude Code, Codex CLI, Gemini CLI, aider, opencode), project tasks and Git, layouts, themes, workspaces and sessions, help, detach and quit; submenus open on hover; each item shows its key
+  - [x] Context menus on a right-click in a terminal or app (Shift+right-click in programs that use the mouse), on a floating window's title and on a workspace tab
+- **Mouse polish:**
+  - [x] Hover highlights for menu rows, window buttons, tabs, `◆ Menu` and `+`, redrawn only when what is under the pointer changes
+  - [x] Double-click a floating title to maximize it and again to restore its size (`pane.maximize`); double-click a tab to rename it
+  - [x] Clicks and the wheel in the palette; clicks in the key list (`C-b ?`); a `+` tab for a new workspace; a click on a message opens the notification center
+  - [x] Panes can be named (`pane.rename`, Rename in their menus, `tos title`)
+- **`tos`** (D-085, [tos.md](docs/tos.md)):
+  - [x] The `termos` binary answers to `tos`; the server keeps `<data>/bin/tos` (a symbolic link on Unix, a hard link or copy on Windows, remade when the executable changes) first on every pane's `PATH`
+  - [x] Verbs on the pane they run in: `split`, `run`, `float`, `zoom`, `close`, `title`, `open` (files by kind, web addresses in the browser), `files`, the apps, `ai [claude|codex|…]`, `copy` (arguments or stdin), `paste`, `notify`, `theme`, `layout`, `workspace`, `menu`, `palette`, `info`
+  - [x] Every `termos` subcommand through `tos` (`tos lang install go`, `tos task test`)
+  - [x] New control methods for it: `pane.command`, `pane.open`, `pane.rename`, `clipboard.copy`, `clipboard.get`
+- **Docs:**
+  - [x] The mouse in [getting-started.md](docs/getting-started.md#mouse), the `tos` guide, ARCHITECTURE.md §6 and §7, D-085
 
 **Acceptance:** everything in the menus and context menus works with the mouse alone; desktop tests drive menus, hover and double-clicks through mouse events; `tos` is tested end to end against a real server on Linux, macOS and Windows CI; idle CPU stays at zero with the pointer still and moving over the same item.
+
+**What the tests cover**
+- **Menus** (unit): placement inside the screen and above the start button; hover selects and opens submenus beside (to the left at the right edge); disabled rows and separators are skipped; a press runs, a press outside closes; the keyboard (arrows, Enter, Esc, Left/Right, letters); a drawing snapshot.
+- **Desktop, through mouse events only:** `◆ Menu` → Apps → System monitor opens the monitor; the monitor's title-bar menu closes it; a right-click in the shell splits it; Esc and a press elsewhere close menus; prefix `Enter` and the arrows run an item; `+` adds a workspace and a right-click on a tab selects it and offers Rename; moving over a shell or along one button does not redraw, moving onto the button does; a double-click on a floating title maximizes it and another restores its exact size; a click in the palette and in the key list runs the command.
+- **Status line:** the start button, `+` and message regions, distinct hover targets, the hover style.
+- **`tos`, end to end:** typed into a real pane's shell (sh, or cmd on Windows), found through the pane's `PATH`: `tos title` names the pane, `echo … | tos copy` and `tos paste > file` round-trip, `tos ls` runs the `termos` subcommand against this server, `tos split right` and `tos run --float` add panes; outside a pane it explains what it needs. The link is made and remade when the executable changes.
+
+**Demo** (live, Linux, in an isolated `tmux -L termos-m10a` with its own TermOS home, clicks sent to the client as SGR mouse events):
+
+1. A click on `◆ Menu` opens the TermOS menu above the status line, with key hints (`New floating terminal  C-b F`, `Detach  C-b d`).
+2. Pointing at "AI agents" opens its submenu beside it: New conversation, Resume, Audit logs, then Claude Code, Codex CLI, Gemini CLI, aider and opencode.
+3. Apps → System monitor (pointer, then a click) opens the monitor; a double-click on its title maximizes it to the whole screen; a right-click on the title offers Maximize or restore, the halves, Center, Minimize, Tile, Rename and Close, and Close closes it.
+4. In the shell: `tos title builder` names the pane; `echo hello-from-tos | tos copy && tos paste` prints `hello-from-tos`; `tos notify built in 3s` lands in the notification center (next to "copied 15 characters"); `tos info` shows the session, server, pane `%0`, its name and folder; `tos split right -- sh -c 'echo I was started by tos; exec sh'` opens a pane on the right running it.
+5. A right-click in the shell opens its menu (Paste, Select and copy text, Split right and down, Zoom, Float, Rename, Browse this folder, Close). The demo found that a menu opened near the bottom covered the status line; menus now stay inside the layout area and open upward there (with a test).
+
+Not shown: Windows and macOS by hand; CI runs the `tos` end-to-end test on both (cmd.exe on Windows).
 
 ---
 

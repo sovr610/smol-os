@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 use termos_core::clipboard::ClipSource;
 use termos_core::ids::PaneId;
 use termos_core::input::{KeyCode, KeyEvent, MouseButton, MouseEvent, MouseKind};
-use termos_render::grid::{Grid, Rect};
+use termos_render::grid::Grid;
 use termos_render::theme::ThemeBase;
 use termos_wm::hit::{Button, CLOSE_OFFSET, Hit, MINIMIZE_OFFSET};
 use termos_wm::layout::Preset;
@@ -232,7 +232,8 @@ impl Desktop {
     // ----- opening and driving menus ------------------------------------
 
     fn open_menu(&mut self, title: &str, entries: Vec<Entry>, x: u16, y: u16) {
-        let area = Rect::new(0, 0, self.cols, self.rows);
+        // Above or below the status line, never over it.
+        let area = self.layout_area();
         self.ui.menu = Some(Menu::at(title, entries, x, y, area));
         self.ui.palette = None;
         self.ui.whichkey_visible = false;

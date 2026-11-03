@@ -376,12 +376,12 @@ fn run(tos: Tos) -> anyhow::Result<ExitCode> {
             let panes = crate::call(&t, "pane.list", Some(json!({ "session": t.session })))?;
             let me = pane_id();
             println!(
-                "session  {}",
+                "session   {}",
                 t.session.as_deref().unwrap_or("?").trim_start_matches('$')
             );
-            println!("server   {} ({})", t.name, t.socket.display());
+            println!("server    {} ({})", t.name, t.socket.display());
             if let Some(id) = me {
-                println!("pane     %{id}");
+                println!("pane      %{id}");
                 if let Some(p) = panes
                     .as_array()
                     .into_iter()
@@ -389,14 +389,17 @@ fn run(tos: Tos) -> anyhow::Result<ExitCode> {
                     .find(|p| p.get("id").and_then(Value::as_u64) == Some(id))
                 {
                     for key in ["name", "title", "cwd", "workspace"] {
-                        if let Some(v) = p.get(key).filter(|v| !v.is_null()) {
-                            let v = v.as_str().map_or_else(|| v.to_string(), str::to_owned);
-                            println!("{key:<8} {v}");
+                        let Some(v) = p.get(key).filter(|v| !v.is_null()) else {
+                            continue;
+                        };
+                        let v = v.as_str().map_or_else(|| v.to_string(), str::to_owned);
+                        if !v.is_empty() {
+                            println!("{key:<9} {v}");
                         }
                     }
                 }
             }
-            println!("version  {}", env!("CARGO_PKG_VERSION"));
+            println!("version   {}", env!("CARGO_PKG_VERSION"));
         }
     }
     Ok(ExitCode::SUCCESS)

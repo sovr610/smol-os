@@ -858,6 +858,15 @@ async fn the_menu_and_context_menus_work_with_the_mouse() {
     let (sx, sy) = find(&screen, "Split right").expect("Split right");
     h.mouse(MouseKind::Down(MouseButton::Left), sx, sy);
     assert_eq!(h.panes().len(), 2, "split");
+    // Near the bottom, a menu opens upward and leaves the status line be.
+    h.mouse(MouseKind::Down(MouseButton::Right), 10, ROWS - 3);
+    let screen = h.screen();
+    assert!(screen.contains("Split down"), "{screen}");
+    assert!(
+        screen.lines().last().is_some_and(|l| l.contains("[test]")),
+        "{screen}"
+    );
+    h.key("Escape");
     // Esc closes a menu without running anything; so does a press elsewhere.
     h.mouse(MouseKind::Down(MouseButton::Right), 10, 5);
     h.key("Escape");
