@@ -25,7 +25,7 @@ questions (DECISIONS.md, "Open questions").
 | M6 | AI agents: providers, agent windows, permissions, sandbox, audit, MCP, external agents, secrets (D-058 to D-064) | 🔍 |
 | M7 | Local models: Hugging Face downloads, fit estimates, llama.cpp, candle embeddings, the router, agents' local provider (D-065 to D-068) | 🔍 |
 | M8 | Bare-metal images: the KMS console, Buildroot images for x86_64, aarch64 and the Pis, QEMU boot tests (D-072 to D-076) | 🔍 |
-| M9 | Release: A/B updates, the live ISO and installer, the network page, the release pipeline with musl builds, docs (D-077 to D-080) | 🚧 |
+| M9 | Release: A/B updates, the live ISO and installer, the network page, the release pipeline with musl builds, docs (D-077 to D-083) | 🔍 |
 | M9b | Platform gaps: the Windows agent sandbox and input, snapshots and sensors on macOS and Windows, Kitty keyboard flags, app windows in sessions, the KMS console's clipboard, bell and images (D-077) | ⏳ |
 
 Unfinished work in code is always a `TODO(M<n>)` marker (D-018). The
@@ -625,7 +625,7 @@ What was shown, and where (Linux, in an isolated `tmux -L termos-m7` with its ow
 **Status:** 🔍 done, awaiting review · Owner answers: O-9 → swash; O-10 → BusyBox init; O-11 → iwd + dhcpcd; O-14 → GRUB2 (D-072). Design: D-073 to D-076, ARCHITECTURE.md §5.9 and §13; user guide [bare-metal.md](docs/bare-metal.md).
 
 **Deliverables**
-- **Buildroot** (D-074): [x] the external tree in `termos-image`: the `termos` package, BusyBox init scripts, the session on tty1, GRUB configs, partition layouts, a kernel fragment; [x] targets for x86_64 (BIOS + UEFI disk image), aarch64 UEFI, Pi 5, Pi 4, and Pi 3 / Zero 2 W (best effort), each Buildroot's board defconfig plus TermOS fragments, checked setting by setting; [ ] the x86_64 ISO (with the M9 releases)
+- **Buildroot** (D-074): [x] the external tree in `termos-image`: the `termos` package, BusyBox init scripts, the session on tty1, GRUB configs, partition layouts, a kernel fragment; [x] targets for x86_64 (BIOS + UEFI disk image), aarch64 UEFI, Pi 5, Pi 4, and Pi 3 / Zero 2 W (best effort), each Buildroot's board defconfig plus TermOS fragments, checked setting by setting; [x] the x86_64 ISO (built and tested in M9)
 - **Display** (D-073): [x] the software rasterizer (swash, the built-in DejaVu Sans Mono, a glyph cache, box drawing and blocks from geometry, adjustable and density-scaled size); [x] the DRM/KMS console with double-buffered dumb buffers, page flips and damage-only copies
 - **Input and boot:** [x] libinput + XKB through libseat (layouts, repeat, VT switching, the mouse with a hardware cursor) (D-073); [x] booting straight into the console on tty1 (D-075)
 - **Provisioning** (D-075): [x] the data partition layout (homes and Wi-Fi state on `termos-data`; folders for the dev rootfs, models, containers); [ ] the dev rootfs itself (M5b)
@@ -659,21 +659,58 @@ What was shown, and where (Linux, in an isolated `tmux -L termos-m7` with its ow
 ---
 
 ## M9 — Release
-**Status:** 🚧 · Owner answers: O-12 → RAUC (D-078); O-13 → glibc and static musl builds (D-079); M9 is split, updates only on request, checksums and attestations, whole-disk installs (D-077). Design: D-078 (updates), D-080 (the live ISO and the installer).
+**Status:** 🔍 done, awaiting review · Owner answers: O-12 → RAUC (D-078); O-13 → glibc and static musl builds (D-079); M9 is split, updates only on request, checksums and attestations, whole-disk installs (D-077). Design: D-078 (updates), D-080 (the live ISO and the installer), D-081 (the network page), D-082 and D-083 (accessibility, the console's latency, the Updates window, release rehearsals); user guides [bare-metal.md](docs/bare-metal.md), [releasing.md](docs/releasing.md).
 
 **Deliverables**
-- **A/B updates** (D-078): [ ] RAUC in the images, the kernel in each slot, GRUB's slot selection, marking slots good or bad; [ ] `termos system` behind one sudo rule; [ ] `termos update` (check, install, restart) and its Settings page; [ ] `cargo xtask image bundle`, signed with the owner's key in CI and a development key otherwise; [ ] the Pi's tryboot backend (unit-tested; untried on a board)
-- **Install** (D-080): [ ] the x86_64 live ISO; [ ] `termos install`; [ ] the data partition grown to the whole disk on first boot
-- **Network settings page** (D-072): [ ] wired links and addresses, Wi-Fi networks through iwd
-- **Release pipeline** (D-077, D-079): [ ] from a `v*` tag, a draft GitHub release with the hosted binaries (Linux glibc and static musl, macOS, Windows), the x86_64 disk image and ISO, the aarch64 UEFI image, the Pi images, the update bundles, `SHA256SUMS` and build attestations; [ ] the musl builds measured against the budgets
-- **Pi tuning:** [ ] the console's input→frame time measured and logged, and the work it spends that time on reduced; the owner measures a Pi 4 (budget 33 ms)
-- **Documentation:** [ ] user docs and a getting-started tutorial that cover installing and updating
-- **Accessibility:** [ ] the high-contrast theme's contrast checked by a test; the console's font sizes reviewed
+- **A/B updates** (D-078): [x] RAUC in the images, the kernel in each slot, GRUB's slot selection, marking slots good or bad; [x] `termos system` behind one sudo rule; [x] `termos update` (status, check, install, restart), its Updates window and Settings row (D-083); [x] `cargo xtask image bundle`, signed with the owner's key in CI and a development key otherwise; [x] the Pi's tryboot backend (unit-tested, and the Pi 4 image builds in CI; untried on a board)
+- **Install** (D-080): [x] the x86_64 live ISO; [x] `termos install`; [x] the data partition grown to the whole disk on first boot
+- **Network settings page** (D-081): [x] wired links and addresses, Wi-Fi networks through iwd
+- **Release pipeline** (D-077, D-079): [x] from a `v*` tag, a draft GitHub release with the hosted binaries (Linux glibc and static musl, macOS, Windows), the x86_64 disk image and ISO, the aarch64 UEFI image, the Pi images, the update bundles, `SHA256SUMS` and build attestations, with a rehearsal that runs without a tag; [x] the musl builds measured against the budgets
+- **Pi tuning:** [x] the console's input→frame time measured and logged (D-019's measure, and the time until the screen shows it, D-083), and the copy into the display reduced to the rows that changed; the owner measures a Pi 4 (budget 33 ms)
+- **Documentation:** [x] user docs and a getting-started tutorial that cover installing and updating
+- **Accessibility:** [x] every theme's contrast checked by a test (high contrast to WCAG AAA, the others AA); the console's font sizes reviewed (6 to 96 pixels, checked in the config)
 
 **Acceptance**
 - An update from version N to N+1 succeeds (QEMU, in CI).
 - A forced boot failure rolls back to the previous slot (QEMU, in CI).
 - The release artifacts boot and install: the ISO installs onto an empty disk, which then boots on its own (QEMU, in CI); the hosted binaries run on matching runners.
+
+**Acceptance results**
+- **Update N → N+1 (passed, CI, images run 14, x86_64 with KVM):** the image (version 0.0.0) fetched a signed bundle of version `0.0.0-update-test` over HTTP with `termos update install --yes --restart`; slot A installed it into slot B, the machine restarted into slot B, and slot B booted the new version and was marked good.
+- **Rollback after a forced boot failure (passed, same run):** slot B then installed a bundle whose root file system has no init into slot A; slot A was tried once, the kernel found no init and panicked (`panic=10`), and the next boot fell back to slot B, still marked good, on the new version.
+- **Install (passed, same run):** the live ISO booted to the live desktop with SeaBIOS; with UEFI it ran `termos install --erase vda` onto an empty 8 GiB disk and turned off; the disk alone then booted with UEFI and with SeaBIOS, slot A good, its data partition grown to 6468 MiB.
+- **The images' own boots (passed, same run):**
+
+  | Image | Firmware | Ready after | In use | Data partition | Slot |
+  | --- | --- | --- | --- | --- | --- |
+  | x86_64 (KVM) | UEFI (OVMF) | 4.0 s | 66 MiB of 978 MiB | 1494 MiB | A, good |
+  | x86_64 (KVM) | BIOS (SeaBIOS) | 3.0 s | 67 MiB of 984 MiB | 1494 MiB | A, good |
+  | aarch64-virt (emulated, images run 13) | UEFI (AAVMF) | 15.0 s | 118 MiB of 959 MiB | 1494 MiB | A, good |
+
+  The data partition starts at 512 MiB; the test disks are 1 GiB bigger, and it took the space.
+- **The Pi 4 image** builds in CI with the tryboot layout (images run 12); it is not booted there.
+- **The release pipeline (passed, rehearsal run 2):** the four Linux builds (glibc 2.31 and static musl, x86_64 and aarch64), macOS arm64 and x86_64 and Windows built and packaged, `SHA256SUMS` was made and the files kept as the run's artifact. What only a `v*` tag does (attestations, the draft release, images signed with the owner's keys from secrets) runs for the first release; the images job is the same build as the `images` workflow's.
+- **musl against the budgets (passed, CI run 72, release builds on the same runner type):**
+
+  | | glibc | static musl |
+  | --- | --- | --- |
+  | Keystroke→screen p50 / p99 | 0.29 / 0.65 ms | 0.28 / 0.53 ms |
+  | Idle CPU, 30 s | 0.000% | 0.000% |
+  | RSS, server + client | 24.7 MB | 20.1 MB |
+  | RSS with a 4K picture open | 78.5 MB | 73.8 MB |
+  | 300 000-line flood | 162 ms | 410 ms |
+  | System monitor open, 30 s | 0.63% | 1.03% |
+
+  musl keeps every budget, so it keeps its own allocator (D-079); its allocator makes the flood about 2.5× slower, well inside the test's limit.
+- **What the CI runs found, all fixed:** cargo-deny refused a yanked `async-executor`; the release rehearsal's Intel macOS build stopped on a warning in the patched `gemm-common` (CI now checks that target); the fuzz smoke found a Sixel hue that overflowed and a PPM with no pixels but 340 million rows; Buildroot's PC kernel has no FAT character sets, so the x86_64 images could not mount their boot partition and marked no slot; udev drops the data partition's label link for a moment after it grows; BusyBox `df` wraps long device names; the update test raced DHCP.
+- **Pi 4 latency:** to be measured by the owner on a board (the console logs it every 100 keys).
+
+**What the tests cover**
+- **Unit:** signing keys (generated and from the environment), bundle manifests and names, versions; serial markers (slot, data size, update, install); QEMU command lines with a CD and fw_cfg; the tryboot state file and its transitions; `termos update` (versions, release offers, bundle paths); `termos install` (disks, names, the target's checks); Wi-Fi names, passphrases and iwd's files; network links from sysfs; the Network page (snapshot); the console's damage bands (proptest), row copies and latency reports; every theme's contrast; font sizes in the config; PPM limits; Sixel hues; work markers with a milestone letter.
+- **QEMU, in CI** (`cargo xtask image boot x86_64 --firmware all --update --install`): both firmwares, the update and the rollback, the ISO and the installed disk; aarch64-virt boots with UEFI.
+- **Release:** the rehearsal builds every hosted binary on its runner; the test builds' smoke runs (`--version`, the static check for musl) on matching runners.
+
+**Demo:** `cargo xtask image build x86_64 && cargo xtask image boot x86_64 --firmware all --update --install` (what the `images` workflow runs); on a TermOS machine, `termos update check`, then the palette's "Updates" or `termos update install`.
 
 ---
 
@@ -707,8 +744,6 @@ Generated from the `TODO(M<n>)` markers in the code. Don't edit by hand; run `ca
 | --- | --- | --- |
 | M5b | `crates/termos-apps/src/lib.rs` | package manager UI over mise, the dev rootfs and the host package manager. |
 | M5b | `crates/termos-devkit/src/lib.rs` | dev rootfs, Podman and the package manager UI. |
-| M9 | `crates/termos-image/src/lib.rs` | the live ISO and `termos install` (D-080). |
-| M9 | `crates/termos-image/src/lib.rs` | grow the data partition to the whole disk on first boot. |
 | M9b | `crates/termos-ai/src/sandbox.rs` | a Windows sandbox for agent commands (an AppContainer or a restricted token); until then every command asks. |
 | M9b | `crates/termos-cli/src/client.rs` | VT input mode on Windows, for bracketed paste and the Kitty keyboard protocol. |
 | M9b | `crates/termos-cli/src/kms/mod.rs` | the console's own clipboard and visual bell; images drawn as pixels rather than as blocks. |

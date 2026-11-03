@@ -834,6 +834,16 @@ rewrite history.
   - **Input→frame time on a board:** the console times each key from its reading to the page flip after the desktop's next frame and logs the median, p99 and worst every 100 keys, so the Pi 4's budget (33 ms, D-019) is measured on the device by whoever has one, without a harness.
 - **Alternatives:** a darker selection for high contrast only (still not 7:1 for red); measuring latency with an external camera rig.
 
+## D-083: The Updates window; the console's latency is D-019's measure; release rehearsals
+- **Status:** Accepted (lead; supersedes D-082's input→frame bullet) · 2026-11-03
+- **Decision:**
+  - **The Updates window:** `update.open` ("Updates" in the palette, and Settings → System → Updates) opens a floating pane running `termos update install --wait`: it says whether a newer release exists, asks before installing, offers the restart and waits for Enter, so the window is the same program as the command line rather than a second implementation. Updates stay on request only (D-077).
+  - **The console's input→frame time** runs from reading a key to asking the display to flip in a buffer that holds the frame answering it, which is D-019's "flushing the frame"; the time until the flip completes (up to a refresh later) is logged beside it. D-082 timed to the completed flip, which adds a refresh interval the budget does not count.
+  - **What the console copies:** the changed pixel rows as up to eight bands rather than one span, so the cursor at the top and the clock at the bottom do not copy the screen between them; on a little-endian machine each row is a plain memory copy.
+  - **A slot that works but cannot be recorded:** when the console started but RAUC cannot mark the slot good (its boot loader's state is out of reach), S98 says so (`unrecorded`) and keeps running; restarting would not help. It restarts only when the console did not start.
+  - **Release rehearsals:** the `release` workflow also runs by hand, and when a push changes it or a patched crate (`third_party/`) on any branch: the same builds and packages as a release, kept as the run's artifact, unattested, images only when asked for and with development keys when the owner's are not set.
+- **Alternatives:** an update page drawn by the desktop itself (a second copy of `termos update`'s logic); timing latency with an external camera rig; a tag on a throwaway repository to test releases.
+
 ---
 
 ## Open questions (the owner will be asked before the milestone that needs each one)

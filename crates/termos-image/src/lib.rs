@@ -33,6 +33,3 @@ pub mod build;
 pub mod bundle;
 #[cfg(unix)]
 pub mod qmp;
-
-// TODO(M9): the live ISO and `termos install` (D-080).
-// TODO(M9): grow the data partition to the whole disk on first boot.
