@@ -844,6 +844,16 @@ rewrite history.
   - **Release rehearsals:** the `release` workflow also runs by hand, and when a push changes it or a patched crate (`third_party/`) on any branch: the same builds and packages as a release, kept as the run's artifact, unattested, images only when asked for and with development keys when the owner's are not set.
 - **Alternatives:** an update page drawn by the desktop itself (a second copy of `termos update`'s logic); timing latency with an external camera rig; a tag on a throwaway repository to test releases.
 
+## D-084: M10 owner answers: a mouse-first desktop with `tos`, graphics, a command center, Claude Code and Codex
+- **Status:** Accepted (owner) · 2026-11-03
+- **Context:** after M9 the owner asked for a friendlier, mouse-first desktop with commands in every terminal on every OS, fancier graphics where they fit, a command center over the AI and the rest of the OS, and native Claude Code and Codex CLI.
+- **Decision:**
+  - **M10, in four parts, next** (before M5b and M9b), each with its own review stop: M10a the mouse-first desktop and pane commands, M10b graphics, M10c the command center, M10d Claude Code and Codex CLI.
+  - **Pane commands:** one `tos` command with subcommands (`tos files .`, `tos monitor`, `tos notify …`), the same in PowerShell, cmd, bash, zsh and fish on every OS, so it never clashes with system commands.
+  - **Command center:** observes and acts, with history: live views plus a local history on disk (secrets never stored), and actions such as stopping an agent, killing a process, approving a pending permission or opening the related window.
+  - **Claude Code and Codex CLI:** TermOS installs them from their official sources on every platform, including bare metal, and runs a TermOS MCP server so they can use TermOS's features with permission; their usage shows in the command center. They are not shipped inside the images.
+- **Alternatives:** short separate commands (clashes such as macOS `open`); a read-only or live-only command center; installing the agents without the MCP server; preinstalling them in the images (their licenses may not allow redistribution); M10 after M5b and M9b.
+
 ---
 
 ## Open questions (the owner will be asked before the milestone that needs each one)

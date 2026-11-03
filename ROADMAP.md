@@ -26,6 +26,10 @@ questions (DECISIONS.md, "Open questions").
 | M7 | Local models: Hugging Face downloads, fit estimates, llama.cpp, candle embeddings, the router, agents' local provider (D-065 to D-068) | 🔍 |
 | M8 | Bare-metal images: the KMS console, Buildroot images for x86_64, aarch64 and the Pis, QEMU boot tests (D-072 to D-076) | 🔍 |
 | M9 | Release: A/B updates, the live ISO and installer, the network page, the release pipeline with musl builds, docs (D-077 to D-083) | 🔍 |
+| M10a | Mouse-first desktop: menus, context menus, hover and double-click; the `tos` command in every pane (D-084) | 🚧 |
+| M10b | Graphics: richer chrome, icons, wallpaper, pixel charts where the terminal can show them (D-084) | ⏳ |
+| M10c | The command center: live views and history of the AI and the OS, with actions (D-084) | ⏳ |
+| M10d | Claude Code and Codex CLI: installed by TermOS, with a TermOS MCP server (D-084) | ⏳ |
 | M9b | Platform gaps: the Windows agent sandbox and input, snapshots and sensors on macOS and Windows, Kitty keyboard flags, app windows in sessions, the KMS console's clipboard, bell and images (D-077) | ⏳ |
 
 Unfinished work in code is always a `TODO(M<n>)` marker (D-018). The
@@ -724,6 +728,57 @@ What was shown, and where (Linux, in an isolated `tmux -L termos-m7` with its ow
 - **The KMS console:** its own clipboard, a visual bell, images drawn as pixels.
 
 **Acceptance:** each gap is closed with tests on its platform's CI runner, and the open-work table has no M9b rows.
+
+---
+
+## M10a — Mouse-first desktop and the `tos` command
+**Status:** 🚧 · Owner answers: M10 in four parts, next (D-084); one `tos` command (D-084).
+
+**Deliverables**
+- **Menus:** a start button at the left of the status line (and prefix `Enter`, `tos menu`) opening the TermOS menu: new terminals, the apps, AI agents (TermOS's, Claude Code, Codex), project tasks, layouts, themes, workspaces and sessions, help, detach and quit; submenus open on hover; each item shows its key.
+- **Context menus:** right-click a terminal (Shift+right-click in programs that use the mouse), an app, a floating window's title or a workspace tab for what can be done with it.
+- **Mouse polish:** hover highlights for menu items, window buttons, tabs and status buttons (redrawn only when what is under the pointer changes); double-click a floating title to maximize or restore it and a tab to rename it; click and scroll the palette and the key list; a `+` tab for a new workspace; a click on a message opens the notification center.
+- **`tos`:** one command in every TermOS pane, the same in PowerShell, cmd, bash, zsh and fish on Linux, macOS and Windows, acting on the pane it runs in: split, float, run a program in a new pane, close, zoom, rename, open files by kind, the apps, the clipboard, notifications, themes, layouts, workspaces, the menu, and every `termos` subcommand (`tos lang …`, `tos task …`).
+- **Docs:** the mouse in getting-started, a `tos` guide.
+
+**Acceptance:** everything in the menus and context menus works with the mouse alone; desktop tests drive menus, hover and double-clicks through mouse events; `tos` is tested end to end against a real server on Linux, macOS and Windows CI; idle CPU stays at zero with the pointer still and moving over the same item.
+
+---
+
+## M10b — Graphics
+**Status:** ⏳ · Owner answers: graphics "where it seems fitting" (D-084). **Ask first:** icon set (Nerd Font glyphs need a patched font), a wallpaper by default.
+
+**Deliverables**
+- Richer chrome: gradient title bars and status segments in truecolor (flat in 256 colours), accent colours per theme, focus highlighting.
+- Icons for apps, files and menu items, with Unicode, Nerd Font and plain-text sets.
+- A wallpaper behind empty workspaces (a picture through the image layer, or a generated pattern), a splash on start and an About window.
+- Pixel charts in the system monitor and the command center where the terminal shows images, braille elsewhere; progress bars and spinners.
+
+**Acceptance:** snapshot tests for every theme in truecolor, 256 colours and with each icon set; the budgets of ARCHITECTURE.md §15 still hold.
+
+---
+
+## M10c — The command center
+**Status:** ⏳ · Owner answers: observe and act, with history (D-084).
+
+**Deliverables**
+- A command center window (`tos center`, the menu, a key): the AI side (agent sessions, tokens and cost per provider and model, tool calls and decisions, the audit chain, local models and the router, MCP servers, external agents) and the OS side (processes, sessions and panes, hardware, logs, network, updates).
+- A local history (metrics and usage, kept for a configurable time, 7 days by default; secrets never stored), with charts over time.
+- Actions: stop an agent, approve or deny a pending permission, kill a process, open the related window or log.
+
+**Acceptance:** each view is snapshot-tested against fixtures; the history survives a restart and expires; actions are tested end to end; idle CPU stays under budget with the window closed.
+
+---
+
+## M10d — Claude Code and Codex CLI
+**Status:** ⏳ · Owner answers: installed by TermOS, with a TermOS MCP server, not shipped in images (D-084).
+
+**Deliverables**
+- `termos agent install claude|codex` (and from the menu) from their official sources on Linux, macOS, Windows and bare metal; updates; their sign-in in a TermOS window.
+- A TermOS MCP server they are configured with: open windows and files, read and write panes, notify, run tasks, each under TermOS's permission rules.
+- Their sessions and usage in the command center.
+
+**Acceptance:** CI installs both on every platform and completes an MCP handshake with each (no live API keys: their own `mcp` commands and recorded fixtures).
 
 ---
 
