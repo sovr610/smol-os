@@ -34,6 +34,7 @@ pub mod server;
 pub mod snapshot;
 pub mod status;
 pub mod ui;
+pub mod wallpaper;
 #[cfg(feature = "wasm-widgets")]
 pub mod wasm;
 pub mod whichkey;

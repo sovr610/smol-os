@@ -95,8 +95,8 @@ pub fn compose(
             Some((&name, title_style)),
         );
         if focused && f.outer.w > 4 {
-            // A filled title bar (D-088): the accent, fading into the
-            // panel where the terminal shows truecolor.
+            // A filled title bar (D-088): the accent, with a sheen where
+            // the terminal shows truecolor.
             let bar = Rect::new(f.outer.x + 1, f.outer.y, f.outer.w - 2, 1);
             let text = theme.title_text();
             grid.fill(bar, &Cell::blank(text));

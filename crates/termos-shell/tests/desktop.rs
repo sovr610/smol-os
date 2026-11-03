@@ -57,7 +57,47 @@ impl Harness {
     }
 
     fn build(extra: &str, tutorial: bool, animations: bool, termos_exe: Option<PathBuf>) -> Self {
+        Self::build_ui(extra, tutorial, animations, termos_exe, "splash = false")
+    }
+
+    /// A harness with more `[ui]` settings (`ui` is a few `key = value`
+    /// lines); a file `wall.png` beside the config is made first when
+    /// `wallpaper` is given (green, 64×32).
+    fn with_ui(ui: &str, animations: bool, wallpaper: bool) -> Self {
         let dir = tempfile::tempdir().expect("tempdir");
+        if wallpaper {
+            let config = dir.path().join("config");
+            std::fs::create_dir_all(&config).expect("mkdir");
+            let pic = termos_render::graphics::Picture::from_rgba(
+                64,
+                32,
+                [0, 200, 0, 255].repeat(64 * 32),
+            )
+            .expect("valid");
+            std::fs::write(config.join("wall.png"), pic.to_png()).expect("write");
+        }
+        Self::build_in(dir, "", false, animations, None, ui)
+    }
+
+    fn build_ui(
+        extra: &str,
+        tutorial: bool,
+        animations: bool,
+        termos_exe: Option<PathBuf>,
+        ui: &str,
+    ) -> Self {
+        let dir = tempfile::tempdir().expect("tempdir");
+        Self::build_in(dir, extra, tutorial, animations, termos_exe, ui)
+    }
+
+    fn build_in(
+        dir: tempfile::TempDir,
+        extra: &str,
+        tutorial: bool,
+        animations: bool,
+        termos_exe: Option<PathBuf>,
+        ui: &str,
+    ) -> Self {
         let paths = Paths {
             config_dir: dir.path().join("config"),
             state_dir: dir.path().join("state"),
@@ -67,7 +107,7 @@ impl Harness {
         std::fs::create_dir_all(&paths.config_dir).expect("mkdir");
         // Animations off: screens are read at arbitrary moments.
         let tutorial_cfg = format!(
-            "[tutorial]\nshow-on-first-run = {tutorial}\n[status]\nclock = false\n[ui]\nanimations = {animations}\n"
+            "[tutorial]\nshow-on-first-run = {tutorial}\n[status]\nclock = false\n[ui]\nanimations = {animations}\n{ui}\n"
         );
         let text = base_config(&format!("{extra}\n{tutorial_cfg}"));
         std::fs::write(paths.config_file(), &text).expect("write config");
@@ -1226,4 +1266,157 @@ async fn snapshots_keep_layout_and_scrollback() {
         grid.to_text()
     );
     assert!(grid.to_text().contains('│'), "the split is back");
+}
+
+/// Where `needle` is on `screen`: (column, row).
+fn locate(screen: &str, needle: &str) -> (u16, u16) {
+    for (y, line) in screen.lines().enumerate() {
+        if let Some(i) = line.find(needle) {
+            let x = unicode_width::UnicodeWidthStr::width(&line[..i]);
+            return (
+                u16::try_from(x).expect("narrow"),
+                u16::try_from(y).expect("short"),
+            );
+        }
+    }
+    panic!("{needle:?} is not on the screen:\n{screen}");
+}
+
+/// Where a workspace has no tiled panes the wallpaper shows (D-089): its
+/// shortcuts light up under the pointer and open things, and a right-click
+/// on it opens the TermOS menu.
+#[tokio::test]
+async fn the_wallpaper_shows_where_nothing_is_tiled() {
+    use termos_shell::commands::Command;
+
+    let mut h = Harness::new("");
+    let hint = "right-click anywhere for the menu";
+    assert!(!h.screen().contains(hint));
+    // The only pane floats: nothing is tiled.
+    h.desktop.run(Command::ToggleFloat);
+    let screen = h.screen();
+    assert!(screen.contains(hint), "{screen}");
+    assert!(screen.contains('█'), "the logo:\n{screen}");
+
+    let (x, y) = locate(&screen, "Files");
+    let plain = h.grid.get(x, y).map(|c| c.style);
+    h.mouse(MouseKind::Moved, x, y);
+    h.screen();
+    assert_ne!(
+        h.grid.get(x, y).map(|c| c.style),
+        plain,
+        "lit under the pointer"
+    );
+    h.mouse(MouseKind::Down(MouseButton::Left), x, y);
+    h.mouse(MouseKind::Up(MouseButton::Left), x, y);
+    assert_eq!(h.panes().len(), 2, "Files opened");
+
+    let screen = h.screen();
+    let (x, y) = locate(&screen, "right-click");
+    h.mouse(MouseKind::Down(MouseButton::Right), x, y);
+    let screen = h.screen();
+    assert!(screen.contains("New floating terminal"), "{screen}");
+
+    // Tiled again: no wallpaper.
+    h.key("Escape");
+    h.desktop
+        .run(Command::Split(termos_wm::workspace::SplitHow::Auto));
+    assert!(!h.screen().contains(hint));
+}
+
+/// `[ui] wallpaper` naming a picture (relative to the config file): it is
+/// decoded on its own thread and drawn behind the floats; `none` draws
+/// nothing at all.
+#[tokio::test]
+async fn a_picture_wallpaper_and_none() {
+    use termos_render::color::{Color, Rgb};
+    use termos_shell::commands::Command;
+
+    let mut h = Harness::with_ui("wallpaper = \"wall.png\"\nsplash = false", false, true);
+    h.desktop.run(Command::ToggleFloat);
+    let green = |g: &Grid| {
+        let mut n = 0;
+        for y in 0..g.rows() {
+            for x in 0..g.cols() {
+                if g.get(x, y).map(|c| c.style.bg) == Some(Color::Rgb(Rgb::new(0, 200, 0))) {
+                    n += 1;
+                }
+            }
+        }
+        n
+    };
+    h.wait_grid("the wallpaper in blocks", |g| green(g) > 100)
+        .await;
+    let screen = h.screen();
+    assert!(
+        screen.contains("Files"),
+        "the shortcuts beside it:\n{screen}"
+    );
+
+    let mut h = Harness::with_ui("wallpaper = \"none\"\nsplash = false", false, false);
+    h.desktop.run(Command::ToggleFloat);
+    let screen = h.screen();
+    assert!(
+        !screen.contains("Files") && !screen.contains('·'),
+        "{screen}"
+    );
+}
+
+/// A client that animates sees the logo for a moment when it attaches; any
+/// key ends it at once, and the key still reaches the pane.
+#[tokio::test]
+async fn the_splash_shows_on_attach_until_a_key() {
+    use termos_shell::anim::{Kind, SPLASH};
+
+    let mut h = Harness::with_ui("splash = true", true, false);
+    let start = h
+        .desktop
+        .animations()
+        .started(Kind::Splash(C))
+        .expect("the splash runs");
+    let mut g = Grid::new(COLS, ROWS);
+    h.desktop.render_at(C, &mut g, start + SPLASH / 2);
+    let text = g.to_text();
+    assert!(text.contains("a terminal-first desktop"), "{text}");
+    // It ends by itself, and the timer with it.
+    let mut frames = 0;
+    while let Some(d) = h.desktop.next_deadline() {
+        frames += 1;
+        assert!(frames < 80, "the splash never ends");
+        h.desktop.on_timer(d);
+    }
+    assert!(h.desktop.animations().started(Kind::Splash(C)).is_none());
+
+    // Another client: a key ends its splash at once.
+    const D: ClientId = ClientId(2);
+    h.desktop.handle_client(
+        D,
+        ClientMsg::Hello {
+            version: termos_core::proto::PROTOCOL_VERSION,
+            caps: Caps::default(),
+            cols: COLS,
+            rows: ROWS,
+        },
+    );
+    assert!(h.desktop.animations().started(Kind::Splash(D)).is_some());
+    h.desktop
+        .handle_client(D, ClientMsg::Key(KeyEvent::ch('x')));
+    assert!(h.desktop.animations().started(Kind::Splash(D)).is_none());
+    h.wait_text("x").await;
+}
+
+/// About TermOS opens from the Help menu's command and shows the version.
+#[tokio::test]
+async fn about_opens_with_the_version() {
+    use termos_shell::commands::Command;
+
+    let mut h = Harness::new("");
+    h.desktop.run(Command::AboutOpen);
+    let screen = h.screen();
+    assert!(screen.contains("About TermOS"), "{screen}");
+    assert!(screen.contains(env!("CARGO_PKG_VERSION")), "{screen}");
+    assert_eq!(
+        "about.open".parse::<Command>().map(|c| c.to_string()),
+        Ok("about.open".to_owned())
+    );
 }

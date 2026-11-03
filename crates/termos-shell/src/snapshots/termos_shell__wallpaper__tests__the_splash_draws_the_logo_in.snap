@@ -1,0 +1,15 @@
+---
+source: crates/termos-shell/src/wallpaper.rs
+expression: done.to_text()
+---
+
+
+
+
+             ╭───────────────────────────────╮
+             │                               │
+             │   ▀█▀ █▀▀ █▀█ █▀▄▀█ █▀█ █▀▀   │
+             │    █  █▀▀ █▀▄ █ ▀ █ █ █ ▀▀█   │
+             │    ▀  ▀▀▀ ▀ ▀ ▀   ▀ ▀▀▀ ▀▀▀   │
+             │   a terminal-first desktop    │
+             ╰───────────────────────────────╯

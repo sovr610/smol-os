@@ -103,6 +103,8 @@ enum TosCmd {
     Palette,
     /// The tutorial.
     Tutorial,
+    /// About TermOS: the version, where its files are, the licence.
+    About,
     /// An AI agent window: TermOS's own, or Claude Code (`claude`), Codex
     /// (`codex`) and the others of `termos agent presets`.
     Ai { name: Option<String> },
@@ -316,6 +318,7 @@ fn run(tos: Tos) -> anyhow::Result<ExitCode> {
         TosCmd::Keys => named("keys")?,
         TosCmd::Palette => named("palette")?,
         TosCmd::Tutorial => named("tutorial")?,
+        TosCmd::About => named("about.open")?,
         TosCmd::Ai { name } => match name {
             None => named("agent.open")?,
             Some(n) => named(&format!("agent.external {n}"))?,

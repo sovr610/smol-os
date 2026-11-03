@@ -148,6 +148,8 @@ impl Desktop {
                     Entry::item("All keys", Command::Keys),
                     Entry::item("Command palette", Command::Palette),
                     Entry::item("Notifications", Command::Notifications),
+                    Entry::Separator,
+                    Entry::item("About TermOS", Command::AboutOpen),
                 ],
             )
             .icon(Icon::Help),
@@ -317,7 +319,13 @@ impl Desktop {
             Hit::FloatTitle(pane) | Hit::FloatButton(pane, _) | Hit::FloatEdge(pane, _) => {
                 (*pane, self.float_entries())
             }
-            Hit::Separator(_) | Hit::Nothing => return false,
+            Hit::Nothing => {
+                // The wallpaper: everything TermOS offers, at the pointer.
+                let entries = self.start_entries();
+                self.open_menu("TermOS", entries, m.x, m.y);
+                return true;
+            }
+            Hit::Separator(_) => return false,
         };
         self.session.active_mut().set_focus(pane);
         let title = self
@@ -386,6 +394,9 @@ impl Desktop {
         } else {
             match self.placement().hit(m.x, m.y) {
                 Hit::FloatButton(p, b) => Hover::FloatButton(p, b),
+                Hit::Nothing => self
+                    .wallpaper_at(m.x, m.y)
+                    .map_or(Hover::None, |(i, _)| Hover::Wallpaper(i)),
                 _ => Hover::None,
             }
         };

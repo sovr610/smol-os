@@ -35,7 +35,7 @@ use termos_wm::layout::Dir;
 use termos_wm::workspace::{Placement, Session, Snap, SplitHow, Workspace};
 use tokio::sync::mpsc;
 
-use crate::apps::{NotificationCenter, Tutorial};
+use crate::apps::{About, NotificationCenter, Tutorial};
 use crate::commands::{COMMANDS, Command};
 use crate::copymode::{CopyAction, CopyMode};
 use crate::keys::KeyTables;
@@ -50,6 +50,7 @@ use crate::ui::Chrome;
 use crate::whichkey;
 
 mod menus;
+mod wall;
 
 /// What a pane shows.
 pub enum PaneKind {
@@ -205,6 +206,8 @@ enum Hover {
     /// Something on the status line (`StatusRegions::target_at`).
     Status(u32),
     FloatButton(PaneId, Button),
+    /// A wallpaper shortcut (D-089).
+    Wallpaper(usize),
 }
 
 /// One attached client's UI state (D-032): every terminal has its own
@@ -240,6 +243,8 @@ struct ClientUi {
     last_click: Option<(Instant, u16, u16)>,
     /// Where the key list's commands are drawn, for clicks.
     whichkey_regions: Vec<(Rect, Command)>,
+    /// Where the wallpaper's shortcuts are drawn, for clicks.
+    wallpaper_regions: Vec<(Rect, Command)>,
 }
 
 impl Default for ClientUi {
@@ -266,6 +271,7 @@ impl Default for ClientUi {
             hover: Hover::None,
             last_click: None,
             whichkey_regions: Vec::new(),
+            wallpaper_regions: Vec::new(),
         }
     }
 }
@@ -323,6 +329,8 @@ pub struct Desktop {
     anim: Animations,
     /// App images rendered as blocks.
     block_cache: BlockCache,
+    /// The wallpaper picture, if one is configured (D-089).
+    wall: wall::Wall,
     /// Messages for one client (`Some`) or all of them (`None`).
     outbox: Vec<(Option<ClientId>, ServerMsg)>,
     requests: Vec<SessionRequest>,
@@ -432,6 +440,7 @@ impl Desktop {
             clock_deadline: None,
             anim: Animations::default(),
             block_cache: BlockCache::default(),
+            wall: wall::Wall::default(),
             outbox: Vec::new(),
             requests: Vec::new(),
             known_sessions: Vec::new(),
@@ -453,6 +462,7 @@ impl Desktop {
         for e in key_errors {
             d.notify(Level::Warn, e);
         }
+        d.sync_wallpaper();
         d
     }
 
@@ -774,8 +784,10 @@ impl Desktop {
     }
 
     /// Every pane id in this session (for routing PTY events).
+    /// Whether `id` is one of this desktop's panes (or its wallpaper's
+    /// decode, which wakes it the same way).
     pub fn has_pane(&self, id: PaneId) -> bool {
-        self.panes.contains_key(&id)
+        self.panes.contains_key(&id) || self.is_wallpaper(id)
     }
 
     /// Takes messages for clients: `Some(id)` for one client, `None` for all.
@@ -1409,6 +1421,10 @@ impl Desktop {
             ui.rows = (*rows).max(2);
             // A fresh client must not inherit a stale title.
             ui.title_sent.clear();
+            // The logo, for a moment (D-089).
+            if self.config.ui.splash && Self::animates(&self.config, ui) {
+                self.anim.start(anim::Kind::Splash(client), Instant::now());
+            }
             self.last_active = Some(client);
             self.recompute_size();
             self.dirty = true;
@@ -1416,6 +1432,15 @@ impl Desktop {
         }
         if !self.enter(client) {
             return;
+        }
+        // Any input ends the splash at once; the input still counts.
+        let input = match &msg {
+            ClientMsg::Key(_) | ClientMsg::Paste(_) => true,
+            ClientMsg::Mouse(m) => !matches!(m.kind, MouseKind::Moved),
+            _ => false,
+        };
+        if input && self.anim.stop(anim::Kind::Splash(client)) {
+            self.dirty = true;
         }
         if matches!(
             msg,
@@ -1976,6 +2001,10 @@ impl Desktop {
                 let app = Tutorial::new(&self.keys.prefix_key.to_string());
                 self.open_app(Box::new(app));
             }
+            Command::AboutOpen => {
+                let app = About::new(&self.opts.config_path, &self.opts.paths);
+                self.open_app(Box::new(app));
+            }
             Command::ReloadConfig => self.reload_config(),
             Command::ImageOpen(path) => {
                 let path = self.resolve_path(&path);
@@ -2244,6 +2273,7 @@ impl Desktop {
                 }
                 self.config = config;
                 self.refresh_themes();
+                self.sync_wallpaper();
                 self.ui.key_state = KeyState::Normal;
                 for ui in self.clients.values_mut() {
                     ui.key_state = KeyState::Normal;
@@ -2391,7 +2421,11 @@ impl Desktop {
         }
         let double = self.double_click(&m);
         match hit {
-            Hit::Nothing => {}
+            Hit::Nothing => {
+                if let Some((_, command)) = self.wallpaper_at(m.x, m.y) {
+                    self.run(command);
+                }
+            }
             Hit::FloatButton(pane, Button::Close) => {
                 self.session.active_mut().set_focus(pane);
                 self.run(Command::KillPane);
@@ -2728,7 +2762,9 @@ impl Desktop {
                 }
             }
             PtyEvent::Wake(id) => {
-                if self.panes.contains_key(&id) {
+                if self.is_wallpaper(id) {
+                    self.wallpaper_woke();
+                } else if self.panes.contains_key(&id) {
                     self.dirty = true;
                 }
             }
@@ -3047,6 +3083,12 @@ impl Desktop {
             .unwrap_or(termos_render::graphics::DEFAULT_CELL);
         let image_bg = self.ui.theme.palette.bg;
         let mut candidates: Vec<Candidate> = Vec::new();
+        // No tiled panes: the wallpaper shows (D-089).
+        self.ui.wallpaper_regions = if placement.tiled.is_empty() {
+            self.draw_wallpaper(grid, area, &mut candidates, protocol, cell, image_bg)
+        } else {
+            Vec::new()
+        };
         {
             let panes = &mut self.panes;
             let theme = &self.ui.theme;
@@ -3184,6 +3226,21 @@ impl Desktop {
         if let Some(m) = &self.ui.menu {
             overlays.extend(m.rects());
             m.render(grid, &self.ui.theme, chrome);
+        }
+        if animates
+            && let Some(p) = self
+                .current
+                .and_then(|c| self.anim.linear(anim::Kind::Splash(c), now))
+        {
+            let screen = Rect::new(0, 0, grid.cols(), grid.rows());
+            let border = self.config.floats.border.into();
+            overlays.extend(crate::wallpaper::splash(
+                grid,
+                screen,
+                &self.ui.theme,
+                border,
+                p,
+            ));
         }
         self.ui.pixel_images = self.place_pixel_images(
             grid, &placement, &overlays, candidates, protocol, image_bg, animates,

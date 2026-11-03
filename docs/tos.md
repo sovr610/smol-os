@@ -45,6 +45,7 @@ tos notify --level warn "the build is slow today"
 | `tos clipboard` | The clipboard history |
 | `tos network`, `tos updates` | The network and updates windows |
 | `tos notifications`, `tos keys`, `tos tutorial` | The notification center, every key, the tutorial |
+| `tos about` | About TermOS: the version, where its files are, the licence |
 | `tos theme NAME` | Picks a theme: `dark`, `light`, `high-contrast` or `auto` |
 
 Relative paths are relative to the folder you are in.

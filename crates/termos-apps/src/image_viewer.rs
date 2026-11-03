@@ -59,8 +59,9 @@ fn is_image(p: &Path) -> bool {
         .is_some_and(|e| EXTENSIONS.contains(&e.to_ascii_lowercase().as_str()))
 }
 
-/// Reads and decodes one file, within the size limits.
-fn load(path: &Path) -> Result<Picture, String> {
+/// Reads and decodes one file, within the size limits (also the
+/// desktop's wallpaper).
+pub fn load(path: &Path) -> Result<Picture, String> {
     let meta =
         std::fs::metadata(path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
     if meta.len() > MAX_FILE_BYTES {

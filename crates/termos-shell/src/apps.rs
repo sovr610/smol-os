@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//! Built-in shell apps: the first-run tutorial and the notification center.
-//! Both are in-process [`App`]s shown in floating windows.
+//! Built-in shell apps: the first-run tutorial, the notification center
+//! and About TermOS. All are in-process [`App`]s shown in floating windows.
 
 use ratatui_core::buffer::Buffer;
 use ratatui_core::layout::Rect as TuiRect;
@@ -160,6 +160,106 @@ impl App for Tutorial {
     }
 }
 
+/// About TermOS (D-089): the logo, the version, where TermOS keeps its
+/// files, and the licence.
+#[derive(Debug, Clone)]
+pub struct About {
+    rows: Vec<(&'static str, String)>,
+}
+
+impl About {
+    /// `config` is the config file; `paths` where the rest lives.
+    pub fn new(config: &std::path::Path, paths: &termos_core::paths::Paths) -> Self {
+        let rows = vec![
+            ("Version", env!("CARGO_PKG_VERSION").to_owned()),
+            (
+                "System",
+                format!("{} {}", std::env::consts::OS, std::env::consts::ARCH),
+            ),
+            ("Config", config.display().to_string()),
+            ("Logs", paths.log_dir().display().to_string()),
+            ("Data", paths.data_dir.display().to_string()),
+            ("Licence", "GPL-3.0-or-later".to_owned()),
+            ("Source", env!("CARGO_PKG_REPOSITORY").to_owned()),
+        ];
+        Self { rows }
+    }
+}
+
+impl App for About {
+    fn icon(&self) -> termos_render::icons::Icon {
+        termos_render::icons::Icon::About
+    }
+
+    fn title(&self) -> String {
+        "About TermOS".to_owned()
+    }
+
+    fn handle_key(&mut self, key: KeyEvent) -> AppEffect {
+        match key.code {
+            _ if is_cancel(key) => AppEffect::Close,
+            KeyCode::Char('q') | KeyCode::Enter => AppEffect::Close,
+            _ => AppEffect::None,
+        }
+    }
+
+    fn render(&mut self, area: TuiRect, buf: &mut Buffer, theme: &Theme) {
+        let c = &theme.colors;
+        let mut y = area.y + 1;
+        let lw = crate::wallpaper::LOGO_W;
+        if area.width >= lw + 2 && area.height >= 12 {
+            // The logo goes through the grid drawing; copy it in cell by
+            // cell.
+            let mut g = termos_render::grid::Grid::new(lw, 3);
+            g.clear(termos_render::cell::Style::new().bg(c.overlay_bg));
+            crate::wallpaper::logo(&mut g, 0, 0, theme, 1.0);
+            let x0 = area.x + (area.width - lw) / 2;
+            for dy in 0..3u16 {
+                for dx in 0..lw {
+                    if let (Some(src), Some(dst)) = (g.get(dx, dy), buf.cell_mut((x0 + dx, y + dy)))
+                    {
+                        dst.set_symbol(&src.symbol);
+                        dst.set_style(tui_style(src.style));
+                    }
+                }
+            }
+            y += 4;
+            let tagline = "a terminal-first desktop";
+            let tx = area.x + area.width.saturating_sub(24) / 2;
+            buf.set_string(
+                tx,
+                y,
+                tagline,
+                tui_style(termos_render::cell::Style::new().fg(c.muted)),
+            );
+            y += 2;
+        }
+        let key_w = self.rows.iter().map(|(k, _)| k.len()).max().unwrap_or(0);
+        let key_style = tui_style(termos_render::cell::Style::new().fg(c.muted));
+        let value_style = tui_style(termos_render::cell::Style::new().fg(c.fg));
+        for (k, v) in &self.rows {
+            if y >= area.bottom().saturating_sub(1) {
+                break;
+            }
+            let x = area.x + 2;
+            buf.set_string(x, y, format!("{k:>key_w$}"), key_style);
+            let vx = x + u16::try_from(key_w).unwrap_or(0) + 2;
+            let room = usize::from(area.right().saturating_sub(vx + 1));
+            buf.set_stringn(vx, y, v, room, value_style);
+            y += 1;
+        }
+        if area.height > 0 {
+            let footer = TuiRect::new(
+                area.x + 1,
+                area.bottom() - 1,
+                area.width.saturating_sub(2),
+                1,
+            );
+            Line::from(Span::styled("q close", tui_style(theme.border))).render(footer, buf);
+        }
+    }
+}
+
 /// The notification center: recent notifications, newest first.
 #[derive(Debug, Clone)]
 pub struct NotificationCenter {
@@ -243,6 +343,35 @@ impl App for NotificationCenter {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn about_shows_the_version_and_where_files_are() {
+        let paths = termos_core::paths::Paths {
+            config_dir: "/home/u/.config/termos".into(),
+            state_dir: "/home/u/.local/state/termos".into(),
+            runtime_dir: "/run/user/1000/termos".into(),
+            data_dir: "/home/u/.local/share/termos".into(),
+        };
+        let mut app = About::new(
+            std::path::Path::new("/home/u/.config/termos/config.toml"),
+            &paths,
+        );
+        let area = TuiRect::new(0, 0, 60, 18);
+        let mut buf = Buffer::empty(area);
+        app.render(area, &mut buf, &Theme::default());
+        let text: String = (0..area.height)
+            .map(|y| {
+                let row: String = (0..area.width)
+                    .map(|x| buf.cell((x, y)).map_or(" ", |c| c.symbol()))
+                    .collect();
+                row.trim_end().to_owned() + "\n"
+            })
+            .collect();
+        assert!(text.contains(env!("CARGO_PKG_VERSION")), "{text}");
+        assert!(text.contains("config.toml") && text.contains("GPL-3.0-or-later"));
+        assert!(text.contains('█'), "the logo");
+        assert_eq!(app.handle_key(KeyEvent::ch('q')), AppEffect::Close);
+    }
     use std::time::Instant;
     use termos_core::app::render_app;
     use termos_render::grid::{Grid, Rect};

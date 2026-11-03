@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//! Short UI animations (D-042): floats opening and closing, toasts.
+//! Short UI animations (D-042): floats opening and closing, toasts, and
+//! the splash a client sees when it attaches (D-089).
 //!
 //! Animations are visual only. They change how a frame is drawn for the
 //! clients that animate (not over SSH, not with reduced motion), never
@@ -9,11 +10,14 @@
 
 use std::time::{Duration, Instant};
 
-use termos_core::ids::PaneId;
+use termos_core::ids::{ClientId, PaneId};
 use termos_render::grid::Rect;
 
-/// How long each animation lasts.
+/// How long each animation lasts (the splash: [`SPLASH`]).
 pub const DURATION: Duration = Duration::from_millis(120);
+
+/// How long the splash shows.
+pub const SPLASH: Duration = Duration::from_millis(900);
 
 /// Time between animation frames (about 60 per second).
 pub const FRAME: Duration = Duration::from_millis(16);
@@ -27,6 +31,17 @@ pub enum Kind {
     FloatClose(Rect),
     /// A new toast: it slides in from the right of the status line.
     Toast,
+    /// The logo, for one client that just attached.
+    Splash(ClientId),
+}
+
+impl Kind {
+    pub fn duration(self) -> Duration {
+        match self {
+            Kind::Splash(_) => SPLASH,
+            _ => DURATION,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -64,7 +79,11 @@ impl Animations {
     /// When the next frame is due, while something animates.
     pub fn deadline(&self) -> Option<Instant> {
         let last = self.last_frame?;
-        let end = self.list.iter().map(|a| a.start + DURATION).max()?;
+        let end = self
+            .list
+            .iter()
+            .map(|a| a.start + a.kind.duration())
+            .max()?;
         Some((last + FRAME).min(end))
     }
 
@@ -75,9 +94,24 @@ impl Animations {
         if self.list.is_empty() {
             return false;
         }
-        self.list.retain(|a| now < a.start + DURATION);
+        self.list.retain(|a| now < a.start + a.kind.duration());
         self.last_frame = (!self.list.is_empty()).then_some(now);
         true
+    }
+
+    /// Ends the animation of `kind` early. Returns whether one ran.
+    pub fn stop(&mut self, kind: Kind) -> bool {
+        let before = self.list.len();
+        self.list.retain(|a| a.kind != kind);
+        before != self.list.len()
+    }
+
+    /// Linear progress (0 to 1) of an animation of `kind`, if it runs.
+    pub fn linear(&self, kind: Kind, now: Instant) -> Option<f32> {
+        self.list
+            .iter()
+            .find(|a| a.kind == kind)
+            .map(|a| fraction(a.kind, now.saturating_duration_since(a.start)))
     }
 
     /// Drops everything (no client animates any more).
@@ -91,7 +125,7 @@ impl Animations {
         self.list
             .iter()
             .find(|a| a.kind == kind)
-            .map(|a| ease_out(fraction(now.saturating_duration_since(a.start))))
+            .map(|a| ease_out(fraction(a.kind, now.saturating_duration_since(a.start))))
     }
 
     /// The closing floats still shrinking, with their progress.
@@ -99,15 +133,15 @@ impl Animations {
         self.list.iter().filter_map(move |a| match a.kind {
             Kind::FloatClose(r) => Some((
                 r,
-                ease_out(fraction(now.saturating_duration_since(a.start))),
+                ease_out(fraction(a.kind, now.saturating_duration_since(a.start))),
             )),
             _ => None,
         })
     }
 }
 
-fn fraction(elapsed: Duration) -> f32 {
-    (elapsed.as_secs_f32() / DURATION.as_secs_f32()).clamp(0.0, 1.0)
+fn fraction(kind: Kind, elapsed: Duration) -> f32 {
+    (elapsed.as_secs_f32() / kind.duration().as_secs_f32()).clamp(0.0, 1.0)
 }
 
 /// Cubic ease-out: fast start, gentle stop.

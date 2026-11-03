@@ -1,0 +1,20 @@
+---
+source: crates/termos-shell/src/wallpaper.rs
+expression: g.to_text()
+---
+
+   ❯ Terminal     ·   ·   ·   ·   ·   ·   ·   ·   ·   ·   ·   ·   ·
+
+   ■ Files      ·   ·   ·   ·   ·   ·   ·   ·   ·   ·   ·   ·   ·   ·
+
+   ◔ Monitor      ·   ·   ·   ·   ·   ·   ·   ·   ·   ·   ·   ·   ·
+
+   ✦ AI         ·   ·   ·   ·   ·   ·   ·   ·   ·   ·   ·   ·   ·   ·
+
+   ✱ Settings     ·   ·   ·   ·   ·   ·   ·   ·   ·   ·   ·   ·   ·
+
+   ? Help       ·   ·   ·   ·   ·   ·     ▀█▀ █▀▀ █▀█ █▀▄▀█ █▀█ █▀▀
+                                           █  █▀▀ █▀▄ █ ▀ █ █ █ ▀▀█
+  ·   ·   ·   ·   ·   ·   ·   ·   ·   ·    ▀  ▀▀▀ ▀ ▀ ▀   ▀ ▀▀▀ ▀▀▀
+
+·   ·   ·   ·   ·   ·   ·   ·     Right-click anywhere for the menu

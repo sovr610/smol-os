@@ -126,6 +126,7 @@ fn command_icon(c: &Command) -> Option<Icon> {
         Command::Keys => Icon::Keys,
         Command::Notifications => Icon::Notifications,
         Command::Tutorial => Icon::Tutorial,
+        Command::AboutOpen => Icon::About,
         Command::Quit => Icon::Quit,
         Command::Detach => Icon::Detach,
         Command::SessionRestore => Icon::Session,
