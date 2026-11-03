@@ -1571,7 +1571,11 @@ async fn chrome_follows_each_terminal_and_the_icon_set() {
 #[tokio::test]
 async fn keys_reach_powershell_exactly_once() {
     let mut h = Harness::new("");
-    h.wait_text("$ ").await;
+    // cmd's prompt is `$ ` here; screen lines lose trailing spaces.
+    h.wait_for("the cmd prompt", |s, _| {
+        s.lines().any(|l| l.trim_end() == "$")
+    })
+    .await;
     h.type_text("powershell -NoLogo -NoProfile\n");
     h.wait_for("the PowerShell prompt", |s, _| {
         s.lines()
