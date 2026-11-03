@@ -93,6 +93,8 @@ pub(crate) struct Candidate {
     pub place: Place,
     /// The pane's content area: the image is clipped to it.
     pub clip: Rect,
+    /// Pixels or nothing: the app drew a text version beneath (D-090).
+    pub pixels_only: bool,
 }
 
 /// `picture` fitted inside a `w`×`h` box at (`x`, `y`), which may start

@@ -15,6 +15,7 @@
 
 pub mod blocks;
 pub mod braille;
+pub mod chart;
 pub mod iterm2;
 pub mod kitty;
 pub mod sixel;

@@ -16,11 +16,15 @@ use ratatui_core::buffer::Buffer;
 use ratatui_core::layout::Rect as TuiRect;
 use ratatui_core::style::Style as TuiStyle;
 use ratatui_core::widgets::Widget;
-use termos_core::app::{App, AppEffect, AppWaker, tui_style};
+use termos_core::app::{App, AppEffect, AppImage, AppWaker, new_image_key, tui_style};
 use termos_core::input::{KeyCode, KeyEvent};
 use termos_core::widgets::{LineChart, Meter, Series, Sparkline};
 use termos_hw::{Inventory, ProcessSample, Sample, Source};
 use termos_render::cell::{Attrs, Style};
+use termos_render::color::{Color, Rgb};
+use termos_render::graphics::Picture;
+use termos_render::graphics::chart::{ChartSeries, area_chart};
+use termos_render::grid::Rect;
 use termos_render::theme::Theme;
 
 /// How often the monitor reads the machine while it is on screen.
@@ -57,6 +61,22 @@ pub struct SystemMonitor {
     waker: Arc<Mutex<Option<AppWaker>>>,
     next: Option<Instant>,
     sort: ProcSort,
+    /// Readings so far (the CPU chart's picture follows it).
+    samples: u64,
+    /// The CPU chart as a picture, for terminals that show pixels (D-090).
+    chart: Option<Chart>,
+    /// What [`App::images`] reports after the last render.
+    images: Vec<AppImage>,
+}
+
+/// The CPU chart's picture, made again only when something in it changes.
+#[derive(Debug, Clone)]
+struct Chart {
+    samples: u64,
+    size: (u16, u16),
+    color: Rgb,
+    key: u64,
+    picture: Arc<Picture>,
 }
 
 impl std::fmt::Debug for SystemMonitor {
@@ -135,6 +155,9 @@ impl SystemMonitor {
             // The first reading as soon as the window is on screen.
             next: Some(Instant::now()),
             sort: ProcSort::Cpu,
+            samples: 0,
+            chart: None,
+            images: Vec::new(),
         }
     }
 
@@ -149,6 +172,7 @@ impl SystemMonitor {
                     push(&mut self.rx_hist, s.net.rx_per_sec as f64);
                     push(&mut self.tx_hist, s.net.tx_per_sec as f64);
                     self.last = Some(*s);
+                    self.samples += 1;
                 }
                 Ok(Msg::Failed(e)) => {
                     self.error = Some(e);
@@ -192,16 +216,36 @@ fn duration(d: Duration) -> String {
 }
 
 /// Fill colour by level: the accent, then warn above 75%, error above 90%.
-fn level_style(theme: &Theme, r: f64) -> TuiStyle {
+fn level_color(theme: &Theme, r: f64) -> Color {
     let c = &theme.colors;
-    let fg = if r > 0.9 {
+    if r > 0.9 {
         c.error
     } else if r > 0.75 {
         c.warn
     } else {
         c.accent
+    }
+}
+
+/// A meter's colour at `t` along it (truecolor, D-090): the accent, then
+/// through the warning colour to the error colour toward the end, at the
+/// same levels where a flat meter changes colour.
+fn heat(theme: &Theme, t: f64) -> Color {
+    let c = &theme.colors;
+    let (a, w, e) = (theme.rgb(c.accent), theme.rgb(c.warn), theme.rgb(c.error));
+    // In range: fractions of 1.
+    let rgb = if t < 0.6 {
+        a
+    } else if t < 0.8 {
+        a.blend(w, ((t - 0.6) / 0.2) as f32)
+    } else {
+        w.blend(e, ((t - 0.8) / 0.15).min(1.0) as f32)
     };
-    tui_style(Style::new().fg(fg))
+    Color::Rgb(rgb)
+}
+
+fn level_style(theme: &Theme, r: f64) -> TuiStyle {
+    tui_style(Style::new().fg(level_color(theme, r)))
 }
 
 struct Pen<'a> {
@@ -222,6 +266,8 @@ impl Pen<'_> {
 
     fn meter(&mut self, area: TuiRect, label: &str, label_w: u16, r: f64, value: &str) {
         let c = &self.theme.colors;
+        let theme = self.theme;
+        let shade = |t: f64| tui_style(Style::new().fg(heat(theme, t)));
         Meter {
             ratio: r,
             label,
@@ -230,14 +276,53 @@ impl Pen<'_> {
             fill: level_style(self.theme, r),
             empty: tui_style(Style::new().fg(c.border)),
             text: tui_style(Style::new().fg(c.fg)),
+            fill_at: theme
+                .gradients
+                .then_some(&shade as &dyn Fn(f64) -> TuiStyle),
         }
         .render(area, self.buf);
     }
 }
 
 impl SystemMonitor {
-    /// CPU: a chart of the total and a meter per core. Returns rows used.
-    fn draw_cpu(&self, pen: &mut Pen<'_>, area: TuiRect, s: &Sample) -> u16 {
+    /// The CPU chart's picture for a plot of `size` cells, in `color`:
+    /// the one made last if nothing changed.
+    fn chart_picture(&mut self, size: (u16, u16), color: Rgb, guide: Rgb) -> Option<&Chart> {
+        let fresh = self
+            .chart
+            .as_ref()
+            .is_some_and(|c| c.samples == self.samples && c.size == size && c.color == color);
+        if !fresh {
+            let data: Vec<f64> = self.cpu.iter().copied().collect();
+            // The chart's own resolution; the image layer scales it to the
+            // terminal's cells.
+            let cell = termos_render::graphics::DEFAULT_CELL;
+            let picture = area_chart(
+                &[ChartSeries {
+                    data: &data,
+                    color,
+                    fill: true,
+                }],
+                100.0,
+                guide,
+                u32::from(size.0) * cell.width,
+                u32::from(size.1) * cell.height,
+            )
+            .ok()?;
+            self.chart = Some(Chart {
+                samples: self.samples,
+                size,
+                color,
+                key: new_image_key(),
+                picture: Arc::new(picture),
+            });
+        }
+        self.chart.as_ref()
+    }
+
+    /// CPU: a chart of the total and a meter per core. Returns rows used,
+    /// and where the chart's plot is.
+    fn draw_cpu(&self, pen: &mut Pen<'_>, area: TuiRect, s: &Sample) -> (u16, TuiRect) {
         let c = &pen.theme.colors;
         let freq = s
             .cpu
@@ -253,15 +338,21 @@ impl SystemMonitor {
             data: &data,
             style: level_style(pen.theme, f64::from(s.cpu.total) / 100.0),
         }];
+        let chart = TuiRect::new(area.x, area.y + 1, area.width, chart_h);
         LineChart {
             series: &series,
             max: Some(100.0),
             labels: Some(("100", "0")),
             label_style: tui_style(Style::new().fg(c.muted)),
         }
-        .render(
-            TuiRect::new(area.x, area.y + 1, area.width, chart_h),
-            pen.buf,
+        .render(chart, pen.buf);
+        // Where LineChart puts the plot: right of its labels.
+        let label_w = 4.min(chart.width / 2);
+        let plot = TuiRect::new(
+            chart.x + label_w,
+            chart.y,
+            chart.width - label_w,
+            chart.height,
         );
         let mut y = area.y + 1 + chart_h;
         // Cores in columns of meters, 18+ cells each.
@@ -287,7 +378,7 @@ impl SystemMonitor {
             );
         }
         y += u16::try_from(rows).unwrap_or(0).min(avail);
-        y - area.y
+        (y - area.y, plot)
     }
 
     fn draw_memory(&self, pen: &mut Pen<'_>, area: TuiRect, s: &Sample) -> u16 {
@@ -537,6 +628,18 @@ impl App for SystemMonitor {
         termos_render::icons::Icon::Monitor
     }
 
+    fn images(&self) -> Vec<AppImage> {
+        self.images.clone()
+    }
+
+    fn busy(&self) -> bool {
+        self.last.is_none() && self.error.is_none()
+    }
+
+    fn catch_up(&mut self) {
+        self.poll();
+    }
+
     fn title(&self) -> String {
         "System monitor".into()
     }
@@ -624,7 +727,26 @@ impl App for SystemMonitor {
             left.width,
             (left.height / 2).max(5).min(left.height),
         );
-        y += self.draw_cpu(&mut pen, cpu_area, &s) + 1;
+        let (used, plot) = self.draw_cpu(&mut pen, cpu_area, &s);
+        y += used + 1;
+        self.images.clear();
+        if !plot.is_empty() {
+            let color = theme.rgb(level_color(theme, f64::from(s.cpu.total) / 100.0));
+            let guide = theme.rgb(c.border);
+            let made = self
+                .chart_picture((plot.width, plot.height), color, guide)
+                .map(|c| (c.key, Arc::clone(&c.picture)));
+            if let Some((key, picture)) = made {
+                self.images.push(AppImage {
+                    key,
+                    picture,
+                    rect: Rect::new(plot.x, plot.y, plot.width, plot.height),
+                    upscale: true,
+                    scroll_top: 0,
+                    pixels_only: true,
+                });
+            }
+        }
         y += self.draw_memory(&mut pen, rest(y, left), &s) + 1;
         let g = self.draw_gpus(&mut pen, rest(y, left), &s);
         if g > 0 {

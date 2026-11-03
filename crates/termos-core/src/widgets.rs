@@ -85,8 +85,10 @@ impl Widget for Sparkline<'_> {
     }
 }
 
-/// A horizontal bar: `label`, the bar, then `value` (e.g. "42%").
-#[derive(Debug, Clone)]
+/// A horizontal bar: `label`, the bar, then `value` (e.g. "42%"). With
+/// `fill_at`, the bar shades along its length (a progress bar in
+/// truecolor, D-090).
+#[derive(Clone)]
 pub struct Meter<'a> {
     /// 0 to 1.
     pub ratio: f64,
@@ -97,6 +99,20 @@ pub struct Meter<'a> {
     pub fill: Style,
     pub empty: Style,
     pub text: Style,
+    /// The fill's style at each point along the bar (0 at its left end,
+    /// 1 at its right), instead of `fill`.
+    pub fill_at: Option<&'a dyn Fn(f64) -> Style>,
+}
+
+impl std::fmt::Debug for Meter<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Meter")
+            .field("ratio", &self.ratio)
+            .field("label", &self.label)
+            .field("value", &self.value)
+            .field("shaded", &self.fill_at.is_some())
+            .finish_non_exhaustive()
+    }
 }
 
 impl Widget for Meter<'_> {
@@ -118,7 +134,8 @@ impl Widget for Meter<'_> {
             let (ch, style) = if e == 0 {
                 ('·', self.empty)
             } else {
-                (RIGHT[e], self.fill)
+                let at = f64::from(i) / f64::from(bar_w.saturating_sub(1).max(1));
+                (RIGHT[e], self.fill_at.map_or(self.fill, |f| f(at)))
             };
             set(buf, bar_x + gap + i, y, ch, style);
         }
@@ -242,6 +259,7 @@ impl ImageSlot {
             rect: Rect::new(area.x, area.y, area.width, area.height),
             upscale: self.upscale,
             scroll_top: 0,
+            pixels_only: false,
         }
     }
 }
@@ -295,6 +313,7 @@ mod tests {
             fill: Style::default(),
             empty: Style::default(),
             text: Style::default(),
+            fill_at: None,
         };
         assert_eq!(render(m.clone(), 19, 1), "CPU  █████····· 50%\n");
         let m = Meter {
@@ -303,6 +322,28 @@ mod tests {
             ..m
         };
         insta::assert_snapshot!("meter-partial", render(m, 24, 1));
+    }
+
+    #[test]
+    fn shaded_meters_change_colour_along_the_bar() {
+        use ratatui_core::style::Color;
+        let shade = |t: f64| Style::default().fg(Color::Rgb((t * 255.0) as u8, 0, 0));
+        let m = Meter {
+            ratio: 1.0,
+            label: "",
+            value: "",
+            label_width: 0,
+            fill: Style::default(),
+            empty: Style::default(),
+            text: Style::default(),
+            fill_at: Some(&shade),
+        };
+        let area = TuiRect::new(0, 0, 10, 1);
+        let mut buf = Buffer::empty(area);
+        m.render(area, &mut buf);
+        let first = buf[(1, 0)].fg;
+        let last = buf[(8, 0)].fg;
+        assert_ne!(first, last, "{first:?} {last:?}");
     }
 
     #[test]

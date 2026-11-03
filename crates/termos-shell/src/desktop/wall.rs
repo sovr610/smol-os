@@ -192,6 +192,7 @@ impl Desktop {
                 picture: Arc::clone(picture),
                 place,
                 clip: room,
+                pixels_only: false,
             });
         }
         regions

@@ -61,6 +61,10 @@ pub struct AppImage {
     /// this many rows higher, and only its lower part shows (a picture in
     /// a document scrolled partly out of view).
     pub scroll_top: u16,
+    /// Shown only in pixels (D-090): the app draws a text version beneath
+    /// (a braille chart), which terminals without pixel graphics keep and
+    /// the desktop clears where the picture shows.
+    pub pixels_only: bool,
 }
 
 /// A fresh key for an [`AppImage`].
@@ -118,6 +122,14 @@ pub trait App: Send {
     fn images(&self) -> Vec<AppImage> {
         Vec::new()
     }
+    /// Waiting on something (a reading, a reply, a file): the desktop
+    /// shows a spinner in the window's title (D-090).
+    fn busy(&self) -> bool {
+        false
+    }
+    /// Takes in background work that finished, before the desktop asks
+    /// for the title and [`App::busy`] and draws the app.
+    fn catch_up(&mut self) {}
     /// Gives the app a way to ask for a redraw later (called once, when
     /// the window opens).
     fn set_waker(&mut self, waker: AppWaker) {

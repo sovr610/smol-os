@@ -463,6 +463,10 @@ impl App for AgentWindow {
         termos_render::icons::Icon::Agent
     }
 
+    fn busy(&self) -> bool {
+        matches!(self.phase(), Some(Phase::Busy | Phase::Starting))
+    }
+
     fn title(&self) -> String {
         let Some(h) = &self.handle else {
             return "Agent: resume a conversation".into();

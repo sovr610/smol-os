@@ -1035,6 +1035,7 @@ impl FileManager {
                     rect: Rect::new(area.x, area.y, area.width, area.height),
                     upscale: false,
                     scroll_top: 0,
+                    pixels_only: false,
                 });
             }
         }
@@ -1131,6 +1132,14 @@ fn fit_path(p: &Path, max: usize) -> String {
 impl App for FileManager {
     fn icon(&self) -> Icon {
         Icon::Files
+    }
+
+    fn busy(&self) -> bool {
+        self.loading
+    }
+
+    fn catch_up(&mut self) {
+        self.poll();
     }
 
     fn title(&self) -> String {

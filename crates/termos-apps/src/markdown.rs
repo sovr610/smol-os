@@ -1116,6 +1116,7 @@ impl App for MarkdownViewer {
                             rect: Rect::new(*x, y - area.y, *w, *total),
                             upscale: true,
                             scroll_top: *row,
+                            pixels_only: false,
                         });
                     }
                 }

@@ -1420,3 +1420,92 @@ async fn about_opens_with_the_version() {
         Ok("about.open".to_owned())
     );
 }
+
+/// The monitor's CPU chart (D-090): in pixels for a terminal that shows
+/// them, with the braille beneath cleared; in braille for one that does
+/// not. Its title spins until the first reading.
+#[tokio::test]
+async fn the_cpu_chart_in_pixels_or_braille() {
+    use termos_render::caps::{ImageProtocol, PxSize};
+    use termos_shell::commands::Command;
+
+    let mut h = Harness::new("");
+    const K: ClientId = ClientId(2);
+    h.desktop.handle_client(
+        K,
+        ClientMsg::Hello {
+            version: termos_core::proto::PROTOCOL_VERSION,
+            caps: Caps {
+                graphics_override: Some(ImageProtocol::Kitty),
+                cell_px: Some(PxSize {
+                    width: 10,
+                    height: 20,
+                }),
+                ..Caps::default()
+            },
+            cols: COLS,
+            rows: ROWS,
+        },
+    );
+    h.desktop.run(Command::MonitorOpen);
+    let screen = h.screen();
+    assert!(screen.contains("⠋ System monitor"), "busy:\n{screen}");
+    let first = h.desktop.next_deadline().expect("a first reading is due");
+    h.desktop.on_timer(first);
+    h.wait_text("Memory").await;
+    // The reading may land between the title and the drawing; its wakeup
+    // brings the next frame, as here.
+    let screen = h.screen();
+    assert!(
+        screen.contains("◔ System monitor"),
+        "the icon is back:\n{screen}"
+    );
+
+    // No pixels here: the braille chart, and no picture.
+    let braille = |g: &Grid, r: termos_render::grid::Rect| {
+        (r.y..r.bottom()).any(|y| {
+            (r.x..r.right()).any(|x| {
+                g.get(x, y)
+                    .and_then(|c| c.symbol.chars().next())
+                    .is_some_and(|ch| ('\u{2801}'..='\u{28ff}').contains(&ch))
+            })
+        })
+    };
+    assert!(h.desktop.pixel_images(C).is_empty());
+    let mut kitty = Grid::new(COLS, ROWS);
+    h.desktop.render(K, &mut kitty);
+    let shown = h.desktop.pixel_images(K);
+    assert_eq!(shown.len(), 1, "the chart, in pixels");
+    let piece = shown[0].pieces[0];
+    assert!(
+        braille(&h.grid, piece),
+        "braille where pixels are not shown"
+    );
+    assert!(!braille(&kitty, piece), "cleared beneath the picture");
+}
+
+/// A busy window's spinner keeps a timer only while some client animates
+/// (D-090); otherwise only the app's own timers run.
+#[tokio::test]
+async fn spinners_turn_only_where_something_animates() {
+    use termos_shell::commands::Command;
+
+    for animations in [true, false] {
+        let mut h = Harness::with_options("", false, animations);
+        h.desktop.run(Command::MonitorOpen);
+        // Past the opening animation; the first reading is asked for and
+        // not yet taken in, so the monitor is still busy.
+        let later = Instant::now() + Duration::from_secs(1);
+        h.desktop.on_timer(later);
+        let next = h
+            .desktop
+            .next_deadline()
+            .expect("the next reading at least");
+        let soon = Instant::now() + 2 * termos_render::icons::SPINNER_FRAME;
+        if animations {
+            assert!(next <= soon, "the spinner turns");
+        } else {
+            assert!(next > soon, "no spinner timer");
+        }
+    }
+}

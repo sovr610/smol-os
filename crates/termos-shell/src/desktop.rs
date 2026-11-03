@@ -102,6 +102,11 @@ impl Pane {
         }
     }
 
+    /// An app waiting on something (D-090).
+    fn busy(&self) -> bool {
+        matches!(&self.kind, PaneKind::App(app) if app.busy())
+    }
+
     fn title_for_border(&self) -> String {
         if let Some(n) = &self.name {
             return n.clone();
@@ -331,6 +336,8 @@ pub struct Desktop {
     block_cache: BlockCache,
     /// The wallpaper picture, if one is configured (D-089).
     wall: wall::Wall,
+    /// Spinners in busy windows' titles turn from here (D-090).
+    spin_epoch: Instant,
     /// Messages for one client (`Some`) or all of them (`None`).
     outbox: Vec<(Option<ClientId>, ServerMsg)>,
     requests: Vec<SessionRequest>,
@@ -441,6 +448,7 @@ impl Desktop {
             anim: Animations::default(),
             block_cache: BlockCache::default(),
             wall: wall::Wall::default(),
+            spin_epoch: Instant::now(),
             outbox: Vec::new(),
             requests: Vec::new(),
             known_sessions: Vec::new(),
@@ -680,6 +688,21 @@ impl Desktop {
                 }
                 ImageProtocol::Blocks => false,
             };
+            if pixels && c.pixels_only {
+                // The text version beneath gives way to the picture.
+                for p in &pieces {
+                    for y in p.y..p.bottom() {
+                        for x in p.x..p.right() {
+                            if let Some(cell) = grid.get_mut(x, y) {
+                                let style = cell.style;
+                                *cell = termos_render::cell::Cell::blank(style);
+                            }
+                        }
+                    }
+                }
+            } else if c.pixels_only {
+                continue;
+            }
             if pixels {
                 shown.push(ShownImage {
                     key: c.key,
@@ -2801,6 +2824,13 @@ impl Desktop {
             t.push(d);
         }
         t.extend(self.app_deadlines().into_iter().map(|(_, d)| d));
+        if self.spinning() {
+            // The next turn, on the spinner's own beat.
+            let step = termos_render::icons::SPINNER_FRAME;
+            let since = Instant::now().saturating_duration_since(self.spin_epoch);
+            let n = u32::try_from(since.as_millis() / step.as_millis()).unwrap_or(u32::MAX);
+            t.push(self.spin_epoch + step * n.saturating_add(1));
+        }
         for p in self.panes.values() {
             if let PaneKind::Term { vt, .. } = &p.kind
                 && let Some(d) = vt.sync_deadline()
@@ -2809,6 +2839,25 @@ impl Desktop {
             }
         }
         t.into_iter().min()
+    }
+
+    /// Whether a busy window is on screen for a client that animates: its
+    /// spinner turns, so frames are due (D-090). Otherwise no timer.
+    fn spinning(&self) -> bool {
+        if !self.any_client_animates() {
+            return false;
+        }
+        let busy: Vec<PaneId> = self
+            .panes
+            .iter()
+            .filter(|(_, p)| p.busy())
+            .map(|(id, _)| *id)
+            .collect();
+        if busy.is_empty() {
+            return false;
+        }
+        let visible = self.placement().visible();
+        busy.iter().any(|id| visible.contains(id))
     }
 
     /// The deadlines of apps on screen; hidden apps get no timers.
@@ -2873,6 +2922,9 @@ impl Desktop {
             self.anim.clear();
         }
         if self.anim.deadline().is_some_and(|d| d <= now) && self.anim.tick(now) {
+            self.dirty = true;
+        }
+        if self.spinning() {
             self.dirty = true;
         }
         let mut flushed = false;
@@ -3055,12 +3107,37 @@ impl Desktop {
             }
         }
 
+        // Apps take in finished work first, so titles and spinners are
+        // current.
+        for id in placement.floats.iter().map(|f| f.pane) {
+            if let Some(Pane {
+                kind: PaneKind::App(app),
+                ..
+            }) = self.panes.get_mut(&id)
+            {
+                app.catch_up();
+            }
+        }
+        // A busy window's icon turns into a spinner (still where this
+        // client does not animate).
+        let frame = if Self::animates(&self.config, &self.ui) {
+            let ticks = now.saturating_duration_since(self.spin_epoch).as_millis()
+                / termos_render::icons::SPINNER_FRAME.as_millis();
+            usize::try_from(ticks).unwrap_or(0)
+        } else {
+            0
+        };
+        let set = self.ui.theme.icons;
         let titles: BTreeMap<PaneId, String> = placement
             .floats
             .iter()
             .filter_map(|f| {
                 self.panes.get(&f.pane).map(|p| {
-                    let icon = p.icon().prefix(self.ui.theme.icons);
+                    let icon = if p.busy() {
+                        format!("{} ", termos_render::icons::spinner(set, frame))
+                    } else {
+                        p.icon().prefix(set)
+                    };
                     (f.pane, format!("{icon}{}", p.title_for_border()))
                 })
             })
@@ -3132,6 +3209,7 @@ impl Desktop {
                                         picture: img.picture,
                                         place,
                                         clip: rect,
+                                        pixels_only: false,
                                     });
                                 }
                             }
@@ -3158,6 +3236,10 @@ impl Desktop {
                                 if place.visible(rect).is_empty() {
                                     continue;
                                 }
+                                if img.pixels_only && protocol == ImageProtocol::Blocks {
+                                    // The app's text version stays.
+                                    continue;
+                                }
                                 if protocol == ImageProtocol::Blocks {
                                     let cells =
                                         block_cache.get(img.key, &img.picture, place, image_bg);
@@ -3169,6 +3251,7 @@ impl Desktop {
                                         picture: img.picture,
                                         place,
                                         clip: rect,
+                                        pixels_only: img.pixels_only,
                                     });
                                 }
                             }

@@ -345,6 +345,20 @@ impl Icon {
     ];
 }
 
+/// How often a spinner moves on (D-090).
+pub const SPINNER_FRAME: std::time::Duration = std::time::Duration::from_millis(100);
+
+/// Frame `frame` of a spinner, one cell wide: braille dots, or a turning
+/// bar for the ASCII set and with no icons.
+pub fn spinner(set: IconSet, frame: usize) -> &'static str {
+    const DOTS: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+    const BAR: [&str; 4] = ["|", "/", "-", "\\"];
+    match set {
+        IconSet::Unicode | IconSet::Nerd => DOTS[frame % DOTS.len()],
+        IconSet::Ascii | IconSet::None => BAR[frame % BAR.len()],
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -396,5 +410,17 @@ mod tests {
             assert_eq!(set.to_string().parse::<IconSet>(), Ok(set));
         }
         assert!("emoji".parse::<IconSet>().is_err());
+    }
+
+    #[test]
+    fn spinners_turn_in_one_cell() {
+        for set in IconSet::ALL {
+            let frames: std::collections::BTreeSet<&str> =
+                (0..12).map(|f| spinner(set, f)).collect();
+            assert!(frames.len() >= 4, "{set}: it moves");
+            for f in frames {
+                assert_eq!(UnicodeWidthStr::width(f), 1, "{set}: {f:?}");
+            }
+        }
     }
 }

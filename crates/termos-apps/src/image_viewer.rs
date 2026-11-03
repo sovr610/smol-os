@@ -199,6 +199,14 @@ impl App for ImageViewer {
         termos_render::icons::Icon::ImageViewer
     }
 
+    fn busy(&self) -> bool {
+        matches!(self.state, State::Loading)
+    }
+
+    fn catch_up(&mut self) {
+        self.poll();
+    }
+
     fn title(&self) -> String {
         format!("Image · {}", self.name())
     }
@@ -266,6 +274,7 @@ impl App for ImageViewer {
             rect: Rect::new(0, 0, w, h - 1),
             upscale: self.upscale,
             scroll_top: 0,
+            pixels_only: false,
         }]
     }
 
