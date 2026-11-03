@@ -86,6 +86,38 @@ const SETTINGS: &[Setting] = &[
     s(
         "Appearance",
         "ui",
+        "icons",
+        "Icons",
+        "nerd needs a Nerd Font in your terminal",
+        Kind::Choice(&["unicode", "nerd", "ascii", "none"]),
+    ),
+    s(
+        "Appearance",
+        "ui",
+        "gradients",
+        "Gradients",
+        "in title bars, on terminals with true colour",
+        Kind::Bool,
+    ),
+    s(
+        "Appearance",
+        "ui",
+        "wallpaper",
+        "Wallpaper",
+        "behind empty workspaces; or a picture's path in the config file",
+        Kind::Choice(&["pattern", "none"]),
+    ),
+    s(
+        "Appearance",
+        "ui",
+        "splash",
+        "Splash screen",
+        "the logo for a moment when you attach",
+        Kind::Bool,
+    ),
+    s(
+        "Appearance",
+        "ui",
         "animations",
         "Animations",
         "never over SSH",
@@ -371,6 +403,10 @@ fn write_atomically(path: &Path, text: &str) -> std::io::Result<()> {
 }
 
 impl App for Settings {
+    fn icon(&self) -> termos_render::icons::Icon {
+        termos_render::icons::Icon::Settings
+    }
+
     fn title(&self) -> String {
         "Settings".into()
     }

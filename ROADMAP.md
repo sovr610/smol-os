@@ -27,7 +27,7 @@ questions (DECISIONS.md, "Open questions").
 | M8 | Bare-metal images: the KMS console, Buildroot images for x86_64, aarch64 and the Pis, QEMU boot tests (D-072 to D-076) | 🔍 |
 | M9 | Release: A/B updates, the live ISO and installer, the network page, the release pipeline with musl builds, docs (D-077 to D-083) | 🔍 |
 | M10a | Mouse-first desktop: menus, context menus, hover and double-click; the `tos` command in every pane (D-084, D-085) | 🔍 |
-| M10b | Graphics: richer chrome, icons, wallpaper, pixel charts where the terminal can show them (D-084) | ⏳ |
+| M10b | Graphics: richer chrome, icons, wallpaper, pixel charts where the terminal can show them (D-084, D-087) | 🚧 |
 | M10c | The command center: live views and history of the AI and the OS, with actions (D-084) | ⏳ |
 | M10d | Claude Code and Codex CLI: installed by TermOS, with a TermOS MCP server (D-084) | ⏳ |
 | M9b | Platform gaps: the Windows agent sandbox and input, snapshots and sensors on macOS and Windows, Kitty keyboard flags, app windows in sessions, the KMS console's clipboard, bell and images (D-077) | ⏳ |
@@ -772,7 +772,7 @@ Not shown: Windows and macOS by hand; CI runs the `tos` end-to-end test on both 
 ---
 
 ## M10b — Graphics
-**Status:** ⏳ · Owner answers: graphics "where it seems fitting" (D-084). **Ask first:** icon set (Nerd Font glyphs need a patched font), a wallpaper by default.
+**Status:** 🚧 · Owner answers: graphics "where it seems fitting" (D-084); Unicode icons by default, Nerd Font and plain-text sets selectable; a wallpaper by default (D-087).
 
 **Deliverables**
 - Richer chrome: gradient title bars and status segments in truecolor (flat in 256 colours), accent colours per theme, focus highlighting.

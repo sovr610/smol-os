@@ -2,9 +2,9 @@
 source: crates/termos-apps/src/files.rs
 expression: text
 ---
- photos/                    │ buy milk
- big.log               4.9K │ call home
- todo.txt               19B │
+ ■ photos/                  │ buy milk
+ ≡ big.log             4.9K │ call home
+ ≡ todo.txt             19B │
                             │
                             │
                             │

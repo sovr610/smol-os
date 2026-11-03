@@ -95,6 +95,10 @@ impl std::fmt::Debug for AppWaker {
 pub trait App: Send {
     /// Window title.
     fn title(&self) -> String;
+    /// The icon before the title (D-088).
+    fn icon(&self) -> termos_render::icons::Icon {
+        termos_render::icons::Icon::Apps
+    }
     /// A key press while the app has focus.
     fn handle_key(&mut self, key: KeyEvent) -> AppEffect;
     /// A mouse event with coordinates relative to the app's area.

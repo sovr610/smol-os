@@ -871,6 +871,16 @@ rewrite history.
 - **Decision:** on Windows the client starts the server from a copy in `<data>\bin\server\termos-<size>-<mtime>.exe`, made when that build has no copy yet; copies of older builds are removed when nothing runs from them. If the copy cannot be made, the server runs from `termos.exe` as before. `tos.exe` links to the server's copy, so it no longer holds `termos.exe` either. An attached client still runs from `termos.exe`; the Windows notes say to detach first, or to rename the running file aside (which Windows allows) before reinstalling from inside TermOS.
 - **Alternatives:** the client relaunching itself from a copy (two processes per attached terminal); a TermOS installer command that renames the running file aside (users install with cargo or by unzipping, which TermOS does not run); leaving it to `termos kill-server` (it ends the sessions the user may be installing from).
 
+## D-087: M10b owner answers: Unicode icons by default; a wallpaper by default
+- **Status:** Accepted (owner) · 2026-11-03
+- **Decision:** icons use Unicode symbols by default, so they work in every font; Nerd Font glyphs and plain text are selectable. Empty desktop areas show a wallpaper by default.
+- **Alternatives:** Nerd Font glyphs by default (they show as boxes without a patched font); no wallpaper unless configured.
+
+## D-088: Icons and gradients: one cell per icon, gradients only in truecolor, never at the cost of contrast
+- **Status:** Accepted · 2026-11-03
+- **Decision:** icons come from `termos_render::icons`, one `Icon` per thing (an app, a menu command, a kind of file) and one glyph for it per set: `unicode` (the default, D-087), `nerd` (Font Awesome 4 code points, which every Nerd Font has), `ascii` and `none`. Every glyph is one cell wide and none can turn into a colour emoji, so layouts never shift between terminals; tests check both. Each client has its own set, from `[ui] icons`. Menus line their labels up behind a two-column icon gutter when a menu has icons, and draw none with `none`. Gradients (`[ui] gradients`, on by default) fill the focused window's title bar, the start button and the active tab, but only for a client whose terminal shows truecolor: 256- and 16-colour clients get the same bars flat, in the theme's own colours, so the encoder's palette mapping stays exact. A gradient starts at the theme colour and moves away from the lightness of the text drawn on it (`Theme::sheen`), so the text's contrast at the far end is never below its start; a test checks every preset. The focused window's title bar is filled (the accent, its text in the panel colour), and unfocused windows keep the line border, which makes focus visible without colour alone.
+- **Alternatives:** fading bars into the panel colour (it looked softer, but the dark preset's far end fell to about 2:1 with the title text); Nerd Font icons from the newer Material ranges (not in every Nerd Font version); emoji (two cells in most terminals, one in some); gradients dithered to 256 colours (banding, and many more bytes per frame).
+
 ---
 
 ## Open questions (the owner will be asked before the milestone that needs each one)

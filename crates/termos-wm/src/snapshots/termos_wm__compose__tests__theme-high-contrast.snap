@@ -4,7 +4,7 @@ expression: g.to_styled_text()
 ---
 aaaaaaaaaaaaaaaaaaaa│bbbbbbbbbbbbbbbbbbb
 aaaaaaaaaaaaaaaaaaaa│bbbbbbbbbbbbbbbbbbb
-aaaaaa╭─ pane 7 ─────────–─×─╮bbbbbbbbbb
+aaaaaa╭ pane 7           – × ╮bbbbbbbbbb
 aaaaaa│hhhhhhhhhhhhhhhhhhhhhh│bbbbbbbbbb
 aaaaaa│hhhhhhhhhhhhhhhhhhhhhh│bbbbbbbbbb
 aaaaaa│hhhhhhhhhhhhhhhhhhhhhh│bbbbbbbbbb
@@ -17,7 +17,7 @@ aaaaaaaaaaaaaaaaaaaa│ccccccccccccccccccc
 --- styles
 ....................a
 ....................a
-......bbbccccccbbbbbbbbbbbbbbb
+......bccccccccccccccccccccccb
 ......b......................bdd
 ......b......................bdd
 ......b......................bdd
@@ -30,7 +30,7 @@ aaaaaaaaaaaaaaaaaaaa│ccccccccccccccccccc
 --- legend
 a: fg=#c0c0c0 bg=default
 b: fg=#ffd700 bg=default
-c: fg=#ffd700 bg=default Attrs(BOLD)
+c: fg=#000000 bg=#ffd700 Attrs(BOLD)
 d: fg=#666666 bg=#06080a
 e: fg=#4d4d4d bg=#06080a
 f: fg=#292929 bg=#020304

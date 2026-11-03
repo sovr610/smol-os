@@ -219,6 +219,10 @@ impl NetworkPage {
 }
 
 impl App for NetworkPage {
+    fn icon(&self) -> termos_render::icons::Icon {
+        termos_render::icons::Icon::Network
+    }
+
     fn title(&self) -> String {
         "Network".into()
     }

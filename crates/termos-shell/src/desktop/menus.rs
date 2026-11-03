@@ -10,6 +10,7 @@ use termos_core::clipboard::ClipSource;
 use termos_core::ids::PaneId;
 use termos_core::input::{KeyCode, KeyEvent, MouseButton, MouseEvent, MouseKind};
 use termos_render::grid::Grid;
+use termos_render::icons::Icon;
 use termos_render::theme::ThemeBase;
 use termos_wm::hit::{Button, CLOSE_OFFSET, Hit, MINIMIZE_OFFSET};
 use termos_wm::layout::Preset;
@@ -121,8 +122,9 @@ impl Desktop {
                     Entry::item("Updates", Command::UpdateOpen),
                     Entry::item("Settings", Command::SettingsOpen),
                 ],
-            ),
-            Entry::submenu("AI agents", agents),
+            )
+            .icon(Icon::Apps),
+            Entry::submenu("AI agents", agents).icon(Icon::Agent),
             Entry::submenu(
                 "Project",
                 vec![
@@ -131,12 +133,13 @@ impl Desktop {
                     Entry::item("Test", Command::Task("test".into())),
                     Entry::item("Git", Command::GitOpen),
                 ],
-            ),
+            )
+            .icon(Icon::Project),
             Entry::Separator,
-            Entry::submenu("Layout", layouts),
-            Entry::submenu("Theme", themes),
-            Entry::submenu("Workspaces", workspaces),
-            Entry::submenu("Sessions", sessions),
+            Entry::submenu("Layout", layouts).icon(Icon::Layout),
+            Entry::submenu("Theme", themes).icon(Icon::Theme),
+            Entry::submenu("Workspaces", workspaces).icon(Icon::Workspace),
+            Entry::submenu("Sessions", sessions).icon(Icon::Session),
             Entry::Separator,
             Entry::submenu(
                 "Help",
@@ -146,7 +149,8 @@ impl Desktop {
                     Entry::item("Command palette", Command::Palette),
                     Entry::item("Notifications", Command::Notifications),
                 ],
-            ),
+            )
+            .icon(Icon::Help),
             Entry::item("Detach", Command::Detach),
             Entry::item("Quit this session", Command::Quit),
         ];
@@ -220,7 +224,7 @@ impl Desktop {
             .collect();
         let mut v = vec![
             Entry::item("Rename", Command::WorkspaceRename),
-            Entry::submenu("Layout", layouts),
+            Entry::submenu("Layout", layouts).icon(Icon::Layout),
             Entry::item("New workspace", Command::WorkspaceNew),
             Entry::Separator,
             Entry::item("Close", Command::WorkspaceKill),
@@ -234,7 +238,7 @@ impl Desktop {
     fn open_menu(&mut self, title: &str, entries: Vec<Entry>, x: u16, y: u16) {
         // Above or below the status line, never over it.
         let area = self.layout_area();
-        self.ui.menu = Some(Menu::at(title, entries, x, y, area));
+        self.ui.menu = Some(Menu::at(title, entries, (x, y), area, self.ui.theme.icons));
         self.ui.palette = None;
         self.ui.whichkey_visible = false;
         self.ui.whichkey_full = false;

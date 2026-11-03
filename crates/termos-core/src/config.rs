@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Deserializer};
 use termos_render::caps::ImageProtocol;
 use termos_render::grid::BorderKind;
+use termos_render::icons::IconSet;
 use termos_render::theme::ThemeConfig;
 
 use crate::input::KeyEvent;
@@ -255,7 +256,30 @@ impl Default for SessionConfig {
     }
 }
 
-/// Motion (D-042).
+/// What empty parts of the desktop show (`[ui] wallpaper`, D-087).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum Wallpaper {
+    /// A pattern drawn from the theme's colours.
+    #[default]
+    Pattern,
+    None,
+    /// A picture (shown in pixels where the terminal can, in blocks
+    /// elsewhere).
+    Picture(PathBuf),
+}
+
+impl<'de> Deserialize<'de> for Wallpaper {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let s = String::deserialize(d)?;
+        Ok(match s.as_str() {
+            "pattern" => Wallpaper::Pattern,
+            "none" | "" => Wallpaper::None,
+            path => Wallpaper::Picture(PathBuf::from(path)),
+        })
+    }
+}
+
+/// Motion and looks (D-042, D-087, D-088).
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(default, deny_unknown_fields, rename_all = "kebab-case")]
 pub struct UiConfig {
@@ -265,6 +289,16 @@ pub struct UiConfig {
     /// No animations for any client (also per terminal:
     /// `TERMOS_REDUCED_MOTION=1`).
     pub reduced_motion: bool,
+    /// Icons for apps, files and menus: unicode, nerd, ascii or none.
+    pub icons: IconSet,
+    /// Colour gradients in title bars and the status line (truecolor
+    /// terminals only; flat colours elsewhere).
+    pub gradients: bool,
+    /// Behind empty parts of the desktop: `pattern`, `none` or a picture.
+    pub wallpaper: Wallpaper,
+    /// The TermOS logo for a moment when a terminal attaches (only where
+    /// animations are on).
+    pub splash: bool,
 }
 
 impl Default for UiConfig {
@@ -272,6 +306,10 @@ impl Default for UiConfig {
         Self {
             animations: true,
             reduced_motion: false,
+            icons: IconSet::default(),
+            gradients: true,
+            wallpaper: Wallpaper::default(),
+            splash: true,
         }
     }
 }
@@ -658,6 +696,10 @@ base = "auto"
 [ui]
 animations = true        # floats and toasts; never over SSH
 reduced-motion = false   # no animations at all (or TERMOS_REDUCED_MOTION=1)
+icons = "unicode"        # unicode | nerd (needs a Nerd Font) | ascii | none
+gradients = true         # colour gradients in title bars (truecolor terminals)
+wallpaper = "pattern"    # pattern | none | a picture's path
+splash = true            # the logo for a moment when you attach
 
 [graphics]
 protocol = "auto"        # auto | kitty | sixel | iterm2 | blocks

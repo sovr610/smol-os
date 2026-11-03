@@ -1001,6 +1001,10 @@ impl MarkdownViewer {
 }
 
 impl App for MarkdownViewer {
+    fn icon(&self) -> termos_render::icons::Icon {
+        termos_render::icons::Icon::Markdown
+    }
+
     fn title(&self) -> String {
         let name = self.path.file_name().map_or_else(
             || self.path.display().to_string(),

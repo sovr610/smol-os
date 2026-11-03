@@ -1,0 +1,12 @@
+---
+source: crates/termos-shell/src/menu.rs
+expression: g.to_text()
+---
+
+    ╭─ bash ─────────╮
+    │ ▥ Split right  │
+    │ ▤ Copy         │
+    │────────────────│╭─ Layout ───────╮
+    │ ▥ Layout     ▸ ││   Tiled        │
+    │ × Close        ││ □ Even         │
+    ╰────────────────╯╰────────────────╯

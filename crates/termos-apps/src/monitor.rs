@@ -533,6 +533,10 @@ impl SystemMonitor {
 }
 
 impl App for SystemMonitor {
+    fn icon(&self) -> termos_render::icons::Icon {
+        termos_render::icons::Icon::Monitor
+    }
+
     fn title(&self) -> String {
         "System monitor".into()
     }

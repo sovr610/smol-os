@@ -12,6 +12,8 @@ use serde::{Deserialize, Deserializer};
 
 use crate::cell::{Attrs, Style};
 use crate::color::{Color, Palette, Rgb, XTERM_ANSI};
+use crate::grid::{Grid, Rect};
+use crate::icons::IconSet;
 
 fn opt_color<'de, D: Deserializer<'de>>(d: D) -> Result<Option<Color>, D::Error> {
     let s = String::deserialize(d)?;
@@ -244,6 +246,11 @@ pub struct Theme {
     pub copy_mode_badge: Style,
     /// The preset this theme was built from (never `Auto`).
     pub base: ThemeBase,
+    /// Icons for apps, files and menus (`[ui] icons`, D-087).
+    pub icons: IconSet,
+    /// Colour gradients in the chrome: only for terminals with truecolor,
+    /// flat colours otherwise (D-088).
+    pub gradients: bool,
 }
 
 impl Default for Theme {
@@ -304,7 +311,59 @@ impl Theme {
             copy_mode_badge: on(c.status_bg, c.warn).attrs(Attrs::BOLD),
             colors: c,
             base,
+            icons: IconSet::default(),
+            gradients: false,
         }
+    }
+
+    /// `c` as RGB, for blending.
+    pub fn rgb(&self, c: Color) -> Rgb {
+        c.resolve(&self.palette, false)
+    }
+
+    /// Fills the background of `rect` with a gradient from `from` at the
+    /// left to `to` at the right when gradients are on, and with `from`
+    /// alone otherwise (as given, so 256- and 16-colour terminals keep
+    /// their palette). The cells' text and foreground stay.
+    pub fn paint(&self, grid: &mut Grid, rect: Rect, from: Color, to: Color) {
+        let (a, b) = (self.rgb(from), self.rgb(to));
+        let steps = rect.w.saturating_sub(1).max(1);
+        for dx in 0..rect.w {
+            let bg = if self.gradients {
+                Color::Rgb(a.blend(b, f32::from(dx) / f32::from(steps)))
+            } else {
+                from
+            };
+            for y in rect.y..rect.bottom() {
+                if let Some(cell) = grid.get_mut(rect.x + dx, y) {
+                    cell.style.bg = bg;
+                }
+            }
+        }
+    }
+
+    /// A gradient for a bar of `bg` carrying text in `text` (D-088): from
+    /// `bg`, moving away from the text's lightness, so the text reads at
+    /// least as well at the far end as at the start.
+    pub fn sheen(&self, bg: Color, text: Color) -> (Color, Color) {
+        let b = self.rgb(bg);
+        let away = if b.luminance() >= self.rgb(text).luminance() {
+            Rgb::new(0xff, 0xff, 0xff)
+        } else {
+            Rgb::BLACK
+        };
+        (bg, Color::Rgb(b.blend(away, 0.35)))
+    }
+
+    /// The title bar of the focused window: the accent, with a sheen.
+    pub fn title_bar(&self) -> (Color, Color) {
+        self.sheen(self.colors.accent, self.colors.overlay_bg)
+    }
+
+    /// Text on [`Theme::title_bar`]: the panel colour, bold, which reads
+    /// on every preset's accent.
+    pub fn title_text(&self) -> Style {
+        Style::new().fg(self.colors.overlay_bg).attrs(Attrs::BOLD)
     }
 }
 
@@ -385,6 +444,30 @@ mod tests {
         };
         let (x, y) = (lum(a), lum(b));
         (x.max(y) + 0.05) / (x.min(y) + 0.05)
+    }
+
+    #[test]
+    fn gradients_never_lose_contrast() {
+        for base in ThemeBase::ALL {
+            let mut t = ThemeConfig {
+                base,
+                ..ThemeConfig::default()
+            }
+            .theme(None, None);
+            t.gradients = true;
+            let c = t.colors.clone();
+            for (bg, text) in [
+                (c.accent, c.overlay_bg),
+                (c.accent, c.status_bg),
+                (c.warn, c.status_bg),
+            ] {
+                let (from, to) = t.sheen(bg, text);
+                let start = t.rgb(from).contrast(t.rgb(text));
+                let end = t.rgb(to).contrast(t.rgb(text));
+                assert!(end >= start, "{base}: {start:.2} then {end:.2}");
+                assert_ne!(from, to, "{base}: a visible gradient");
+            }
+        }
     }
 
     #[test]

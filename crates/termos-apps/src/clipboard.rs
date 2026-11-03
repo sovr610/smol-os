@@ -194,6 +194,10 @@ impl ClipboardManager {
 }
 
 impl App for ClipboardManager {
+    fn icon(&self) -> termos_render::icons::Icon {
+        termos_render::icons::Icon::Clipboard
+    }
+
     fn title(&self) -> String {
         "Clipboard".into()
     }

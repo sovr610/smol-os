@@ -9,6 +9,8 @@ use termos_render::cell::Cell;
 use termos_render::grid::{Grid, Rect};
 use termos_render::theme::Theme;
 
+use termos_render::icons::Icon;
+
 use crate::notify::Level;
 use crate::ui::{cut, truncate, width};
 
@@ -139,6 +141,15 @@ impl StatusRegions {
     }
 }
 
+/// A status-line segment on `color` with a sheen (truecolor only; flat
+/// otherwise, D-088). Its text is in the status line's background colour.
+fn fade(grid: &mut Grid, theme: &Theme, rect: Rect, color: termos_render::color::Color) {
+    if theme.gradients {
+        let (from, to) = theme.sheen(color, theme.colors.status_bg);
+        theme.paint(grid, rect, from, to);
+    }
+}
+
 /// Draws the status line on row `y`. Returns the clickable regions and,
 /// when a prompt is open, the cursor column.
 pub fn draw(
@@ -213,15 +224,24 @@ pub fn draw(
     let hovered = |a: u16, b: u16| info.pointer.is_some_and(|p| p >= a && p < b);
     let mut x = 0;
     if info.start_button {
-        let label = if cols >= 80 { " ◆ Menu " } else { " ◆ " };
-        let end = width(label).min(left_limit);
-        let style = if hovered(0, end) {
+        let glyph = Icon::Menu.glyph(theme.icons);
+        let label = match (glyph.is_empty(), cols >= 80) {
+            (false, true) => format!(" {glyph} Menu "),
+            (false, false) => format!(" {glyph} "),
+            (true, _) => " Menu ".to_owned(),
+        };
+        let end = width(&label).min(left_limit);
+        let hover = hovered(0, end);
+        let style = if hover {
             theme.status_tab_active
         } else {
             theme.status_prefix
         };
-        x = grid.put_str(0, y, label, style, left_limit);
+        x = grid.put_str(0, y, &label, style, left_limit);
         regions.start = Some((0, x));
+        if !hover {
+            fade(grid, theme, Rect::new(0, y, x, 1), theme.colors.warn);
+        }
         x = grid.put_str(x, y, " ", theme.status, left_limit);
     }
     let mut x = grid.put_str(
@@ -252,6 +272,14 @@ pub fn draw(
         };
         let start = x;
         x = grid.put_str(x, y, &text, style, left_limit);
+        if tab.active {
+            fade(
+                grid,
+                theme,
+                Rect::new(start, y, x - start, 1),
+                theme.colors.accent,
+            );
+        }
         regions.tabs.push((start, x, tab.index));
         if x >= left_limit {
             break;
@@ -303,6 +331,7 @@ pub fn draw(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use termos_render::icons::IconSet;
 
     #[test]
     fn the_start_button_the_plus_and_hover() {
@@ -352,6 +381,43 @@ mod tests {
             Some(theme.status_tab_active)
         );
         assert_eq!(g.get(plus + 1, 0).map(|c| c.style), Some(theme.status_tab));
+    }
+
+    #[test]
+    fn icon_sets_and_gradients() {
+        let tab = TabInfo {
+            index: 0,
+            name: "sh".into(),
+            active: true,
+            last: false,
+            bell: false,
+            zoomed: false,
+        };
+        let info = StatusInfo {
+            session: "main",
+            tabs: vec![tab],
+            start_button: true,
+            ..StatusInfo::default()
+        };
+        let mut out = String::new();
+        for (icons, gradients) in [
+            (IconSet::Unicode, true),
+            (IconSet::Nerd, false),
+            (IconSet::Ascii, false),
+            (IconSet::None, false),
+        ] {
+            let theme = Theme {
+                icons,
+                gradients,
+                ..Theme::default()
+            };
+            let mut g = Grid::new(40, 1);
+            let (r, _) = draw(&mut g, 0, &theme, &info);
+            assert!(r.start_at(1, 0), "{icons}: the button is still there");
+            out.push_str(&format!("{icons} gradients={gradients}\n"));
+            out.push_str(&g.to_styled_text());
+        }
+        insta::assert_snapshot!(out);
     }
 
     #[test]

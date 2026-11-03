@@ -37,6 +37,25 @@ impl Rgb {
         )
     }
 
+    /// Relative luminance (WCAG 2), `0.0` (black) to `1.0` (white).
+    pub fn luminance(self) -> f32 {
+        let lin = |v: u8| {
+            let v = f32::from(v) / 255.0;
+            if v <= 0.039_28 {
+                v / 12.92
+            } else {
+                ((v + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        0.2126 * lin(self.r) + 0.7152 * lin(self.g) + 0.0722 * lin(self.b)
+    }
+
+    /// The WCAG contrast ratio of two colours, `1.0` to `21.0`.
+    pub fn contrast(self, other: Rgb) -> f32 {
+        let (x, y) = (self.luminance(), other.luminance());
+        (x.max(y) + 0.05) / (x.min(y) + 0.05)
+    }
+
     fn dist2(self, other: Rgb) -> u32 {
         let d = |a: u8, b: u8| {
             let x = i32::from(a) - i32::from(b);

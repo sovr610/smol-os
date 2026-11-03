@@ -1,0 +1,57 @@
+---
+source: crates/termos-wm/src/compose.rs
+expression: g.to_styled_text()
+---
+aaaaaaaaaaaaaaaaaaaa│bbbbbbbbbbbbbbbbbbb
+aaaaaaaaaaaaaaaaaaaa│bbbbbbbbbbbbbbbbbbb
+aaaaaa╭ pane 7           – × ╮bbbbbbbbbb
+aaaaaa│hhhhhhhhhhhhhhhhhhhhhh│bbbbbbbbbb
+aaaaaa│hhhhhhhhhhhhhhhhhhhhhh│bbbbbbbbbb
+aaaaaa│hhhhhhhhhhhhhhhhhhhhhh│bbbbbbbbbb
+aaaaaa│hhhhhhhhhhhhhhhhhhhhhh│──────────
+aaaaaa│hhhhhhhhhhhhhhhhhhhhhh│cccccccccc
+aaaaaa╰──────────────────────╯cccccccccc
+aaaaaaaaaaaaaaaaaaaa│ccccccccccccccccccc
+aaaaaaaaaaaaaaaaaaaa│ccccccccccccccccccc
+aaaaaaaaaaaaaaaaaaaa│ccccccccccccccccccc
+--- styles
+....................a
+....................a
+......bcdefghijklmnopqrstuvwxb
+......b......................byy
+......b......................byy
+......b......................byy
+......b......................bzzaaaaaaaa
+......b......................byy
+......bbbbbbbbbbbbbbbbbbbbbbbbyy
+........yyyyyyyyyyyyzyyyyyyyyyAA
+....................a
+....................a
+--- legend
+a: fg=#b0b8c1 bg=default
+b: fg=#0860ca bg=default
+c: fg=#f6f8fa bg=#0860ca Attrs(BOLD)
+d: fg=#f6f8fa bg=#085ec7 Attrs(BOLD)
+e: fg=#f6f8fa bg=#085dc3 Attrs(BOLD)
+f: fg=#f6f8fa bg=#085bc0 Attrs(BOLD)
+g: fg=#f6f8fa bg=#075abc Attrs(BOLD)
+h: fg=#f6f8fa bg=#0758b9 Attrs(BOLD)
+i: fg=#f6f8fa bg=#0756b6 Attrs(BOLD)
+j: fg=#f6f8fa bg=#0755b2 Attrs(BOLD)
+k: fg=#f6f8fa bg=#0753af Attrs(BOLD)
+l: fg=#f6f8fa bg=#0751ac Attrs(BOLD)
+m: fg=#f6f8fa bg=#0750a8 Attrs(BOLD)
+n: fg=#f6f8fa bg=#064ea5 Attrs(BOLD)
+o: fg=#f6f8fa bg=#064da1 Attrs(BOLD)
+p: fg=#f6f8fa bg=#064b9e Attrs(BOLD)
+q: fg=#f6f8fa bg=#06499b Attrs(BOLD)
+r: fg=#f6f8fa bg=#064897 Attrs(BOLD)
+s: fg=#f6f8fa bg=#064694 Attrs(BOLD)
+t: fg=#f6f8fa bg=#064491 Attrs(BOLD)
+u: fg=#f6f8fa bg=#05438d Attrs(BOLD)
+v: fg=#f6f8fa bg=#05418a Attrs(BOLD)
+w: fg=#f6f8fa bg=#054086 Attrs(BOLD)
+x: fg=#f6f8fa bg=#053e83 Attrs(BOLD)
+y: fg=#171a1e bg=#bfbfbf
+z: fg=#848a91 bg=#bfbfbf
+A: fg=#111417 bg=#8f8f8f

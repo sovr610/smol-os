@@ -94,7 +94,39 @@ pub fn compose(
             border,
             Some((&name, title_style)),
         );
-        if f.outer.w > 10 {
+        if focused && f.outer.w > 4 {
+            // A filled title bar (D-088): the accent, fading into the
+            // panel where the terminal shows truecolor.
+            let bar = Rect::new(f.outer.x + 1, f.outer.y, f.outer.w - 2, 1);
+            let text = theme.title_text();
+            grid.fill(bar, &Cell::blank(text));
+            grid.put_str(
+                bar.x + 1,
+                bar.y,
+                &name,
+                text,
+                f.outer.right().saturating_sub(2),
+            );
+            if f.outer.w > 10 {
+                let y = f.outer.y;
+                grid.put_str(
+                    f.outer.right() - MINIMIZE_OFFSET,
+                    y,
+                    "–",
+                    text,
+                    f.outer.right(),
+                );
+                grid.put_str(
+                    f.outer.right() - CLOSE_OFFSET,
+                    y,
+                    "×",
+                    text,
+                    f.outer.right(),
+                );
+            }
+            let (from, to) = theme.title_bar();
+            theme.paint(grid, bar, from, to);
+        } else if f.outer.w > 10 {
             let y = f.outer.y;
             grid.put_str(
                 f.outer.right() - MINIMIZE_OFFSET,
@@ -249,12 +281,21 @@ mod tests {
         ws.add_float(PaneId(7), AREA);
         ws.set_float_rect(PaneId(7), Rect::new(6, 2, 24, 7), AREA);
         let pl = ws.placement(AREA);
-        for base in [ThemeBase::Dark, ThemeBase::Light, ThemeBase::HighContrast] {
-            let theme = ThemeConfig {
+        // Flat title bars (256 colours), and gradients (truecolor, D-088).
+        let looks = [
+            (ThemeBase::Dark, false),
+            (ThemeBase::Light, false),
+            (ThemeBase::HighContrast, false),
+            (ThemeBase::Dark, true),
+            (ThemeBase::Light, true),
+        ];
+        for (base, gradients) in looks {
+            let mut theme = ThemeConfig {
                 base,
                 ..ThemeConfig::default()
             }
             .theme(None, None);
+            theme.gradients = gradients;
             let mut g = Grid::new(AREA.w, AREA.h);
             compose(
                 &mut g,
@@ -265,7 +306,12 @@ mod tests {
                 &|p| format!("pane {}", p.0),
                 &mut letters,
             );
-            insta::assert_snapshot!(format!("theme-{}", base.name()), g.to_styled_text());
+            let name = if gradients {
+                format!("theme-{}-gradient", base.name())
+            } else {
+                format!("theme-{}", base.name())
+            };
+            insta::assert_snapshot!(name, g.to_styled_text());
         }
     }
 

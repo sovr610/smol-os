@@ -93,6 +93,14 @@ impl Pane {
         }
     }
 
+    /// The icon before its title (D-088).
+    pub fn icon(&self) -> termos_render::icons::Icon {
+        match &self.kind {
+            PaneKind::Term { .. } => termos_render::icons::Icon::Terminal,
+            PaneKind::App(app) => app.icon(),
+        }
+    }
+
     fn title_for_border(&self) -> String {
         if let Some(n) = &self.name {
             return n.clone();
@@ -178,6 +186,15 @@ enum Drag {
         line: i32,
         started: bool,
     },
+}
+
+/// A client's theme (D-088): `[theme]` for its terminal's background, with
+/// the icons of `[ui]` and gradients where it shows truecolor.
+fn client_theme(config: &Config, pick: Option<ThemeBase>, caps: &Caps) -> Theme {
+    let mut t = config.theme.theme(pick, caps.background);
+    t.icons = config.ui.icons;
+    t.gradients = config.ui.gradients && caps.color == termos_render::color::ColorDepth::Truecolor;
+    t
 }
 
 /// What the pointer is over, for hover highlights (D-085).
@@ -1309,12 +1326,11 @@ impl Desktop {
 
     /// Rebuilds every client's theme (after a config change or a pick).
     fn refresh_themes(&mut self) {
-        let cfg = &self.config.theme;
         for ui in self.clients.values_mut() {
-            ui.theme = cfg.theme(ui.theme_pick, ui.caps.background);
+            ui.theme = client_theme(&self.config, ui.theme_pick, &ui.caps);
         }
         if self.current.is_some() {
-            self.ui.theme = cfg.theme(self.ui.theme_pick, self.ui.caps.background);
+            self.ui.theme = client_theme(&self.config, self.ui.theme_pick, &self.ui.caps);
         }
         self.dirty = true;
     }
@@ -1388,7 +1404,7 @@ impl Desktop {
             self.leave();
             let ui = self.clients.entry(client).or_default();
             ui.caps = caps.clone();
-            ui.theme = self.config.theme.theme(ui.theme_pick, caps.background);
+            ui.theme = client_theme(&self.config, ui.theme_pick, caps);
             ui.cols = (*cols).max(2);
             ui.rows = (*rows).max(2);
             // A fresh client must not inherit a stale title.
@@ -3007,9 +3023,10 @@ impl Desktop {
             .floats
             .iter()
             .filter_map(|f| {
-                self.panes
-                    .get(&f.pane)
-                    .map(|p| (f.pane, p.title_for_border()))
+                self.panes.get(&f.pane).map(|p| {
+                    let icon = p.icon().prefix(self.ui.theme.icons);
+                    (f.pane, format!("{icon}{}", p.title_for_border()))
+                })
             })
             .collect();
         let opts = ComposeOptions {

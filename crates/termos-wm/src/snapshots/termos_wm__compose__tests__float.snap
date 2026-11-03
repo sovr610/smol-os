@@ -4,7 +4,7 @@ expression: draw(&ws)
 ---
 aaaaaaaaaaaaaaaaaaaa│bbbbbbbbbbbbbbbbbbb
 aaaaaaaaaaaaaaaaaaaa│bbbbbbbbbbbbbbbbbbb
-aaaaaa╭─ pane 7 ─────────–─×─╮bbbbbbbbbb
+aaaaaa╭ pane 7           – × ╮bbbbbbbbbb
 aaaaaa│hhhhhhhhhhhhhhhhhhhhhh│bbbbbbbbbb
 aaaaaa│hhhhhhhhhhhhhhhhhhhhhh│bbbbbbbbbb
 aaaaaa│hhhhhhhhhhhhhhhhhhhhhh│bbbbbbbbbb

@@ -23,6 +23,7 @@ pub mod diff;
 pub mod encode;
 pub mod graphics;
 pub mod grid;
+pub mod icons;
 pub mod probe;
 #[cfg(feature = "raster")]
 pub mod raster;

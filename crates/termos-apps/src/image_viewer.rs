@@ -194,6 +194,10 @@ impl ImageViewer {
 }
 
 impl App for ImageViewer {
+    fn icon(&self) -> termos_render::icons::Icon {
+        termos_render::icons::Icon::ImageViewer
+    }
+
     fn title(&self) -> String {
         format!("Image · {}", self.name())
     }

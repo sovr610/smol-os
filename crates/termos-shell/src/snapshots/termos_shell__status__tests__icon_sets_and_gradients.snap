@@ -1,0 +1,48 @@
+---
+source: crates/termos-shell/src/status.rs
+expression: out
+---
+unicode gradients=true
+ ◆  [main]  0:sh*  +
+--- styles
+abcdeeeeeeefghijkldddddddddddddddddddddd
+--- legend
+a: fg=#1c2128 bg=#e5a54b Attrs(BOLD)
+b: fg=#1c2128 bg=#eab56b Attrs(BOLD)
+c: fg=#1c2128 bg=#eec58a Attrs(BOLD)
+d: fg=#adbac7 bg=#1c2128
+e: fg=#6cb6ff bg=#1c2128 Attrs(BOLD)
+f: fg=#1c2128 bg=#6cb6ff Attrs(BOLD)
+g: fg=#1c2128 bg=#75baff Attrs(BOLD)
+h: fg=#1c2128 bg=#7dbfff Attrs(BOLD)
+i: fg=#1c2128 bg=#86c3ff Attrs(BOLD)
+j: fg=#1c2128 bg=#8ec7ff Attrs(BOLD)
+k: fg=#1c2128 bg=#97ccff Attrs(BOLD)
+l: fg=#1c2128 bg=#9fd0ff Attrs(BOLD)
+nerd gradients=false
+   [main]  0:sh*  +
+--- styles
+aaabcccccccdddddddbbbbbbbbbbbbbbbbbbbbbb
+--- legend
+a: fg=#1c2128 bg=#e5a54b Attrs(BOLD)
+b: fg=#adbac7 bg=#1c2128
+c: fg=#6cb6ff bg=#1c2128 Attrs(BOLD)
+d: fg=#1c2128 bg=#6cb6ff Attrs(BOLD)
+ascii gradients=false
+ *  [main]  0:sh*  +
+--- styles
+aaabcccccccdddddddbbbbbbbbbbbbbbbbbbbbbb
+--- legend
+a: fg=#1c2128 bg=#e5a54b Attrs(BOLD)
+b: fg=#adbac7 bg=#1c2128
+c: fg=#6cb6ff bg=#1c2128 Attrs(BOLD)
+d: fg=#1c2128 bg=#6cb6ff Attrs(BOLD)
+none gradients=false
+ Menu  [main]  0:sh*  +
+--- styles
+aaaaaabcccccccdddddddbbbbbbbbbbbbbbbbbbb
+--- legend
+a: fg=#1c2128 bg=#e5a54b Attrs(BOLD)
+b: fg=#adbac7 bg=#1c2128
+c: fg=#6cb6ff bg=#1c2128 Attrs(BOLD)
+d: fg=#1c2128 bg=#6cb6ff Attrs(BOLD)

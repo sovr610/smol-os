@@ -459,6 +459,10 @@ impl Drop for AgentWindow {
 }
 
 impl App for AgentWindow {
+    fn icon(&self) -> termos_render::icons::Icon {
+        termos_render::icons::Icon::Agent
+    }
+
     fn title(&self) -> String {
         let Some(h) = &self.handle else {
             return "Agent: resume a conversation".into();
@@ -1232,6 +1236,10 @@ impl AuditViewer {
 }
 
 impl App for AuditViewer {
+    fn icon(&self) -> termos_render::icons::Icon {
+        termos_render::icons::Icon::Audit
+    }
+
     fn title(&self) -> String {
         "Agent audit logs".into()
     }

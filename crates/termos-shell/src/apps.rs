@@ -98,6 +98,10 @@ impl Tutorial {
 }
 
 impl App for Tutorial {
+    fn icon(&self) -> termos_render::icons::Icon {
+        termos_render::icons::Icon::Tutorial
+    }
+
     fn title(&self) -> String {
         format!("Tutorial {}/{}", self.page + 1, self.pages.len())
     }
@@ -170,6 +174,10 @@ impl NotificationCenter {
 }
 
 impl App for NotificationCenter {
+    fn icon(&self) -> termos_render::icons::Icon {
+        termos_render::icons::Icon::Notifications
+    }
+
     fn title(&self) -> String {
         "Notifications".into()
     }

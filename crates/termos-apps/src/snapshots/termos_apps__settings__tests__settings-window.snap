@@ -2,7 +2,7 @@
 source: crates/termos-apps/src/settings.rs
 expression: snap
 ---
-   Drop shadows               on
+   Splash screen              on
    Animations                 on
    Reduced motion             off
    Images                     auto

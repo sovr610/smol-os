@@ -19,6 +19,7 @@ use termos_core::input::{KeyCode, KeyEvent, MouseButton, MouseEvent, MouseKind};
 use termos_render::cell::{Attrs, Style};
 use termos_render::graphics::Picture;
 use termos_render::grid::Rect;
+use termos_render::icons::Icon;
 use termos_render::theme::Theme;
 use unicode_width::UnicodeWidthStr;
 
@@ -84,11 +85,23 @@ pub struct Entry {
     pub kind: EntryKind,
     pub size: u64,
     pub modified: Option<SystemTime>,
+    /// A file anyone may run (Unix permissions; never on Windows).
+    pub executable: bool,
 }
 
 impl Entry {
     fn is_dir(&self) -> bool {
         matches!(self.kind, EntryKind::Dir | EntryKind::Link { dir: true })
+    }
+
+    /// The icon shown before the name (D-088).
+    fn icon(&self) -> Icon {
+        Icon::for_file(
+            &self.name,
+            self.is_dir(),
+            matches!(self.kind, EntryKind::Link { .. }),
+            self.executable,
+        )
     }
 
     fn hidden(&self) -> bool {
@@ -140,6 +153,19 @@ pub fn sort_entries(entries: &mut [Entry], sort: Sort) {
     });
 }
 
+#[cfg(unix)]
+fn runnable(meta: &std::fs::Metadata) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    meta.permissions().mode() & 0o111 != 0
+}
+
+/// Windows has no execute bit: `.exe` and friends get their icon from the
+/// name.
+#[cfg(not(unix))]
+fn runnable(_meta: &std::fs::Metadata) -> bool {
+    false
+}
+
 /// Reads a folder.
 pub fn list_dir(dir: &Path) -> Result<Vec<Entry>, String> {
     let read = std::fs::read_dir(dir).map_err(|e| format!("cannot open {}: {e}", dir.display()))?;
@@ -165,6 +191,7 @@ pub fn list_dir(dir: &Path) -> Result<Vec<Entry>, String> {
             path,
             kind,
             size: meta.as_ref().map_or(0, std::fs::Metadata::len),
+            executable: kind == EntryKind::File && meta.as_ref().is_some_and(runnable),
             modified: meta.and_then(|m| m.modified().ok()),
         });
     }
@@ -897,9 +924,24 @@ impl FileManager {
                 EntryKind::Link { dir } => name.push_str(if dir { "/@" } else { "@" }),
                 _ => {}
             }
-            let name_w = area.width.saturating_sub(size_w + 1);
+            let glyph = e.icon().glyph(theme.icons);
+            let icon_w = if glyph.is_empty() { 0 } else { 2 };
+            if icon_w > 0 {
+                let mut st = Style::new().fg(if e.is_dir() { c.accent } else { c.muted });
+                if selected {
+                    st = c.selected(st);
+                }
+                buf.set_string(area.x + 1, y, glyph, tui_style(st));
+            }
+            let name_w = area.width.saturating_sub(size_w + 1 + icon_w);
             let shown = fit(&name, usize::from(name_w));
-            buf.set_stringn(area.x + 1, y, &shown, usize::from(name_w), tui_style(style));
+            buf.set_stringn(
+                area.x + 1 + icon_w,
+                y,
+                &shown,
+                usize::from(name_w),
+                tui_style(style),
+            );
             if size_w > 0 && !e.is_dir() {
                 let s = human_size(e.size);
                 let x = area
@@ -1087,6 +1129,10 @@ fn fit_path(p: &Path, max: usize) -> String {
 }
 
 impl App for FileManager {
+    fn icon(&self) -> Icon {
+        Icon::Files
+    }
+
     fn title(&self) -> String {
         format!("Files · {}", name_of(&self.dir))
     }
@@ -1198,6 +1244,7 @@ mod tests {
             kind,
             size,
             modified: Some(SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(secs)),
+            executable: false,
         }
     }
 
