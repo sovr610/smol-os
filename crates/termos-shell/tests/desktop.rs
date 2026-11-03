@@ -1509,3 +1509,50 @@ async fn spinners_turn_only_where_something_animates() {
         }
     }
 }
+
+/// Each terminal gets the chrome it can show (D-088): a gradient title bar
+/// in truecolor, the same bar flat in 256 colours; and the icons of
+/// `[ui] icons`.
+#[tokio::test]
+async fn chrome_follows_each_terminal_and_the_icon_set() {
+    use termos_render::color::Color;
+    use termos_render::color::ColorDepth;
+    use termos_shell::commands::Command;
+
+    // The harness's client has 256 colours; this one has truecolor.
+    let mut h = Harness::with_ui("icons = \"ascii\"", false, false);
+    const TRUE: ClientId = ClientId(2);
+    h.desktop.handle_client(
+        TRUE,
+        ClientMsg::Hello {
+            version: termos_core::proto::PROTOCOL_VERSION,
+            caps: Caps {
+                color: ColorDepth::Truecolor,
+                ..Caps::default()
+            },
+            cols: COLS,
+            rows: ROWS,
+        },
+    );
+    h.desktop.run(Command::Tutorial);
+    let screen = h.screen();
+    // The ASCII set: `?` for the tutorial and `*` for the menu.
+    assert!(screen.contains("? Tutorial 1/6"), "{screen}");
+    assert!(
+        screen.lines().last().unwrap_or("").starts_with(" * Menu"),
+        "{screen}"
+    );
+    let (_, y) = locate(&screen, "Tutorial 1/6");
+    let bar_bgs = |g: &Grid| {
+        (0..g.cols())
+            .filter_map(|x| g.get(x, y).map(|c| c.style.bg))
+            .filter(|bg| *bg != Color::Default)
+            .collect::<std::collections::HashSet<_>>()
+            .len()
+    };
+    let mut truecolor = Grid::new(COLS, ROWS);
+    h.desktop.render(TRUE, &mut truecolor);
+    let shades = bar_bgs(&truecolor);
+    assert!(shades > 10, "a gradient: {shades} colours");
+    assert_eq!(bar_bgs(&h.grid), 1, "flat in 256 colours");
+}

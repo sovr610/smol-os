@@ -2,8 +2,8 @@
 
 TermOS shows images in every terminal: in pixels where the terminal can draw
 them, and in coloured block characters where it can't. Programs running in a
-pane can print images too. This page also covers the colour themes and the
-animations.
+pane can print images too. This page also covers the colour themes, icons and
+gradients, the wallpaper, charts, and the animations.
 
 ## What your terminal can do
 
@@ -104,17 +104,81 @@ has at least a 7:1 contrast ratio against its background.
 Programs in panes that ask for the terminal's colours (as `vim` does to
 choose its background) get your terminal's real colours.
 
+## Icons and gradients
+
+Apps, menu items and files have icons. They are one character wide in every
+set, so nothing shifts from one terminal to another:
+
+```toml
+[ui]
+icons = "unicode"     # unicode | nerd | ascii | none
+gradients = true      # gradients in title bars (terminals with true colour)
+```
+
+- `unicode` (the default) uses symbols that every terminal font has: `◆`
+  for the menu, `❯` for terminals, `■` for folders, `λ` for code.
+- `nerd` uses Nerd Font glyphs. They need a [Nerd Font](https://www.nerdfonts.com)
+  set as your terminal's font, or they show as boxes.
+- `ascii` uses plain characters (`*`, `>`, `/`).
+- `none` shows no icons.
+
+The focused floating window has a filled title bar in the theme's accent
+colour; other windows keep a plain border. On terminals with true colour,
+the title bar, the **◆ Menu** button and the current workspace tab have a
+gradient, and the system monitor's bars shade from the accent to the warning
+and error colours as they fill. Terminals with 256 colours get the same bars
+in flat colours. Gradients always keep the text on them at least as readable
+as at their start.
+
+You can change all of this in Settings (menu → Apps → Settings, or `tos settings`), under Appearance.
+
+## The wallpaper
+
+When a workspace has no tiled panes (only floating windows, say after you
+float your only terminal), the wallpaper shows behind the windows. Its
+shortcuts down the left (Terminal, Files, Monitor, AI, Settings, Help) open
+with a click. A right-click anywhere on it opens the TermOS menu.
+
+```toml
+[ui]
+wallpaper = "pattern"               # the default: a quiet dot pattern and the logo
+wallpaper = "none"                  # nothing
+wallpaper = "~/Pictures/hills.jpg"  # a picture
+```
+
+A picture is shown like any image: in pixels where your terminal can, in
+blocks elsewhere. A relative path is relative to the config file's folder.
+If the picture can't be read, TermOS says why and shows the pattern.
+
+## Charts
+
+The system monitor's CPU chart is a picture on terminals that show images
+(kitty, WezTerm, Ghostty, iTerm2, Windows Terminal with Sixel), with a smooth
+line and a soft fill. Elsewhere it is drawn in braille dots. When a window is
+waiting (a folder or picture loading, the monitor's first reading, an AI
+agent thinking), a spinner turns in its title in place of its icon.
+
+## About TermOS
+
+Help → About TermOS in the menu, `about.open` in the palette, or `tos about`
+shows the version, your system, where TermOS keeps its config, logs and
+data, and the licence.
+
 ## Motion
 
 Floating windows grow open and shrink closed, and messages slide into the
-status line. Each takes about a tenth of a second. The animations are:
+status line. Each takes about a tenth of a second. When you attach, the
+TermOS logo shows for a moment (any key or click skips it;
+`[ui] splash = false` turns it off). Spinners in busy windows turn. The
+animations are:
 
 - off for terminals connected over SSH (they would only slow the link);
 - off with `[ui] reduced-motion = true`, or `TERMOS_REDUCED_MOTION=1` for one
   terminal;
 - off everywhere with `[ui] animations = false`.
 
-When nothing moves, nothing runs: animations cost no CPU while idle.
+When nothing moves, nothing runs: animations cost no CPU while idle. Where
+animations are off, spinners stay still and there is no splash.
 
 ## Keyboard protocol for programs
 

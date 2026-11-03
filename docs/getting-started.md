@@ -136,6 +136,9 @@ Everything can be done with the mouse alone.
 - In the **command palette** and the **key list** (`C-b ?`), click a command
   to run it; the wheel scrolls the palette.
 - **Drag** the line between two panes to resize them.
+- **The wallpaper** shows when a workspace has no tiled panes (only
+  floating windows). Click its shortcuts (Terminal, Files, Monitor, AI,
+  Settings, Help), or right-click anywhere on it for the TermOS menu.
 - **Floating windows:**
   - drag the title bar to move one; drop it on the left or right edge to snap
     it to that half, or on the top edge to maximize it;
@@ -208,6 +211,8 @@ accent = "#ff8800"      # "#rrggbb", "colourN" (0-255), "brightblue", "default"
 
 [ui]
 animations = true       # off over SSH anyway; reduced-motion = true turns them off
+icons = "unicode"       # unicode | nerd (needs a Nerd Font) | ascii | none
+wallpaper = "pattern"   # pattern | none | a picture's path
 
 [keys.prefix]
 "v" = "pane.split-right"
@@ -223,8 +228,8 @@ animations = true       # off over SSH anyway; reduced-motion = true turns them 
 Every command name, such as `pane.zoom`, `layout.select tiled` or
 `workspace.select 3`, is listed in the command palette.
 
-Images, the image viewer, themes and animations are described in
-[graphics.md](graphics.md). The file manager, system monitor, clipboard
+Images, the image viewer, themes, icons, gradients, the wallpaper and
+animations are described in [graphics.md](graphics.md). The file manager, system monitor, clipboard
 history, settings and markdown viewer are in [apps.md](apps.md), and
 status-line widgets in WebAssembly in [widgets.md](widgets.md). Languages,
 editors, project templates, build/run/test panels and the Git UI are in

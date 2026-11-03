@@ -723,7 +723,7 @@ mod tests {
         if let Entry::Submenu { icon, .. } = &mut e[3] {
             *icon = Some(Icon::Layout);
         }
-        for set in [IconSet::Unicode, IconSet::Ascii] {
+        for set in [IconSet::Unicode, IconSet::Nerd, IconSet::Ascii] {
             let mut m = Menu::at("bash", e.clone(), (4, 1), area, set);
             let r = m.rects()[0];
             m.on_mouse(mouse(MouseKind::Moved, r.x + 2, r.y + 4));

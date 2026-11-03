@@ -27,7 +27,7 @@ questions (DECISIONS.md, "Open questions").
 | M8 | Bare-metal images: the KMS console, Buildroot images for x86_64, aarch64 and the Pis, QEMU boot tests (D-072 to D-076) | 🔍 |
 | M9 | Release: A/B updates, the live ISO and installer, the network page, the release pipeline with musl builds, docs (D-077 to D-083) | 🔍 |
 | M10a | Mouse-first desktop: menus, context menus, hover and double-click; the `tos` command in every pane (D-084, D-085) | 🔍 |
-| M10b | Graphics: richer chrome, icons, wallpaper, pixel charts where the terminal can show them (D-084, D-087) | 🚧 |
+| M10b | Graphics: richer chrome, icons, wallpaper, pixel charts where the terminal can show them (D-084, D-087 to D-090) | 🔍 |
 | M10c | The command center: live views and history of the AI and the OS, with actions (D-084) | ⏳ |
 | M10d | Claude Code and Codex CLI: installed by TermOS, with a TermOS MCP server (D-084) | ⏳ |
 | M9b | Platform gaps: the Windows agent sandbox and input, snapshots and sensors on macOS and Windows, Kitty keyboard flags, app windows in sessions, the KMS console's clipboard, bell and images (D-077) | ⏳ |
@@ -772,15 +772,36 @@ Not shown: Windows and macOS by hand; CI runs the `tos` end-to-end test on both 
 ---
 
 ## M10b — Graphics
-**Status:** 🚧 · Owner answers: graphics "where it seems fitting" (D-084); Unicode icons by default, Nerd Font and plain-text sets selectable; a wallpaper by default (D-087).
+**Status:** 🔍 done, awaiting review · Owner answers: graphics "where it seems fitting" (D-084); Unicode icons by default, Nerd Font and plain-text sets selectable; a wallpaper by default (D-087). Design: D-088 to D-090, ARCHITECTURE.md §5.3, §5.8, §8 and §9; user guide [graphics.md](docs/graphics.md#icons-and-gradients).
 
 **Deliverables**
-- Richer chrome: gradient title bars and status segments in truecolor (flat in 256 colours), accent colours per theme, focus highlighting.
-- Icons for apps, files and menu items, with Unicode, Nerd Font and plain-text sets.
-- A wallpaper behind empty workspaces (a picture through the image layer, or a generated pattern), a splash on start and an About window.
-- Pixel charts in the system monitor and the command center where the terminal shows images, braille elsewhere; progress bars and spinners.
+- **Richer chrome** (D-088):
+  - [x] The focused floating window's title bar filled with the theme's accent, with a gradient in truecolor and flat in 256 colours; unfocused windows keep a plain border
+  - [x] Gradients on `◆ Menu` and the current workspace tab; every gradient moves away from its text's lightness, so contrast never drops (tested for every preset)
+  - [x] `[ui] gradients` (on by default), per client: only clients whose terminal shows truecolor get them
+- **Icons** (D-087, D-088):
+  - [x] `[ui] icons = "unicode" | "nerd" | "ascii" | "none"`, Unicode by default; every glyph one cell wide and never an emoji (tested)
+  - [x] Icons for every app (before its window title), every menu item and submenu (in a gutter, so labels line up) and files by kind in the file manager
+- **Wallpaper, splash, About** (D-089):
+  - [x] A wallpaper where a workspace has no tiled panes: clickable shortcuts (lit under the pointer), the logo and a hint, a dot pattern with an accent glow in truecolor; a right-click on it opens the TermOS menu
+  - [x] `[ui] wallpaper = "pattern" | "none" | <picture>`: a picture decoded on its own thread and shown through the image layer, under the floats
+  - [x] A splash on attach (900 ms, only where animations run, ended by any input; `[ui] splash`)
+  - [x] About TermOS (Help menu, `about.open`, `tos about`)
+- **Charts, progress, spinners** (D-090):
+  - [x] The monitor's CPU chart as a picture where the terminal shows pixels (braille beneath, cleared there), braille elsewhere; made again only when a reading arrives
+  - [x] Meters that shade from the accent through warning to error in truecolor
+  - [x] A spinner in place of the icon while a window is busy (the monitor's first reading, a folder or picture loading, an agent waiting on the model), turning only while some client animates
+  - [ ] The command center's charts: with the command center (M10c)
+- **Settings:** [x] icons, gradients, wallpaper and splash under Appearance
 
 **Acceptance:** snapshot tests for every theme in truecolor, 256 colours and with each icon set; the budgets of ARCHITECTURE.md §15 still hold.
+
+**What the tests cover**
+- **Styled snapshots** (text plus every cell's colours): the window layer for dark, light and high contrast, each flat (256 colours) and with gradients (truecolor); the status line with each icon set, with and without gradients; menus with the Unicode, Nerd Font and ASCII sets and without icons (no gutter); the wallpaper, the splash card and the file manager with icons.
+- **Icons:** every glyph of every set is one cell wide and none is an emoji-prone code point; spinners turn in one cell in every set; files get icons by kind.
+- **Contrast:** every gradient's far end reads at least as well as its start, for each preset and each place gradients are drawn.
+- **Desktop, end to end:** a 256-colour and a truecolor terminal on the same session get a flat and a shaded title bar; `[ui] icons = "ascii"` reaches the titles and the start button; the wallpaper shows only with nothing tiled, its shortcuts light up and open apps, and a right-click on it opens the menu; a picture wallpaper (relative to the config) is decoded off the loop and drawn, `none` draws nothing; the splash shows on attach, ends by itself with its timer, and a key ends another client's splash at once; About opens with the version; the CPU chart goes to a Kitty client in pixels with the braille beneath cleared, while a block-only client keeps the braille; a busy window spins and the spinner keeps a timer only where something animates.
+- **Charts:** the rasterized chart (line, fill, guides, clamping, empty data); shaded meters change colour along the bar.
 
 ---
 

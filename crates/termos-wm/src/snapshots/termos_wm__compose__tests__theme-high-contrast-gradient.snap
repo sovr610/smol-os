@@ -1,0 +1,57 @@
+---
+source: crates/termos-wm/src/compose.rs
+expression: g.to_styled_text()
+---
+aaaaaaaaaaaaaaaaaaaa│bbbbbbbbbbbbbbbbbbb
+aaaaaaaaaaaaaaaaaaaa│bbbbbbbbbbbbbbbbbbb
+aaaaaa╭ pane 7           – × ╮bbbbbbbbbb
+aaaaaa│hhhhhhhhhhhhhhhhhhhhhh│bbbbbbbbbb
+aaaaaa│hhhhhhhhhhhhhhhhhhhhhh│bbbbbbbbbb
+aaaaaa│hhhhhhhhhhhhhhhhhhhhhh│bbbbbbbbbb
+aaaaaa│hhhhhhhhhhhhhhhhhhhhhh│──────────
+aaaaaa│hhhhhhhhhhhhhhhhhhhhhh│cccccccccc
+aaaaaa╰──────────────────────╯cccccccccc
+aaaaaaaaaaaaaaaaaaaa│ccccccccccccccccccc
+aaaaaaaaaaaaaaaaaaaa│ccccccccccccccccccc
+aaaaaaaaaaaaaaaaaaaa│ccccccccccccccccccc
+--- styles
+....................a
+....................a
+......bcdefghijklmnopqrstuvwxb
+......b......................byy
+......b......................byy
+......b......................byy
+......b......................bzzaaaaaaaa
+......b......................byy
+......bbbbbbbbbbbbbbbbbbbbbbbbyy
+........yyyyyyyyyyyyzyyyyyyyyyAA
+....................a
+....................a
+--- legend
+a: fg=#c0c0c0 bg=default
+b: fg=#ffd700 bg=default
+c: fg=#000000 bg=#ffd700 Attrs(BOLD)
+d: fg=#000000 bg=#ffd804 Attrs(BOLD)
+e: fg=#000000 bg=#ffd808 Attrs(BOLD)
+f: fg=#000000 bg=#ffd90d Attrs(BOLD)
+g: fg=#000000 bg=#ffda11 Attrs(BOLD)
+h: fg=#000000 bg=#ffda15 Attrs(BOLD)
+i: fg=#000000 bg=#ffdb19 Attrs(BOLD)
+j: fg=#000000 bg=#ffdc1e Attrs(BOLD)
+k: fg=#000000 bg=#ffdc22 Attrs(BOLD)
+l: fg=#000000 bg=#ffdd26 Attrs(BOLD)
+m: fg=#000000 bg=#ffde2a Attrs(BOLD)
+n: fg=#000000 bg=#ffde2f Attrs(BOLD)
+o: fg=#000000 bg=#ffdf33 Attrs(BOLD)
+p: fg=#000000 bg=#ffe037 Attrs(BOLD)
+q: fg=#000000 bg=#ffe03b Attrs(BOLD)
+r: fg=#000000 bg=#ffe140 Attrs(BOLD)
+s: fg=#000000 bg=#ffe244 Attrs(BOLD)
+t: fg=#000000 bg=#ffe248 Attrs(BOLD)
+u: fg=#000000 bg=#ffe34c Attrs(BOLD)
+v: fg=#000000 bg=#ffe451 Attrs(BOLD)
+w: fg=#000000 bg=#ffe455 Attrs(BOLD)
+x: fg=#000000 bg=#ffe559 Attrs(BOLD)
+y: fg=#666666 bg=#06080a
+z: fg=#4d4d4d bg=#06080a
+A: fg=#292929 bg=#020304

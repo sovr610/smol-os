@@ -159,12 +159,12 @@ kept as its own value so transparent or themed terminal backgrounds still work.
 
 ### 5.3 Composition
 For each attached client, at its size:
-1. Desktop background.
+1. Desktop background: the wallpaper where the active workspace has no tiled panes (D-089): shortcuts down the left, the logo at the bottom right, a pattern or a picture (through the image layer).
 2. The tiled layer of the active workspace.
 3. Floating windows, bottom to top.
 4. Drop shadows. With truecolor, the cells under a floating window's offset rectangle are blended toward the theme's shadow colour; otherwise a dim attribute is used.
-5. Borders and title bars, drawn with rounded box characters (`╭╮╰╯`).
-6. Overlays: palette, which-key, toasts.
+5. Borders and title bars, drawn with the configured box characters. The focused window's title bar is filled with the accent (a gradient for truecolor clients, D-088), with the app's icon, or a spinner while the app is busy (D-090), before the title.
+6. Overlays: palette, which-key, menus, toasts; the splash for a client that just attached (D-089).
 7. The cursor.
 
 Each window is clipped to its rectangle, and occluded regions are never drawn.
@@ -213,6 +213,7 @@ Images come from apps (`App::images`) and from programs in panes (Kitty
 graphics and Sixel, intercepted before the emulator and anchored to their
 text). For each client and image the desktop decides how to show it:
 - **Blocks** are drawn into the cell grid, so windows and overlays cover them without any special handling.
+- **Pixels only (D-090):** an app may mark an image `pixels_only` when it has drawn a text version beneath (the monitor's braille CPU chart). Where the image shows in pixels the cells beneath are cleared; where it would be blocks it is skipped and the text stays.
 - **Kitty** gets one placement per visible piece: the image minus the floats above it and the palette and which-key boxes, each a crop of a single upload.
 - **Sixel and iTerm2** can't be partly covered. They're used only for an image that is wholly visible, not on the last row, while nothing moves; otherwise the visible pieces are drawn as blocks. We choose correctness over fidelity.
 - The server uploads each image once per client and size; the client encodes and draws pixel images after the cells. A Sixel or iTerm2 image that moves is painted over by poisoning the client's previous grid, so the next diff redraws those cells.
@@ -298,7 +299,9 @@ Window = { id, title, source: Pty | App | Plugin | Agent, state: normal | minimi
   - Hot reload uses `notify` with debouncing. An invalid edit keeps the last good config and posts a notification with the error.
   - `termos config check` validates without running.
 - **Themes (D-044):** semantic tokens such as `fg`, `accent`, `border`, `status-*` and `overlay-bg` from which every style is derived. Presets dark, light and high-contrast; `[theme] base = "auto"` follows each client's terminal background (OSC 11, then `COLORFGBG`). Themes are per client; `theme.select` switches one. Programs asking for default colours (OSC 10/11) get the terminal's.
-- **Motion (D-042, D-045):** `[ui] animations` and `reduced-motion`; never over SSH.
+- **Motion (D-042, D-045):** `[ui] animations` and `reduced-motion`; never over SSH. The splash on attach (`[ui] splash`) and the spinners of busy windows follow the same rule (D-089, D-090).
+- **Icons and gradients (D-087, D-088):** `termos_render::icons` has one-cell glyphs per icon set (`[ui] icons = "unicode" | "nerd" | "ascii" | "none"`). Each client's `Theme` carries its icon set and whether it gets gradients (`[ui] gradients`, only for truecolor clients). `Theme::sheen` makes gradients that keep their text's contrast; `Theme::paint` falls back to the flat theme colour.
+- **Wallpaper (D-089):** `[ui] wallpaper = "pattern" | "none" | <picture path>`; a picture is decoded on its own thread, which wakes the desktop through the PTY event queue.
 - **Graphics:** `[graphics] protocol = "auto" | "kitty" | "sixel" | "iterm2" | "blocks"`.
 - **Clipboard:** `[clipboard] history` (entries kept in memory, default 50; 0 keeps none).
 - **Widgets:** `[widgets.<name>]` for WASM status-line widgets (§9, D-051).
@@ -319,18 +322,20 @@ Window = { id, title, source: Pty | App | Plugin | Agent, state: normal | minimi
 ## 9. Apps and plugins (D-013)
 
 - **Built-in apps** (`termos-apps`) implement an in-process trait defined in `termos-core` (agent windows and devkit panels implement it too):
-  `App { title, handle_key/handle_mouse/handle_paste -> effect, render(area, &mut ratatui::Buffer, theme), images, set_waker, deadline, on_timer }`.
+  `App { title, icon, handle_key/handle_mouse/handle_paste -> effect, render(area, &mut ratatui::Buffer, theme), images, busy, catch_up, set_waker, deadline, on_timer }`.
+  - `icon` goes before the window's title; `busy` turns it into a spinner, which moves only while some client animates (D-090); `catch_up` takes in finished background work before the title is drawn.
   - They run on the server loop and push heavy work to their own threads, asking for a redraw with `AppWaker` when it is done.
   - **Timers (D-052):** `deadline`/`on_timer` are scheduled only while the app is on screen for some client, so hidden apps cost nothing (D-028).
   - **Effects:** redraw, close, notify, run a command, `Copy(text)` (clipboard and history), `PasteAndClose(text)`.
-  - **Widgets:** `termos_core::widgets` has a braille line chart, sparklines, meters and an image slot.
+  - **Widgets:** `termos_core::widgets` has a braille line chart, sparklines, meters (shaded along their length with `fill_at`) and an image slot; `termos_render::graphics::chart` draws a chart as a picture (D-090).
   - Saving and restoring app state with sessions is not done yet; app windows are not part of snapshots.
 - **The apps (D-049, D-052):**
   - image viewer (`image.open PATH`) and markdown viewer (`markdown.open PATH`, local pictures inline);
   - file manager (`files.open [DIR]`; `file.open PATH` opens by kind, `file.edit PATH` runs `$VISUAL`/`$EDITOR` in a new pane; deletes to the trash, D-050);
   - system monitor (`monitor.open`, from `termos-hw`, sampling once a second only while visible);
   - clipboard manager (`clipboard.open`, prefix `=`): the server-wide history of copies, in memory only (D-050);
-  - settings (`settings.open`): edits config.toml in place, keeping comments, and reloads.
+  - settings (`settings.open`): edits config.toml in place, keeping comments, and reloads;
+  - About TermOS (`about.open`): version, system, file locations, licence (D-089).
 - **Images (D-049):** apps report images with `App::images()` (a shared picture fitted into a cell rectangle, which may be scrolled partly above the app), shown through the ladder of §5.8.
 - **Plain TUI programs** are first-class without any integration: they run in PTY windows, including the images they print (Kitty graphics, Sixel; D-048) and the Kitty keyboard protocol (D-046).
 - **Out-of-process plugins (D-034):** a directory under `~/.config/termos/plugins/<name>/` with an executable and a `plugin.toml` (name, version, exec, `[permissions] windows/status/commands/notify`). Plugins run only while listed in `[plugins] enabled`.

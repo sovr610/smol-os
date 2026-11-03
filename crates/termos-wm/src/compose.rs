@@ -288,6 +288,7 @@ mod tests {
             (ThemeBase::HighContrast, false),
             (ThemeBase::Dark, true),
             (ThemeBase::Light, true),
+            (ThemeBase::HighContrast, true),
         ];
         for (base, gradients) in looks {
             let mut theme = ThemeConfig {
