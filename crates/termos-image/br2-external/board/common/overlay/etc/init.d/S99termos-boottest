@@ -18,6 +18,14 @@ cfg=/sys/firmware/qemu_fw_cfg/by_name/opt/termos
 	df -kP /data | awk 'NR == 2 { printf "TERMOS-DATA size_kb=%d\n", $2 }' >/dev/console
 	if [ -r "$cfg/boottest-update/raw" ]; then
 		url=$(cat "$cfg/boottest-update/raw")
+		# The bundle comes over the network: wait for DHCP's default
+		# route (a minute at most) rather than race it.
+		i=0
+		until awk '$2 == "00000000" { found = 1 } END { exit !found }' /proc/net/route ||
+			[ "$i" -ge 60 ]; do
+			sleep 1
+			i=$((i + 1))
+		done
 		su -s /bin/sh -c "termos update install --yes --restart '$url'" termos >/dev/console 2>&1 ||
 			echo "TERMOS-UPDATE failed" >/dev/console
 	fi

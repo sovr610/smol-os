@@ -13,6 +13,9 @@ pub struct Picture {
     pub rgb: Vec<[u8; 3]>,
 }
 
+/// The longest side a screenshot may have.
+pub const MAX_SIDE: u32 = 16384;
+
 /// Reads a binary PPM (P6, 8 bits per channel).
 pub fn parse_ppm(data: &[u8]) -> Result<Picture, String> {
     let mut fields = Vec::new();
@@ -49,6 +52,11 @@ pub fn parse_ppm(data: &[u8]) -> Result<Picture, String> {
     let (width, height, max) = (num(&fields[1])?, num(&fields[2])?, num(&fields[3])?);
     if max != 255 {
         return Err(format!("{max} levels per channel; only 255 is supported"));
+    }
+    // A screen has pixels, and no screen is wider or taller than this: a
+    // side of 0 would let the other be anything (the fuzzer's 0×340000000).
+    if !(1..=MAX_SIDE).contains(&width) || !(1..=MAX_SIDE).contains(&height) {
+        return Err(format!("a {width}×{height} screenshot"));
     }
     let n = (width as usize)
         .checked_mul(height as usize)
@@ -281,6 +289,9 @@ mod tests {
         assert!(parse_ppm(b"P6\n2 2\n255\nabc").is_err());
         assert!(parse_ppm(b"P6\n2").is_err());
         assert!(parse_ppm(b"P6\n4294967295 4294967295\n255\nxyz").is_err());
+        // Found by the fuzzer: no pixels, but 340 million rows to look at.
+        assert!(parse_ppm(b"P6\n0\n0340000000\n255\n)").is_err());
+        assert!(parse_ppm(b"P6\n1 0\n255\n").is_err());
     }
 
     #[test]
