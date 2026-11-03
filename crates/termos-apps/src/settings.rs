@@ -86,6 +86,14 @@ const SETTINGS: &[Setting] = &[
     s(
         "Appearance",
         "ui",
+        "start",
+        "Start on",
+        "new sessions and workspaces: the desktop, or a full-screen terminal",
+        Kind::Choice(&["desktop", "terminal"]),
+    ),
+    s(
+        "Appearance",
+        "ui",
         "icons",
         "Icons",
         "nerd needs a Nerd Font in your terminal",

@@ -136,9 +136,11 @@ Everything can be done with the mouse alone.
 - In the **command palette** and the **key list** (`C-b ?`), click a command
   to run it; the wheel scrolls the palette.
 - **Drag** the line between two panes to resize them.
-- **The wallpaper** shows when a workspace has no tiled panes (only
-  floating windows). Click its shortcuts (Terminal, Files, Monitor, AI,
-  Settings, Help), or right-click anywhere on it for the TermOS menu.
+- **The desktop:** TermOS starts with your terminal in a window on the
+  wallpaper. Click the shortcuts on the left (Terminal, Files, Monitor, AI,
+  Settings, Help), or right-click anywhere on the wallpaper for the TermOS
+  menu. Splitting a window tiles it; `[ui] start = "terminal"` starts with
+  one full-screen terminal instead.
 - **Floating windows:**
   - drag the title bar to move one; drop it on the left or right edge to snap
     it to that half, or on the top edge to maximize it;
@@ -211,6 +213,7 @@ accent = "#ff8800"      # "#rrggbb", "colourN" (0-255), "brightblue", "default"
 
 [ui]
 animations = true       # off over SSH anyway; reduced-motion = true turns them off
+start = "desktop"       # desktop | terminal (one full-screen terminal, like tmux)
 icons = "unicode"       # unicode | nerd (needs a Nerd Font) | ascii | none
 wallpaper = "pattern"   # pattern | none | a picture's path
 

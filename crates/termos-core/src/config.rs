@@ -279,6 +279,18 @@ impl<'de> Deserialize<'de> for Wallpaper {
     }
 }
 
+/// How a new session or workspace starts (`[ui] start`, D-091).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum StartLook {
+    /// On the desktop: the wallpaper, with the terminal in a floating
+    /// window.
+    #[default]
+    Desktop,
+    /// One terminal filling the screen, as in tmux.
+    Terminal,
+}
+
 /// Motion and looks (D-042, D-087, D-088).
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(default, deny_unknown_fields, rename_all = "kebab-case")]
@@ -299,6 +311,8 @@ pub struct UiConfig {
     /// The TermOS logo for a moment when a terminal attaches (only where
     /// animations are on).
     pub splash: bool,
+    /// New sessions and workspaces start on the desktop or as a terminal.
+    pub start: StartLook,
 }
 
 impl Default for UiConfig {
@@ -310,6 +324,7 @@ impl Default for UiConfig {
             gradients: true,
             wallpaper: Wallpaper::default(),
             splash: true,
+            start: StartLook::default(),
         }
     }
 }
@@ -700,6 +715,7 @@ icons = "unicode"        # unicode | nerd (needs a Nerd Font) | ascii | none
 gradients = true         # colour gradients in title bars (truecolor terminals)
 wallpaper = "pattern"    # pattern | none | a picture's path
 splash = true            # the logo for a moment when you attach
+start = "desktop"        # desktop (a floating terminal on the wallpaper) | terminal (full screen)
 
 [graphics]
 protocol = "auto"        # auto | kitty | sixel | iterm2 | blocks

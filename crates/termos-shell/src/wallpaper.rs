@@ -39,11 +39,8 @@ pub fn shortcuts() -> Vec<Shortcut> {
         command,
     };
     vec![
-        s(
-            Icon::Terminal,
-            "Terminal",
-            Command::Split(termos_wm::workspace::SplitHow::Auto),
-        ),
+        // A window on the desktop, so the desktop stays.
+        s(Icon::Terminal, "Terminal", Command::NewFloat),
         s(Icon::Files, "Files", Command::FilesOpen(String::new())),
         s(Icon::Monitor, "Monitor", Command::MonitorOpen),
         s(Icon::Agent, "AI", Command::AgentOpen(String::new())),

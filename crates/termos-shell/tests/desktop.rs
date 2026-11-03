@@ -106,8 +106,15 @@ impl Harness {
         };
         std::fs::create_dir_all(&paths.config_dir).expect("mkdir");
         // Animations off: screens are read at arbitrary moments.
+        // Most tests start as one tiled terminal; desktop-first is
+        // tested on its own.
+        let start = if ui.contains("start =") {
+            ""
+        } else {
+            "start = \"terminal\"\n"
+        };
         let tutorial_cfg = format!(
-            "[tutorial]\nshow-on-first-run = {tutorial}\n[status]\nclock = false\n[ui]\nanimations = {animations}\n{ui}\n"
+            "[tutorial]\nshow-on-first-run = {tutorial}\n[status]\nclock = false\n[ui]\nanimations = {animations}\n{start}{ui}\n"
         );
         let text = base_config(&format!("{extra}\n{tutorial_cfg}"));
         std::fs::write(paths.config_file(), &text).expect("write config");
@@ -306,7 +313,7 @@ async fn themes_follow_each_terminal_and_can_be_picked() {
     // the pick survives the reload.
     std::fs::write(
         h.config_path(),
-        base_config("[theme]\nbase = \"dark\"\n[status]\nclock = false\n[tutorial]\nshow-on-first-run = false\n[ui]\nanimations = false\n"),
+        base_config("[theme]\nbase = \"dark\"\n[status]\nclock = false\n[tutorial]\nshow-on-first-run = false\n[ui]\nanimations = false\nstart = \"terminal\"\n"),
     )
     .expect("write config");
     h.desktop.reload_config();
@@ -1555,4 +1562,90 @@ async fn chrome_follows_each_terminal_and_the_icon_set() {
     let shades = bar_bgs(&truecolor);
     assert!(shades > 10, "a gradient: {shades} colours");
     assert_eq!(bar_bgs(&h.grid), 1, "flat in 256 colours");
+}
+
+/// Keys typed one at a time into PowerShell (PSReadLine reads key events
+/// from the pseudo-console) arrive exactly once each, in order: slowly and
+/// in a burst. An owner saw letters repeat and go missing on Windows.
+#[cfg(windows)]
+#[tokio::test]
+async fn keys_reach_powershell_exactly_once() {
+    let mut h = Harness::new("");
+    h.wait_text("$ ").await;
+    h.type_text("powershell -NoLogo -NoProfile\n");
+    h.wait_for("the PowerShell prompt", |s, _| {
+        s.lines()
+            .any(|l| l.starts_with("PS ") && l.trim_end().ends_with('>'))
+    })
+    .await;
+    for (round, gap) in [(1, Duration::from_millis(40)), (2, Duration::ZERO)] {
+        let word = format!("kq{round}term");
+        let line = format!("echo {word}");
+        for c in line.chars() {
+            h.desktop.handle_client(C, ClientMsg::Key(KeyEvent::ch(c)));
+            // Let output in between keys, like a person typing.
+            let until = Instant::now() + gap;
+            while let Ok(Some(ev)) = tokio::time::timeout(
+                until.saturating_duration_since(Instant::now()),
+                h.pty_rx.recv(),
+            )
+            .await
+            {
+                h.desktop.on_pty(ev);
+            }
+        }
+        let typed = format!("> {line}");
+        h.wait_for(&format!("{typed:?} typed exactly"), |s, _| {
+            s.lines().any(|l| l.trim_end().ends_with(&typed))
+        })
+        .await;
+        h.type_text("\n");
+        h.wait_for(&format!("{word} printed"), |s, _| {
+            s.lines().any(|l| l.trim_end() == word)
+        })
+        .await;
+    }
+}
+
+/// With `[ui] start = "desktop"` (the default), a session starts on the
+/// desktop: the wallpaper, and the terminal in a floating window that has
+/// focus and takes typing. New workspaces start the same way, and the
+/// wallpaper's Terminal shortcut opens another window (D-091).
+#[tokio::test]
+async fn sessions_start_on_the_desktop() {
+    use termos_shell::commands::Command;
+
+    assert_eq!(
+        Config::default().ui.start,
+        termos_core::config::StartLook::Desktop,
+        "the default"
+    );
+    let mut h = Harness::with_ui("start = \"desktop\"", false, false);
+    let first = h.desktop.focused().expect("the terminal has focus");
+    assert!(h.desktop.session().active().is_floating(first));
+    let screen = h.screen();
+    assert!(
+        screen.contains("right-click anywhere for the menu"),
+        "{screen}"
+    );
+    h.type_text(&format!("{}\n", common::echo_split("on-the", "-desktop")));
+    // The output, inside the window's border.
+    h.wait_text("│on-the-desktop ").await;
+
+    // The Terminal shortcut: another window, the desktop stays.
+    let screen = h.screen();
+    let (x, y) = locate(&screen, "Terminal");
+    h.mouse(MouseKind::Down(MouseButton::Left), x, y);
+    h.mouse(MouseKind::Up(MouseButton::Left), x, y);
+    let ws = h.desktop.session().active();
+    assert_eq!(ws.panes().len(), 2);
+    assert!(ws.panes().iter().all(|p| ws.is_floating(*p)));
+
+    h.desktop.run(Command::WorkspaceNew);
+    let ws = h.desktop.session().active();
+    assert_eq!(ws.panes().len(), 1);
+    assert!(
+        ws.is_floating(ws.panes()[0]),
+        "a new workspace is a desktop too"
+    );
 }

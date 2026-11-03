@@ -134,13 +134,20 @@ You can change all of this in Settings (menu → Apps → Settings, or `tos sett
 
 ## The wallpaper
 
-When a workspace has no tiled panes (only floating windows, say after you
-float your only terminal), the wallpaper shows behind the windows. Its
-shortcuts down the left (Terminal, Files, Monitor, AI, Settings, Help) open
-with a click. A right-click anywhere on it opens the TermOS menu.
+TermOS starts on the desktop: the wallpaper, with your terminal in a
+floating window on it. New workspaces start the same way. The shortcuts down
+the left (Terminal, Files, Monitor, AI, Settings, Help) open with a click;
+Terminal opens another window. A right-click anywhere on the wallpaper opens
+the TermOS menu. To tile a window, right-click its title and pick Tile (or
+`C-b W`); splitting tiles too.
+
+To start with one full-screen terminal instead, as in tmux, set
+`[ui] start = "terminal"` (or Settings → Appearance → Start on). The
+wallpaper then shows only when a workspace has no tiled panes.
 
 ```toml
 [ui]
+start = "desktop"                   # the default; "terminal" for one full-screen terminal
 wallpaper = "pattern"               # the default: a quiet dot pattern and the logo
 wallpaper = "none"                  # nothing
 wallpaper = "~/Pictures/hills.jpg"  # a picture

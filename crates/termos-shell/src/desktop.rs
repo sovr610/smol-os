@@ -88,7 +88,7 @@ impl Pane {
         match &self.kind {
             PaneKind::Term { pty, .. } => pty
                 .foreground_name()
-                .or_else(|| (!self.title.is_empty()).then(|| self.title.clone()))
+                .or_else(|| (!self.title.is_empty()).then(|| short_title(&self.title)))
                 .unwrap_or_else(|| "shell".into()),
             PaneKind::App(app) => app.title(),
         }
@@ -112,10 +112,43 @@ impl Pane {
             return n.clone();
         }
         match &self.kind {
-            PaneKind::Term { .. } if !self.title.is_empty() => self.title.clone(),
+            PaneKind::Term { .. } if !self.title.is_empty() => short_title(&self.title),
             _ => self.display_name(),
         }
     }
+}
+
+/// A pane's title with a program's path cut to its name: Windows consoles
+/// title themselves with the program's full path
+/// (`C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe` becomes
+/// `powershell`; `Administrator: C:\Windows\system32\cmd.exe` becomes
+/// `Administrator: cmd`). Other titles stay as they are.
+fn short_title(title: &str) -> String {
+    let lower = title.trim_end().to_ascii_lowercase();
+    let program = [".exe", ".com", ".bat", ".cmd"]
+        .iter()
+        .any(|ext| lower.ends_with(ext));
+    let Some(last_sep) = title.rfind(['\\', '/']) else {
+        return title.to_owned();
+    };
+    if !program {
+        return title.to_owned();
+    }
+    // Where the path starts: a drive (`C:\`), a UNC or rooted path, or
+    // the first separator.
+    let bytes = title.as_bytes();
+    let start = (0..title.len())
+        .find(|&i| {
+            (i + 2 < bytes.len()
+                && bytes[i].is_ascii_alphabetic()
+                && bytes[i + 1] == b':'
+                && matches!(bytes[i + 2], b'\\' | b'/'))
+                || matches!(bytes[i], b'\\' | b'/')
+        })
+        .unwrap_or(0);
+    let file = title[last_sep + 1..].trim_end();
+    let stem = file.rsplit_once('.').map_or(file, |(s, _)| s);
+    format!("{}{stem}", &title[..start])
 }
 
 /// Facts about a pane (`pane.list`).
@@ -485,8 +518,9 @@ impl Desktop {
     ) -> io::Result<Self> {
         let mut d = Self::blank(opts, config, pty_tx, cols, rows);
         let area = d.layout_area();
-        let first = d.spawn_term(d.opts.cwd.clone(), (area.w, area.h))?;
-        d.session = Session::new(d.opts.session_name.clone(), Workspace::new("shell", first));
+        let first = d.spawn_term(d.opts.cwd.clone(), d.first_size(area))?;
+        let ws = d.new_workspace(first, area);
+        d.session = Session::new(d.opts.session_name.clone(), ws);
         let marker = d.opts.paths.tutorial_marker();
         if d.config.tutorial.show_on_first_run && !marker.exists() {
             d.open_app(Box::new(Tutorial::new(&d.keys.prefix_key.to_string())));
@@ -914,6 +948,25 @@ impl Desktop {
     }
 
     // ----- panes ------------------------------------------------------
+
+    /// A new workspace around its first terminal: on the desktop, the
+    /// terminal floats over the wallpaper; otherwise it fills the screen
+    /// (`[ui] start`, D-091).
+    fn new_workspace(&self, first: PaneId, area: Rect) -> Workspace {
+        let mut ws = Workspace::new("shell", first);
+        if self.config.ui.start == termos_core::config::StartLook::Desktop {
+            ws.toggle_float(first, area);
+        }
+        ws
+    }
+
+    /// The size a workspace's first terminal will have.
+    fn first_size(&self, area: Rect) -> (u16, u16) {
+        match self.config.ui.start {
+            termos_core::config::StartLook::Desktop => (area.w * 7 / 10, area.h * 7 / 10),
+            termos_core::config::StartLook::Terminal => (area.w, area.h),
+        }
+    }
 
     fn alloc_id(&mut self) -> PaneId {
         self.opts.pane_ids.next()
@@ -1971,9 +2024,10 @@ impl Desktop {
             }
             Command::WorkspaceNew => {
                 let cwd = self.focused_cwd();
-                match self.spawn_term(cwd, (area.w, area.h)) {
+                match self.spawn_term(cwd, self.first_size(area)) {
                     Ok(id) => {
-                        self.session.add(Workspace::new("shell", id));
+                        let ws = self.new_workspace(id, area);
+                        self.session.add(ws);
                     }
                     Err(e) => self.notify(Level::Error, format!("cannot start shell: {e}")),
                 }
@@ -3394,6 +3448,28 @@ impl Desktop {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn program_paths_in_titles_become_names() {
+        let cases = [
+            (
+                r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+                "powershell",
+            ),
+            (
+                r"Administrator: C:\Windows\system32\cmd.exe",
+                "Administrator: cmd",
+            ),
+            (r"C:\Program Files\PowerShell\7\pwsh.exe", "pwsh"),
+            ("/usr/bin/fish", "/usr/bin/fish"),
+            ("user@host: ~/src", "user@host: ~/src"),
+            ("vim notes.txt", "vim notes.txt"),
+            ("htop", "htop"),
+        ];
+        for (title, short) in cases {
+            assert_eq!(short_title(title), short, "{title}");
+        }
+    }
 
     #[test]
     fn the_editor_comes_from_visual_then_editor() {

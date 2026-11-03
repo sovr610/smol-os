@@ -828,6 +828,11 @@ The demo found that About cut long paths at the right, hiding the file name; lon
 
 Not shown here: pixel graphics (the CPU chart as a picture, a picture wallpaper) need a terminal that shows images; the desktop tests drive them for a Kitty client. To try them by hand: kitty, WezTerm or Ghostty, then Apps → System monitor.
 
+**Owner review (2026-11-03, Windows):**
+- The owner's TermOS looked like plain PowerShell: every workspace began as one tiled terminal, so the wallpaper never showed. Sessions and workspaces now start on the desktop, with the terminal in a floating window (D-091, `[ui] start`), with a desktop test.
+- Tabs read `C:\Windows\Syst…`: Windows consoles title themselves with the program's path, which is now cut to its name (`powershell`), with a test.
+- Typing in PowerShell dropped and repeated letters. Under investigation: `portable-pty` creates every pseudo-console with `PSEUDOCONSOLE_WIN32_INPUT_MODE`, while TermOS sends plain characters; a Windows CI test now types into PowerShell key by key to reproduce it.
+
 ---
 
 ## M10c — The command center

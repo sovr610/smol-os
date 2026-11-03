@@ -302,6 +302,7 @@ Window = { id, title, source: Pty | App | Plugin | Agent, state: normal | minimi
 - **Motion (D-042, D-045):** `[ui] animations` and `reduced-motion`; never over SSH. The splash on attach (`[ui] splash`) and the spinners of busy windows follow the same rule (D-089, D-090).
 - **Icons and gradients (D-087, D-088):** `termos_render::icons` has one-cell glyphs per icon set (`[ui] icons = "unicode" | "nerd" | "ascii" | "none"`). Each client's `Theme` carries its icon set and whether it gets gradients (`[ui] gradients`, only for truecolor clients). `Theme::sheen` makes gradients that keep their text's contrast; `Theme::paint` falls back to the flat theme colour.
 - **Wallpaper (D-089):** `[ui] wallpaper = "pattern" | "none" | <picture path>`; a picture is decoded on its own thread, which wakes the desktop through the PTY event queue.
+- **Start (D-091):** `[ui] start = "desktop"` (the default) floats each new session's and workspace's first terminal over the wallpaper; `"terminal"` tiles it full screen. Restored sessions keep their saved layout.
 - **Graphics:** `[graphics] protocol = "auto" | "kitty" | "sixel" | "iterm2" | "blocks"`.
 - **Clipboard:** `[clipboard] history` (entries kept in memory, default 50; 0 keeps none).
 - **Widgets:** `[widgets.<name>]` for WASM status-line widgets (§9, D-051).
