@@ -124,6 +124,50 @@ impl Account {
         default_home(self.tool, get, home)
     }
 
+    /// Who the account is signed in as, as far as can be told without
+    /// reading its login: Claude Code keeps the account's email beside its
+    /// settings; a login file's presence says the rest. Empty when it
+    /// cannot be told (Claude Code on macOS keeps its login in the
+    /// Keychain).
+    pub fn signed_in(&self, get: &dyn Fn(&str) -> Option<String>, home: Option<&Path>) -> String {
+        match self.tool {
+            Tool::Claude => {
+                let email = self
+                    .claude_settings(get, home)
+                    .and_then(|f| std::fs::read_to_string(f).ok())
+                    .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+                    .and_then(|v| {
+                        v.pointer("/oauthAccount/emailAddress")
+                            .and_then(|e| e.as_str())
+                            .map(str::to_owned)
+                    });
+                match email {
+                    Some(e) => format!("signed in as {e}"),
+                    None if self
+                        .home(get, home)
+                        .is_some_and(|h| h.join(".credentials.json").exists()) =>
+                    {
+                        "signed in".into()
+                    }
+                    None if cfg!(target_os = "macos") => String::new(),
+                    None => "not signed in".into(),
+                }
+            }
+            Tool::Codex => {
+                let h = self.home(get, home);
+                // A file login, or (Windows) its encrypted one.
+                if h.as_ref().is_some_and(|h| {
+                    h.join("auth.json").exists()
+                        || h.join("secrets").join("codex_auth.age").exists()
+                }) {
+                    "signed in".into()
+                } else {
+                    String::new()
+                }
+            }
+        }
+    }
+
     /// Claude Code's settings file for this account (`.claude.json`, which
     /// holds its user-scope MCP servers): inside the folder for a
     /// TermOS account; for `default`, `~/.claude.json` unless

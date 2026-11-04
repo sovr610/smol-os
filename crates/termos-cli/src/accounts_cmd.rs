@@ -24,7 +24,8 @@ pub(crate) enum AccountCmd {
     /// skills shared into it; then sign in.
     Add {
         cli: String,
-        name: String,
+        /// Asked for when not given.
+        name: Option<String>,
         /// Shown instead of the name, e.g. "Work (Max)".
         #[arg(long)]
         label: Option<String>,
@@ -73,6 +74,18 @@ pub(crate) enum AccountCmd {
     },
 }
 
+/// A line typed in answer to `question` (in a terminal only).
+fn ask(question: &str) -> anyhow::Result<String> {
+    if !std::io::stdin().is_terminal() {
+        bail!("needs an answer: give it on the command line");
+    }
+    print!("{question}");
+    std::io::stdout().flush()?;
+    let mut line = String::new();
+    std::io::stdin().read_line(&mut line)?;
+    Ok(line.trim().to_owned())
+}
+
 fn tool(cli: &str) -> anyhow::Result<Tool> {
     match Tool::from_name(cli) {
         Some(t) => Ok(t),
@@ -101,44 +114,8 @@ fn tokens(text: &str) -> anyhow::Result<Option<u64>> {
     Ok((n > 0).then_some(n))
 }
 
-/// Who an account is signed in as, as far as can be told without reading
-/// its login: Claude Code keeps the account's email beside its settings.
 fn signed_in(a: &Account) -> String {
-    let home = home();
-    match a.tool {
-        Tool::Claude => {
-            let email = a
-                .claude_settings(&env, home.as_deref())
-                .and_then(|f| std::fs::read_to_string(f).ok())
-                .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
-                .and_then(|v| {
-                    v.pointer("/oauthAccount/emailAddress")
-                        .and_then(|e| e.as_str())
-                        .map(str::to_owned)
-                });
-            match email {
-                Some(e) => format!("signed in as {e}"),
-                None if a
-                    .home(&env, home.as_deref())
-                    .is_some_and(|h| h.join(".credentials.json").exists()) =>
-                {
-                    "signed in".into()
-                }
-                // On macOS the login is in the Keychain.
-                None if cfg!(target_os = "macos") => String::new(),
-                None => "not signed in".into(),
-            }
-        }
-        Tool::Codex => {
-            if a.home(&env, home.as_deref())
-                .is_some_and(|h| h.join("auth.json").exists())
-            {
-                "signed in".into()
-            } else {
-                "not signed in".into()
-            }
-        }
-    }
+    a.signed_in(&env, home().as_deref())
 }
 
 pub(crate) fn account_command(
@@ -179,6 +156,14 @@ pub(crate) fn account_command(
             no_sign_in,
         } => {
             let t = tool(cli)?;
+            let name = match name {
+                Some(n) => n.clone(),
+                None => ask(&format!(
+                    "A name for the new {} account (letters, digits, - and _): ",
+                    t.title()
+                ))?,
+            };
+            let name = &name;
             let from = accounts::default_home(t, &env, home().as_deref());
             let a = all
                 .add(t, name, label.as_deref(), from.as_deref())
@@ -256,10 +241,25 @@ pub(crate) fn account_command(
         } => {
             let t = tool(cli)?;
             let mut meta: Meta = all.get(t, name).map_err(|e| anyhow::anyhow!("{e}"))?.meta;
-            if let Some(v) = five_hour {
+            let (mut five_hour, mut week) = (five_hour.clone(), week.clone());
+            if five_hour.is_none() && week.is_none() {
+                // In a window: ask (Enter keeps a value).
+                let shown = |b: Option<u64>| b.map_or("none".to_owned(), |n| n.to_string());
+                let a = ask(&format!(
+                    "Tokens per 5 hours (now {}; 2M, 500k, 0 for none): ",
+                    shown(meta.budget_5h)
+                ))?;
+                five_hour = Some(a).filter(|a| !a.is_empty());
+                let a = ask(&format!(
+                    "Tokens per 7 days (now {}): ",
+                    shown(meta.budget_week)
+                ))?;
+                week = Some(a).filter(|a| !a.is_empty());
+            }
+            if let Some(v) = &five_hour {
                 meta.budget_5h = tokens(v)?;
             }
-            if let Some(v) = week {
+            if let Some(v) = &week {
                 meta.budget_week = tokens(v)?;
             }
             all.set_meta(t, name, meta)

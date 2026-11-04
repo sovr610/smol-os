@@ -211,6 +211,8 @@ pub enum LaunchKind {
     Audit,
     /// The command center (`center.open`, D-093).
     Center,
+    /// The usage app: every agent CLI account (`usage.open`, D-097).
+    Usage,
 }
 
 /// What the desktop knows when it opens a launched window.

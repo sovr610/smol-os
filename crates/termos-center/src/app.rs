@@ -302,20 +302,21 @@ impl CommandCenter {
 // ---------------------------------------------------------------------
 // Drawing
 
-/// Draws into the buffer and remembers where the buttons are.
-struct Ui<'a> {
-    buf: &'a mut Buffer,
-    theme: &'a Theme,
-    buttons: &'a mut Vec<(TuiRect, Button)>,
-    area: TuiRect,
+/// Draws into the buffer and remembers where the buttons are (`B`: what
+/// a button does).
+pub(crate) struct Ui<'a, B> {
+    pub(crate) buf: &'a mut Buffer,
+    pub(crate) theme: &'a Theme,
+    pub(crate) buttons: &'a mut Vec<(TuiRect, B)>,
+    pub(crate) area: TuiRect,
 }
 
-fn width(s: &str) -> u16 {
+pub(crate) fn width(s: &str) -> u16 {
     u16::try_from(UnicodeWidthStr::width(s)).unwrap_or(u16::MAX)
 }
 
 /// `s` cut to `max` columns (with `…`).
-fn fit(s: &str, max: u16) -> String {
+pub(crate) fn fit(s: &str, max: u16) -> String {
     if width(s) <= max {
         return s.to_owned();
     }
@@ -377,7 +378,7 @@ fn stretch(data: &[f64], full: usize, n: usize) -> Vec<f64> {
         .collect()
 }
 
-fn tokens(n: u64) -> String {
+pub(crate) fn tokens(n: u64) -> String {
     match n {
         0..1_000 => n.to_string(),
         1_000..1_000_000 => format!("{:.1}k", n as f64 / 1_000.0),
@@ -385,12 +386,12 @@ fn tokens(n: u64) -> String {
     }
 }
 
-fn dollars(c: Option<f64>) -> String {
+pub(crate) fn dollars(c: Option<f64>) -> String {
     c.map_or_else(|| "–".to_owned(), |c| format!("${c:.2}"))
 }
 
-impl Ui<'_> {
-    fn text(&mut self, x: u16, y: u16, s: &str, style: Style) -> u16 {
+impl<B> Ui<'_, B> {
+    pub(crate) fn text(&mut self, x: u16, y: u16, s: &str, style: Style) -> u16 {
         if y >= self.area.bottom() || x >= self.area.right() {
             return x;
         }
@@ -400,21 +401,21 @@ impl Ui<'_> {
         x + width(&shown)
     }
 
-    fn fg(&self, c: Color) -> Style {
+    pub(crate) fn fg(&self, c: Color) -> Style {
         Style::new().fg(c)
     }
 
-    fn muted(&self) -> Style {
+    pub(crate) fn muted(&self) -> Style {
         self.fg(self.theme.colors.muted)
     }
 
-    fn heading(&mut self, x: u16, y: u16, s: &str) -> u16 {
+    pub(crate) fn heading(&mut self, x: u16, y: u16, s: &str) -> u16 {
         let style = self.fg(self.theme.colors.accent).attrs(Attrs::BOLD);
         self.text(x, y, s, style)
     }
 
     /// A clickable label: `[ label ]` in the panel's key style.
-    fn button(&mut self, x: u16, y: u16, label: &str, button: Button) -> u16 {
+    pub(crate) fn button(&mut self, x: u16, y: u16, label: &str, button: B) -> u16 {
         let text = format!("[{label}]");
         let w = width(&text);
         if y >= self.area.bottom() || x + w > self.area.right() {
@@ -426,7 +427,7 @@ impl Ui<'_> {
         x + w + 1
     }
 
-    fn meter(&mut self, rect: TuiRect, label: &str, ratio: f64, value: &str) {
+    pub(crate) fn meter(&mut self, rect: TuiRect, label: &str, ratio: f64, value: &str) {
         let c = &self.theme.colors;
         let fill = if ratio > 0.9 {
             c.error
@@ -448,7 +449,7 @@ impl Ui<'_> {
         .render(rect, self.buf);
     }
 
-    fn hline(&mut self, y: u16) {
+    pub(crate) fn hline(&mut self, y: u16) {
         if y < self.area.bottom() {
             let line = "─".repeat(usize::from(self.area.width));
             let style = self.fg(self.theme.colors.border);
@@ -458,7 +459,7 @@ impl Ui<'_> {
 }
 
 impl CommandCenter {
-    fn draw_tabs(&mut self, ui: &mut Ui<'_>) {
+    fn draw_tabs(&mut self, ui: &mut Ui<'_, Button>) {
         let mut x = ui.area.x + 1;
         let y = ui.area.y;
         for t in Tab::ALL {
@@ -492,7 +493,7 @@ impl CommandCenter {
         ui.hline(y + 1);
     }
 
-    fn draw_footer(&mut self, ui: &mut Ui<'_>) {
+    fn draw_footer(&mut self, ui: &mut Ui<'_, Button>) {
         let y = ui.area.bottom().saturating_sub(1);
         let x = ui.area.x + 1;
         if let Some(c) = &self.confirm {
@@ -527,7 +528,7 @@ impl CommandCenter {
         ui.text(x, y, hints, style);
     }
 
-    fn draw_overview(&mut self, ui: &mut Ui<'_>, body: TuiRect) {
+    fn draw_overview(&mut self, ui: &mut Ui<'_, Button>, body: TuiRect) {
         let half = body.width / 2;
         let left = TuiRect::new(body.x + 1, body.y, half.saturating_sub(2), body.height);
         let right = TuiRect::new(
@@ -715,7 +716,7 @@ impl CommandCenter {
         }
     }
 
-    fn draw_ai(&mut self, ui: &mut Ui<'_>, body: TuiRect) {
+    fn draw_ai(&mut self, ui: &mut Ui<'_, Button>, body: TuiRect) {
         let x = body.x + 1;
         let mut y = body.y;
         let fgs = ui.fg(ui.theme.colors.fg);
@@ -892,7 +893,7 @@ impl CommandCenter {
         }
     }
 
-    fn draw_system(&mut self, ui: &mut Ui<'_>, body: TuiRect) {
+    fn draw_system(&mut self, ui: &mut Ui<'_, Button>, body: TuiRect) {
         let half = (body.width * 11 / 20).max(30).min(body.width);
         let left = TuiRect::new(body.x + 1, body.y, half.saturating_sub(2), body.height);
         let right = TuiRect::new(
@@ -1046,7 +1047,7 @@ impl CommandCenter {
         }
     }
 
-    fn draw_history(&mut self, ui: &mut Ui<'_>, body: TuiRect) {
+    fn draw_history(&mut self, ui: &mut Ui<'_, Button>, body: TuiRect) {
         let x = body.x + 1;
         let mut y = body.y;
         let mut bx = ui.heading(x, y, "Range") + 1;

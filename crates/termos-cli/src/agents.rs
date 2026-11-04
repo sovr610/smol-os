@@ -432,7 +432,7 @@ pub(crate) fn agent_command(
 }
 
 /// In a TermOS window: the outcome stays until Enter.
-fn pause(wait: bool, result: anyhow::Result<ExitCode>) -> anyhow::Result<ExitCode> {
+pub(crate) fn pause(wait: bool, result: anyhow::Result<ExitCode>) -> anyhow::Result<ExitCode> {
     if !wait {
         return result;
     }

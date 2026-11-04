@@ -80,6 +80,7 @@ impl Desktop {
             }
         }
         agents.push(Entry::Separator);
+        agents.push(Entry::item("Usage and accounts", Command::UsageOpen));
         if !switch.is_empty() {
             agents.push(Entry::submenu("Accounts", switch).icon(Icon::Agent));
         }

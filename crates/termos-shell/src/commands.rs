@@ -107,6 +107,12 @@ pub enum Command {
     AgentUpdate,
     /// Make an account the one a CLI uses: "claude work" (D-097).
     AccountUse(String),
+    /// An account task in a window of its own (`termos account …`):
+    /// "add claude", "sign-in claude work", "budget claude work",
+    /// "statusline claude on" (D-097).
+    AccountTask(String),
+    /// The usage app (D-097).
+    UsageOpen,
     /// Continue the focused agent window's conversation as another
     /// account (D-097).
     AgentSwap(String),
@@ -287,6 +293,30 @@ pub const COMMANDS: &[CommandInfo] = &[
         description: "Use another Claude Code or Codex account",
         arg: Some("claude work"),
     },
+    info(
+        "usage.open",
+        "Usage and accounts: every Claude Code and Codex account",
+    ),
+    CommandInfo {
+        name: "account.add",
+        description: "Add a Claude Code or Codex account",
+        arg: Some("claude"),
+    },
+    CommandInfo {
+        name: "account.sign-in",
+        description: "Sign in to an account",
+        arg: Some("claude work"),
+    },
+    CommandInfo {
+        name: "account.budget",
+        description: "Token budgets for an account (shown in the usage app)",
+        arg: Some("claude work"),
+    },
+    CommandInfo {
+        name: "account.statusline",
+        description: "Claude Code's plan limits in the usage app (on or off)",
+        arg: Some("claude on"),
+    },
     CommandInfo {
         name: "agent.swap",
         description: "Continue this agent window as another account",
@@ -366,17 +396,30 @@ impl FromStr for Command {
     type Err = CommandError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        // Two words: the CLI and the account (D-097).
-        if let Some(rest) = s.trim_start().strip_prefix("account.use")
-            && (rest.is_empty() || rest.starts_with(char::is_whitespace))
-        {
-            let words: Vec<&str> = rest.split_whitespace().collect();
-            return match words.as_slice() {
-                [cli, name] => Ok(Command::AccountUse(format!("{cli} {name}"))),
-                _ => Err(CommandError(
-                    "`account.use` needs a CLI and an account: claude work".into(),
-                )),
-            };
+        // Account commands take the CLI and more words (D-097).
+        for (name, words, example) in [
+            ("account.use", 2, "claude work"),
+            ("account.add", 1, "claude"),
+            ("account.sign-in", 2, "claude work"),
+            ("account.budget", 2, "claude work"),
+            ("account.statusline", 2, "claude on"),
+        ] {
+            if let Some(rest) = s.trim_start().strip_prefix(name)
+                && (rest.is_empty() || rest.starts_with(char::is_whitespace))
+            {
+                let given: Vec<&str> = rest.split_whitespace().collect();
+                if given.len() != words {
+                    return Err(CommandError(format!("`{name}` needs {example}")));
+                }
+                let arg = given.join(" ");
+                return Ok(match name {
+                    "account.use" => Command::AccountUse(arg),
+                    _ => Command::AccountTask(format!(
+                        "{} {arg}",
+                        name.trim_start_matches("account.")
+                    )),
+                });
+            }
         }
         // A path is the rest of the line, spaces and all.
         for (name, optional) in PATH_COMMANDS {
@@ -511,6 +554,7 @@ impl FromStr for Command {
                 )),
             },
             "agent.update" => no_arg(Command::AgentUpdate),
+            "usage.open" => no_arg(Command::UsageOpen),
             "agent.swap" => match arg {
                 Some(a) => Ok(Command::AgentSwap(a.trim().to_owned())),
                 None => Err(CommandError("`agent.swap` needs an account name".into())),
@@ -627,6 +671,8 @@ impl fmt::Display for Command {
             Command::AgentInstall(n) => write!(f, "agent.install {n}"),
             Command::AgentUpdate => f.write_str("agent.update"),
             Command::AccountUse(a) => write!(f, "account.use {a}"),
+            Command::AccountTask(t) => write!(f, "account.{t}"),
+            Command::UsageOpen => f.write_str("usage.open"),
             Command::AgentSwap(a) => write!(f, "agent.swap {a}"),
             Command::AuditOpen(id) if id.is_empty() => f.write_str("audit.open"),
             Command::AuditOpen(id) => write!(f, "audit.open {id}"),

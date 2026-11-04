@@ -1219,11 +1219,17 @@ impl Desktop {
 
     /// An external CLI agent (`termos agent external NAME`) in a float.
     fn open_external_agent(&mut self, name: &str, area: Rect) {
-        let account = self
-            .agent_accounts()
-            .into_iter()
-            .find(|a| a.cli == name && a.active)
-            .map(|a| a.name);
+        // `claude@work`: as that account.
+        let (name, chosen) = match name.split_once('@') {
+            Some((n, a)) => (n, Some(a.to_owned())),
+            None => (name, None),
+        };
+        let account = chosen.or_else(|| {
+            self.agent_accounts()
+                .into_iter()
+                .find(|a| a.cli == name && a.active)
+                .map(|a| a.name)
+        });
         let cwd = self.focused_cwd();
         self.open_agent_window(name, account, None, area, cwd);
     }
@@ -2331,6 +2337,12 @@ impl Desktop {
                 );
             }
             Command::AccountUse(arg) => self.use_account(&arg),
+            Command::UsageOpen => self.launch(termos_core::app::LaunchKind::Usage, ""),
+            Command::AccountTask(task) => {
+                let mut args = vec!["account", "--wait"];
+                args.extend(task.split_whitespace());
+                self.open_termos_window(&args, &format!("account {task}"), area);
+            }
             Command::AgentSwap(account) => self.swap_agent(&account, area),
             Command::AgentUpdate => {
                 self.open_termos_window(&["agent", "update", "--wait"], "agent updates", area);

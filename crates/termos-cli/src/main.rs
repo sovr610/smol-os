@@ -179,6 +179,9 @@ enum Cmd {
     },
     /// Several accounts of Claude Code and Codex CLI, and which is in use.
     Account {
+        /// Wait for Enter when it ends (TermOS's windows).
+        #[arg(long)]
+        wait: bool,
         #[command(subcommand)]
         action: accounts_cmd::AccountCmd,
     },
@@ -409,9 +412,10 @@ fn run_cli(args: impl IntoIterator<Item = String>) -> anyhow::Result<ExitCode> {
         Some(Cmd::Secret { action }) => agents::secret_command(action, &paths, &config_path),
         Some(Cmd::Agent { action }) => agents::agent_command(action, &paths, &config_path),
         Some(Cmd::Mcp { action }) => agents::mcp_command(action, &paths, &config_path),
-        Some(Cmd::Account { action }) => {
-            accounts_cmd::account_command(action, &paths, &config_path)
-        }
+        Some(Cmd::Account { wait, action }) => agents::pause(
+            *wait,
+            accounts_cmd::account_command(action, &paths, &config_path),
+        ),
         Some(Cmd::Audit { action }) => agents::audit_command(action, &paths),
         Some(Cmd::Sandbox { action }) => agents::sandbox_command(action, &paths),
         Some(Cmd::Model { action }) => models::model_command(action, &paths, &config_path),

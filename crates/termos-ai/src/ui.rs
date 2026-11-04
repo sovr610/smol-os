@@ -141,6 +141,7 @@ impl Launcher for AgentLauncher {
             // The termos binary opens it (termos-center); an agent-only
             // launcher has none.
             LaunchKind::Center => Err("the command center is not part of this build".into()),
+            LaunchKind::Usage => Err("the usage app is not part of this build".into()),
         }
     }
 }

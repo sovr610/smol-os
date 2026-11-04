@@ -43,6 +43,16 @@ impl Launcher for Windows {
                     agents,
                 )))
             }
+            LaunchKind::Usage => {
+                let paths = ctx.paths.clone();
+                let journal = Arc::clone(&self.journal);
+                Ok(Box::new(termos_center::usage::UsageApp::open(Box::new(
+                    move || {
+                        Box::new(termos_center::usage_data::LiveUsage::new(paths, journal))
+                            as Box<dyn termos_center::usage::UsageSource>
+                    },
+                ))))
+            }
             _ => self.agents.open(kind, arg, ctx),
         }
     }

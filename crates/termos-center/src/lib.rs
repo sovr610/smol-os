@@ -18,5 +18,7 @@ pub mod app;
 pub mod data;
 pub mod sampler;
 pub mod theirs;
+pub mod usage;
+pub mod usage_data;
 
 pub use app::CommandCenter;

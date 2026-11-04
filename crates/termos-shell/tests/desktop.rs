@@ -736,6 +736,16 @@ async fn agent_windows_switch_accounts() {
     h.wait_text("work is in use").await;
     assert_eq!(*launcher.0.lock().expect("lock"), "work");
 
+    // The usage app's buttons: account tasks in windows of their own, and
+    // an agent window as a given account.
+    let task: Command = "account.budget claude work".parse().expect("parses");
+    h.desktop.run(task);
+    h.wait_text("stub-termos account --wait budget claude work")
+        .await;
+    let open: Command = "agent.external claude@default".parse().expect("parses");
+    h.desktop.run(open);
+    h.wait_text("--account default claude").await;
+
     // The menu: AI agents → Accounts, the one in use marked.
     h.keys("C-b Enter");
     h.wait_text("AI agents").await;

@@ -368,6 +368,8 @@ pub struct Live {
     verified: BTreeMap<PathBuf, (u64, bool)>,
     /// Claude Code's and Codex CLI's own usage (`[center] cli-usage`).
     theirs: Option<crate::theirs::Reader>,
+    /// Their logs were given (tests), not found from the accounts.
+    theirs_given: bool,
 }
 
 impl Live {
@@ -387,6 +389,7 @@ impl Live {
             history: None,
             verified: BTreeMap::new(),
             theirs: None,
+            theirs_given: false,
         }
     }
 
@@ -395,6 +398,7 @@ impl Live {
     #[must_use]
     pub fn with_cli_usage(mut self, dirs: crate::theirs::Dirs) -> Self {
         self.theirs = Some(crate::theirs::Reader::new(dirs));
+        self.theirs_given = true;
         self
     }
 
@@ -566,15 +570,23 @@ impl Gather for Live {
             let since = now - range.secs();
             let mut records = self.journal.read(since);
             if self.config.center.cli_usage {
-                let reader = self.theirs.get_or_insert_with(|| {
-                    let home = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
-                        .filter(|h| !h.is_empty())
-                        .map(PathBuf::from);
-                    crate::theirs::Reader::new(crate::theirs::Dirs::find(
+                let home = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
+                    .filter(|h| !h.is_empty())
+                    .map(PathBuf::from);
+                let fixed = self.theirs.is_some();
+                let reader = self
+                    .theirs
+                    .get_or_insert_with(crate::theirs::Reader::default);
+                if !fixed || reader.sources().is_empty() {
+                    // Every account's logs (D-097).
+                    let all = termos_devkit::accounts::Accounts::load(&self.paths.data_dir).ok();
+                    let (sources, _) = crate::usage_data::account_sources(
+                        all.as_ref(),
                         &|k| std::env::var(k).ok(),
                         home.as_deref(),
-                    ))
-                });
+                    );
+                    reader.set_sources(sources);
+                }
                 records.extend(reader.read(since));
                 records.sort_by_key(|r| r.time);
             }

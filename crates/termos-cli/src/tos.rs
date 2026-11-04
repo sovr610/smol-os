@@ -89,6 +89,8 @@ enum TosCmd {
     Monitor,
     /// The command center: AI agents and the system, live and over time.
     Center,
+    /// Usage and accounts: every Claude Code and Codex account.
+    Usage,
     /// Settings.
     Settings,
     /// The clipboard history.
@@ -313,6 +315,7 @@ fn run(tos: Tos) -> anyhow::Result<ExitCode> {
         }
         TosCmd::Monitor => named("monitor.open")?,
         TosCmd::Center => named("center.open")?,
+        TosCmd::Usage => named("usage.open")?,
         TosCmd::Settings => named("settings.open")?,
         TosCmd::Clipboard => named("clipboard.open")?,
         TosCmd::Network => named("network.open")?,
