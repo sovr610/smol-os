@@ -20,6 +20,10 @@ termos-render.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 
+# The foreground program on macOS and Windows (Linux reads /proc).
+[target.'cfg(any(target_os = "macos", windows))'.dependencies]
+sysinfo.workspace = true
+
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt", "macros", "time"] }
 

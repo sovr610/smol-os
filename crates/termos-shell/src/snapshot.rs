@@ -117,6 +117,68 @@ pub fn restore_cwd(pane: &PaneSnapshot) -> Option<PathBuf> {
     pane.cwd.clone().filter(|c| c.is_dir())
 }
 
+/// The kind of shell a restored program is typed into.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShellKind {
+    Posix,
+    PowerShell,
+    Cmd,
+}
+
+impl ShellKind {
+    /// The kind of the shell program `program` (a path or a name,
+    /// perhaps followed by arguments).
+    pub fn of(program: &str) -> Self {
+        let first = program.split_whitespace().next().unwrap_or(program);
+        let is = |want: &str| {
+            [program, first]
+                .iter()
+                .any(|p| program_name(p).eq_ignore_ascii_case(want))
+        };
+        if is("pwsh") || is("powershell") {
+            Self::PowerShell
+        } else if is("cmd") {
+            Self::Cmd
+        } else {
+            Self::Posix
+        }
+    }
+}
+
+/// The line that runs `argv` in a shell of kind `shell`, or `None` when an
+/// argument cannot be quoted safely for it (cmd.exe has no way to quote
+/// `"`, `%` or `!`).
+pub fn command_line(argv: &[String], shell: ShellKind) -> Option<String> {
+    if argv.is_empty() || argv.iter().any(|a| a.contains(['\r', '\n'])) {
+        return None;
+    }
+    Some(match shell {
+        ShellKind::Posix => shell_quote(argv),
+        // `&` runs a quoted program; single quotes are literal, '' is one.
+        ShellKind::PowerShell => {
+            let quoted: Vec<String> = argv
+                .iter()
+                .map(|a| format!("'{}'", a.replace('\'', "''")))
+                .collect();
+            format!("& {}", quoted.join(" "))
+        }
+        ShellKind::Cmd => {
+            if argv.iter().any(|a| a.contains(['"', '%', '!'])) {
+                return None;
+            }
+            argv.iter()
+                .map(|a| {
+                    let plain = !a.is_empty()
+                        && a.chars()
+                            .all(|c| c.is_ascii_alphanumeric() || "-_./\\:=,+@".contains(c));
+                    if plain { a.clone() } else { format!("\"{a}\"") }
+                })
+                .collect::<Vec<_>>()
+                .join(" ")
+        }
+    })
+}
+
 /// Quotes a command line for a POSIX shell.
 pub fn shell_quote(argv: &[String]) -> String {
     argv.iter()
@@ -282,6 +344,41 @@ mod tests {
             scrollback: None,
             reopen: None,
         }
+    }
+
+    #[test]
+    fn command_lines_for_each_shell() {
+        let argv = |a: &[&str]| a.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
+        let vim = argv(&[r"C:\Tools\vim.exe", "my notes.md", "it's"]);
+        assert_eq!(
+            ShellKind::of(r"C:\Program Files\PowerShell\7\pwsh.exe"),
+            ShellKind::PowerShell
+        );
+        assert_eq!(ShellKind::of("powershell.exe"), ShellKind::PowerShell);
+        assert_eq!(
+            ShellKind::of(r"C:\Windows\system32\cmd.exe"),
+            ShellKind::Cmd
+        );
+        assert_eq!(ShellKind::of("/bin/zsh"), ShellKind::Posix);
+        assert_eq!(
+            command_line(&vim, ShellKind::PowerShell).as_deref(),
+            Some(r"& 'C:\Tools\vim.exe' 'my notes.md' 'it''s'")
+        );
+        assert_eq!(
+            command_line(&vim, ShellKind::Cmd).as_deref(),
+            Some(r#"C:\Tools\vim.exe "my notes.md" "it's""#)
+        );
+        assert_eq!(
+            command_line(&vim, ShellKind::Posix).as_deref(),
+            Some(r"'C:\Tools\vim.exe' 'my notes.md' 'it'\''s'")
+        );
+        // What cmd cannot quote is not typed at all.
+        assert_eq!(command_line(&argv(&["vim", "100%"]), ShellKind::Cmd), None);
+        assert_eq!(
+            command_line(&argv(&["vim", "a\nb"]), ShellKind::Posix),
+            None
+        );
+        assert_eq!(command_line(&[], ShellKind::Posix), None);
     }
 
     fn sample() -> SessionSnapshot {

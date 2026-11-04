@@ -7,9 +7,15 @@
 //!
 //! - CPU, memory, temperatures, disks, network, processes and the GPU list
 //!   come from `sysinfo` on Linux, macOS and Windows.
+//! - GPU utilisation and memory come from `sysinfo` too, which asks each
+//!   system's own sources: Windows's GPU performance counters and DXGI
+//!   (every vendor), macOS's IOKit.
 //! - GPU temperature and power come from our own probes: Linux sysfs
 //!   (`hwmon` of each DRM card; GPUs that are not on PCI, such as the
-//!   Raspberry Pi's) and NVML for NVIDIA cards, loaded at run time.
+//!   Raspberry Pi's) and NVML for NVIDIA cards, loaded at run time; on
+//!   macOS the temperature comes from the system's sensors (D-106).
+//!   Windows has no vendor-neutral source for them, so AMD and Intel GPUs
+//!   there show no temperature or power (D-101).
 //!
 //! Nothing here runs by itself: a [`Sampler`] reads the system only when
 //! asked, so it costs nothing while no one is looking.
@@ -24,8 +30,6 @@ mod nvidia;
 pub mod sysfs;
 
 pub use gpu::GpuVendor;
-
-// TODO(M9b): GPU temperature and power on macOS (SMC), and for non-NVIDIA GPUs on Windows.
 
 /// The machine, as it is at start: what local models (M7) and the system
 /// monitor's header need.
@@ -246,6 +250,15 @@ impl Sampler {
         #[cfg(any(target_os = "linux", windows))]
         if let Some(nv) = &self.nvidia {
             gpu::merge_nvidia(&mut probes, &nv.readings());
+        }
+        // macOS: the system's own temperature sensors (D-106).
+        #[cfg(target_os = "macos")]
+        if let Some(c) = &self.components {
+            let sensors: Vec<(String, f32)> = c
+                .iter()
+                .filter_map(|s| Some((s.label().to_owned(), s.temperature()?)))
+                .collect();
+            gpu::merge_sensor_temps(&mut probes, &sensors);
         }
         probes.into_iter().map(|p| p.sample).collect()
     }

@@ -231,6 +231,36 @@ pub(crate) fn merge_nvidia(probes: &mut [Probe], readings: &[NvReading]) {
     }
 }
 
+/// Adds the GPU temperature the system's own sensors report (macOS: the
+/// SMC's `TG0P` on Intel Macs, labelled "GPU"; the HID temperature
+/// sensors named for the GPU on Apple silicon): the hottest of them. With
+/// one GPU it is that GPU's; with several, the one GPU that is not
+/// Intel's built-in graphics (the discrete one the SMC measures), if
+/// there is exactly one.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub(crate) fn merge_sensor_temps(probes: &mut [Probe], sensors: &[(String, f32)]) {
+    let hottest = sensors
+        .iter()
+        .filter(|(label, c)| {
+            label.to_ascii_lowercase().contains("gpu") && c.is_finite() && *c > 0.0
+        })
+        .map(|(_, c)| *c)
+        .fold(None, |m: Option<f32>, c| Some(m.map_or(c, |m| m.max(c))));
+    let Some(celsius) = hottest else { return };
+    let target = if probes.len() == 1 {
+        Some(0)
+    } else {
+        let discrete: Vec<usize> = (0..probes.len())
+            .filter(|&i| probes[i].sample.vendor != GpuVendor::Intel)
+            .collect();
+        (discrete.len() == 1).then(|| discrete[0])
+    };
+    if let Some(i) = target {
+        let s = &mut probes[i].sample;
+        s.celsius = s.celsius.or(Some(celsius));
+    }
+}
+
 #[cfg(any(target_os = "linux", windows))]
 fn apply(s: &mut GpuSample, r: &NvReading) {
     s.celsius = s.celsius.or(r.celsius);
@@ -239,6 +269,42 @@ fn apply(s: &mut GpuSample, r: &NvReading) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn sensor_temperatures_go_to_the_gpu_they_measure() {
+        let probe = |vendor: GpuVendor| Probe {
+            pci: None,
+            sample: GpuSample {
+                name: "gpu".into(),
+                vendor,
+                usage: Some(10.0),
+                memory_used: None,
+                memory_total: None,
+                celsius: None,
+                watts: None,
+            },
+        };
+        let sensors = vec![
+            ("GPU MTR Temp Sensor1".to_owned(), 41.5),
+            ("gpu MTR Temp Sensor4".to_owned(), 44.0),
+            ("PMU tdie1".to_owned(), 70.0),
+            ("GPU".to_owned(), f32::NAN),
+        ];
+        // Apple silicon: one GPU, the hottest GPU sensor.
+        let mut one = vec![probe(GpuVendor::Apple)];
+        merge_sensor_temps(&mut one, &sensors);
+        assert_eq!(one[0].sample.celsius, Some(44.0));
+        // An Intel Mac with a discrete GPU: the SMC's reading is the
+        // discrete one's.
+        let mut two = vec![probe(GpuVendor::Intel), probe(GpuVendor::Amd)];
+        merge_sensor_temps(&mut two, &[("GPU".to_owned(), 55.0)]);
+        assert_eq!(two[0].sample.celsius, None);
+        assert_eq!(two[1].sample.celsius, Some(55.0));
+        // No GPU sensor: nothing.
+        let mut none = vec![probe(GpuVendor::Apple)];
+        merge_sensor_temps(&mut none, &[("CPU".to_owned(), 50.0)]);
+        assert_eq!(none[0].sample.celsius, None);
+    }
+
     use super::*;
 
     #[cfg(any(target_os = "linux", windows))]

@@ -1080,6 +1080,21 @@ rewrite history.
   - **Bell:** a frame in bright yellow around the screen's edge for 150 ms, then a repaint. A timer exists only while it shows; bells during the flash add nothing, so a loop of bells cannot strobe. `[kms] visual-bell = false` turns it off.
 - **Alternatives:** the system's clipboard (there is none without a window system); a full-screen inverse flash (harsher to look at); block pictures as before.
 
+## D-106: The foreground program on macOS and Windows; GPU readings from the OS
+- **Status:** Accepted (lead; within D-101) · 2026-11-04
+- **Context:** Tabs, clipboard sources and snapshots name the program running in a pane, and snapshots save its folder and command line so restore can start it again. Linux reads `/proc`; macOS and Windows had nothing. The GPU readings D-101 asks for were partly there already: sysinfo's GPU list takes utilisation and memory from Windows's performance counters and DXGI, and from macOS's IOKit, for every vendor.
+- **Decision:**
+  - **macOS:** the terminal's foreground process group leader, as on Linux. Its name, folder and command line come from `sysinfo`, which uses libproc and sysctl, for that one process.
+  - **Windows** has no foreground process group. The pane's program is therefore the newest process started under its shell, skipping console hosts, found through `sysinfo`'s process list. Its command line and folder come from the process's own parameters. With nothing running under the shell, the shell itself counts, as at a Unix prompt.
+  - **Cost:** tabs ask on every frame, so on these two systems the answer is kept for a second. There is no timer; a stale answer is replaced when asked for.
+  - **Restoring types the command into the pane's shell, quoted for it:**
+    - PowerShell: `& 'prog' 'arg'` with `''` for a quote;
+    - cmd: double quotes, and a command with `"`, `%` or `!` is not typed at all but named as not restarted;
+    - POSIX as before.
+  - **GPU temperature on macOS** comes from the system's own sensors, through sysinfo: the SMC's `TG0P` on Intel Macs, and the HID temperature sensors named for the GPU on Apple silicon. The hottest GPU sensor goes to the only GPU, or to the one discrete GPU beside Intel's built-in graphics. On Apple silicon that is the HID sensor service rather than the SMC D-101 named; it is the source the system itself exposes there.
+  - **Windows:** utilisation and memory from the performance counters, through sysinfo, for every GPU. No temperature or power for AMD and Intel GPUs, as D-101 said.
+- **Alternatives:** our own libproc and process-snapshot FFI (more unsafe code for what sysinfo already does); the console's process list on Windows (`GetConsoleProcessList`, which needs attaching to each pane's console); raw SMC calls on every Mac.
+
 ---
 
 ## Open questions (the owner will be asked before the milestone that needs each one)

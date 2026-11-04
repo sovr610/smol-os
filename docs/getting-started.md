@@ -322,11 +322,13 @@ known gaps listed below).
 - **Input on Windows** goes through the console's VT input mode, as on
   other systems: pastes arrive as one block, and Windows Terminal versions
   that speak the Kitty keyboard protocol get it.
+- **Programs in panes** are named in tabs and saved with the session on
+  Windows too: the newest program started under the pane's shell (Windows
+  has no "foreground" program the way Unix terminals do). Restoring types
+  allowlisted ones into PowerShell or cmd, quoted for that shell.
 - **Not there yet on Windows** (planned for M9b):
   - saving at logoff or shutdown is best effort: `termos kill-server` first
-    if you want to be sure;
-  - snapshots don't record which program ran in a pane, so restore starts
-    plain shells.
+    if you want to be sure.
 
 ## Differences from tmux
 

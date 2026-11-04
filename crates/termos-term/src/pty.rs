@@ -73,6 +73,11 @@ pub struct PtyPane {
     input: std_mpsc::Sender<Vec<u8>>,
     killer: Box<dyn ChildKiller + Send + Sync>,
     pid: Option<u32>,
+    /// The last look at the foreground program, reused for a second: tabs
+    /// ask on every frame, and asking the OS costs more here than reading
+    /// Linux's /proc.
+    #[cfg(any(target_os = "macos", windows))]
+    foreground: std::sync::Mutex<Option<(std::time::Instant, Option<os::Foreground>)>>,
 }
 
 impl std::fmt::Debug for PtyPane {
@@ -186,6 +191,8 @@ impl PtyPane {
             input,
             killer,
             pid,
+            #[cfg(any(target_os = "macos", windows))]
+            foreground: std::sync::Mutex::new(None),
         })
     }
 
@@ -257,30 +264,65 @@ impl PtyPane {
         leader.or(self.pid)
     }
 
-    /// Name of the foreground program (Linux; `None` elsewhere).
-    // TODO(M9b): foreground program name, directory and command line on macOS (libproc) and Windows (process snapshot APIs), so snapshots there name and restore programs too.
+    /// Name of the foreground program.
     pub fn foreground_name(&self) -> Option<String> {
-        let pid = self.foreground_pid()?;
-        proc_comm(pid)
+        #[cfg(any(target_os = "macos", windows))]
+        return self.foreground_info()?.name;
+        #[cfg(not(any(target_os = "macos", windows)))]
+        proc_comm(self.foreground_pid()?)
     }
 
-    /// Working directory of the foreground program (Linux; `None` elsewhere).
+    /// Working directory of the foreground program.
     pub fn foreground_cwd(&self) -> Option<PathBuf> {
-        let pid = self.foreground_pid()?;
-        proc_cwd(pid)
+        #[cfg(any(target_os = "macos", windows))]
+        return self.foreground_info()?.cwd;
+        #[cfg(not(any(target_os = "macos", windows)))]
+        proc_cwd(self.foreground_pid()?)
     }
 
     /// The command line of the foreground program when it is not the
     /// pane's own program, e.g. `vim notes.md` started from the shell
-    /// (Linux; `None` elsewhere and at the shell prompt).
+    /// (`None` at the shell prompt).
     pub fn foreground_command(&self) -> Option<Vec<String>> {
-        let pid = self.foreground_pid()?;
-        if Some(pid) == self.pid {
-            return None;
+        #[cfg(any(target_os = "macos", windows))]
+        {
+            let fg = self.foreground_info()?;
+            if Some(fg.pid) == self.pid {
+                return None;
+            }
+            fg.argv
         }
-        // Between fork and exec it is not the user's program yet.
-        proc_comm(pid)?;
-        proc_cmdline(pid)
+        #[cfg(not(any(target_os = "macos", windows)))]
+        {
+            let pid = self.foreground_pid()?;
+            if Some(pid) == self.pid {
+                return None;
+            }
+            // Between fork and exec it is not the user's program yet.
+            proc_comm(pid)?;
+            proc_cmdline(pid)
+        }
+    }
+
+    /// The foreground program as the OS reports it, looked at most once a
+    /// second (no timer: a stale look is replaced when asked for).
+    #[cfg(any(target_os = "macos", windows))]
+    fn foreground_info(&self) -> Option<os::Foreground> {
+        let now = std::time::Instant::now();
+        let mut cache = self.foreground.lock().ok()?;
+        if let Some((at, fg)) = cache.as_ref()
+            && now.duration_since(*at) < std::time::Duration::from_secs(1)
+        {
+            return fg.clone();
+        }
+        // macOS: the terminal's foreground process group, as on Linux.
+        // Windows has none: the newest program started under the shell.
+        #[cfg(target_os = "macos")]
+        let fg = self.foreground_pid().and_then(os::describe);
+        #[cfg(windows)]
+        let fg = self.pid.and_then(os::newest_below);
+        *cache = Some((now, fg.clone()));
+        fg
     }
 }
 
@@ -307,7 +349,7 @@ fn proc_comm(pid: u32) -> Option<String> {
     Some(name)
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
 fn proc_comm(_pid: u32) -> Option<String> {
     None
 }
@@ -323,7 +365,7 @@ fn proc_cmdline(pid: u32) -> Option<Vec<String>> {
     (!argv.is_empty()).then_some(argv)
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
 fn proc_cmdline(_pid: u32) -> Option<Vec<String>> {
     None
 }
@@ -333,9 +375,102 @@ fn proc_cwd(pid: u32) -> Option<PathBuf> {
     std::fs::read_link(format!("/proc/{pid}/cwd")).ok()
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
 fn proc_cwd(_pid: u32) -> Option<PathBuf> {
     None
+}
+
+/// The foreground program on macOS and Windows, through `sysinfo` (which
+/// asks libproc and sysctl on macOS, and the process list and each
+/// process's parameters on Windows).
+#[cfg(any(target_os = "macos", windows))]
+mod os {
+    use std::path::PathBuf;
+
+    use sysinfo::{Pid, Process, ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub(super) struct Foreground {
+        pub pid: u32,
+        pub name: Option<String>,
+        pub cwd: Option<PathBuf>,
+        pub argv: Option<Vec<String>>,
+    }
+
+    fn details() -> ProcessRefreshKind {
+        ProcessRefreshKind::nothing()
+            .with_cmd(UpdateKind::Always)
+            .with_cwd(UpdateKind::Always)
+    }
+
+    fn foreground(pid: u32, p: &Process) -> Foreground {
+        let name = p.name().to_string_lossy();
+        let name = match name.len().checked_sub(4) {
+            Some(i) if name.is_char_boundary(i) && name[i..].eq_ignore_ascii_case(".exe") => {
+                name[..i].to_owned()
+            }
+            _ => name.into_owned(),
+        };
+        let argv: Vec<String> = p
+            .cmd()
+            .iter()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        Foreground {
+            pid,
+            name: (!name.is_empty()).then_some(name),
+            cwd: p.cwd().map(std::path::Path::to_path_buf),
+            argv: (!argv.is_empty()).then_some(argv),
+        }
+    }
+
+    /// The process `pid`.
+    #[cfg(target_os = "macos")]
+    pub(super) fn describe(pid: u32) -> Option<Foreground> {
+        let mut sys = System::new().ok()?;
+        let id = Pid::from_u32(pid);
+        sys.refresh_processes_specifics(ProcessesToUpdate::Some(&[id]), true, details());
+        sys.process(id).map(|p| foreground(pid, p))
+    }
+
+    /// The newest process below `shell` (not a console host): the
+    /// program the user started last, or the shell itself.
+    #[cfg(windows)]
+    pub(super) fn newest_below(shell: u32) -> Option<Foreground> {
+        use std::collections::HashMap;
+
+        let mut sys = System::new().ok()?;
+        sys.refresh_processes_specifics(
+            ProcessesToUpdate::All,
+            true,
+            ProcessRefreshKind::nothing(),
+        );
+        let mut children: HashMap<Pid, Vec<Pid>> = HashMap::new();
+        for (pid, p) in sys.processes() {
+            if let Some(parent) = p.parent() {
+                children.entry(parent).or_default().push(*pid);
+            }
+        }
+        let root = Pid::from_u32(shell);
+        let (mut best, mut best_start) = (root, 0);
+        let mut stack = vec![root];
+        let mut seen = std::collections::HashSet::new();
+        while let Some(parent) = stack.pop() {
+            for &pid in children.get(&parent).into_iter().flatten() {
+                let Some(p) = sys.process(pid) else { continue };
+                let name = p.name().to_string_lossy().to_ascii_lowercase();
+                if !seen.insert(pid) || name == "conhost.exe" || name == "openconsole.exe" {
+                    continue;
+                }
+                stack.push(pid);
+                if p.start_time() >= best_start {
+                    (best, best_start) = (pid, p.start_time());
+                }
+            }
+        }
+        sys.refresh_processes_specifics(ProcessesToUpdate::Some(&[best]), false, details());
+        sys.process(best).map(|p| foreground(best.as_u32(), p))
+    }
 }
 
 #[cfg(test)]
@@ -404,7 +539,7 @@ mod tests {
         assert_eq!(code, Some(0));
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(unix)]
     #[tokio::test]
     async fn reports_the_foreground_command() {
         let (tx, mut rx) = mpsc::channel(64);
@@ -426,6 +561,54 @@ mod tests {
             );
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
+        assert_eq!(pane.foreground_name().as_deref(), Some("sleep"));
+        assert!(pane.foreground_cwd().is_some_and(|d| d.is_dir()));
+    }
+
+    /// Windows has no foreground process group: the newest program under
+    /// the shell is the one shown and restored.
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn reports_the_newest_program_under_the_shell() {
+        let (tx, mut rx) = mpsc::channel(64);
+        let spec = SpawnSpec::shell("cmd.exe", 60, 5);
+        let pane = PtyPane::spawn(PaneId(4), &spec, tx).expect("spawn");
+        // Answer ConPTY's cursor query, and keep the channel drained.
+        let writer = pane.input.clone();
+        tokio::spawn(async move {
+            while let Some(ev) = rx.recv().await {
+                if let PtyEvent::Output(_, bytes) = ev
+                    && bytes.windows(4).any(|w| w == b"\x1b[6n")
+                {
+                    let _ = writer.send(b"\x1b[1;1R".to_vec());
+                }
+            }
+        });
+        pane.write(b"ping -n 60 127.0.0.1\r".to_vec());
+        let deadline = std::time::Instant::now() + Duration::from_secs(20);
+        loop {
+            if let Some(argv) = pane.foreground_command() {
+                assert!(
+                    argv.first()
+                        .is_some_and(|a| a.to_ascii_lowercase().contains("ping")),
+                    "{argv:?}"
+                );
+                assert!(argv.iter().any(|a| a == "127.0.0.1"), "{argv:?}");
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "ping never showed up under the shell"
+            );
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        assert!(
+            pane.foreground_name()
+                .is_some_and(|n| n.eq_ignore_ascii_case("ping")),
+            "{:?}",
+            pane.foreground_name()
+        );
+        assert!(pane.foreground_cwd().is_some_and(|d| d.is_dir()));
     }
 
     #[cfg(windows)]

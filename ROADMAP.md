@@ -735,7 +735,7 @@ What was shown, and where (Linux, in an isolated `tmux -L termos-m7` with its ow
 - [x] Kitty keyboard release events and alternate keys (flags 2 and 4): the terminal is asked for them only while the focused program wants them; desktop and end-to-end tests (D-103)
 - [x] App windows saved and restored with the session: each app gives the command that reopens it; restore puts it back in the saved layout (D-104)
 - [x] The KMS console's clipboard, visual bell and pixel images: the console keeps the last copy (Ctrl+Shift+V, Shift+Insert), flashes for the bell, and draws Kitty-style placements as pixels (D-105)
-- [ ] Foreground programs on macOS and Windows; GPU readings from the OS
+- [x] Foreground programs on macOS and Windows; GPU readings from the OS: sysinfo for one process on macOS, the newest program under the shell on Windows, restored commands quoted per shell; macOS GPU temperature from the system's sensors (D-106)
 - [ ] Windows: job objects, saving at logoff, the bundled ConPTY and images in panes
 - [ ] Windows: the AppContainer sandbox
 
@@ -1035,9 +1035,7 @@ Generated from the `TODO(M<n>)` markers in the code. Don't edit by hand; run `ca
 | M5b | `crates/termos-devkit/src/lib.rs` | dev rootfs, Podman and the package manager UI. |
 | M9b | `crates/termos-ai/src/sandbox.rs` | a Windows sandbox for agent commands (an AppContainer or a restricted token); until then every command asks. |
 | M9b | `crates/termos-harness/src/backends.rs` | stop the CLI's whole process tree on Windows (a job |
-| M9b | `crates/termos-hw/src/lib.rs` | GPU temperature and power on macOS (SMC), and for non-NVIDIA GPUs on Windows. |
 | M9b | `crates/termos-shell/src/server.rs` | a hidden window for WM_ENDSESSION, so logoff and shutdown always save. |
 | M9b | `crates/termos-term/src/intercept.rs` | images from programs in panes on Windows, where ConPTY can filter APC and DCS sequences out. |
-| M9b | `crates/termos-term/src/pty.rs` | foreground program name, directory and command line on macOS (libproc) and Windows (process snapshot APIs), so snapshots there name and restore programs too. |
 | M10d | `crates/termos-devkit/src/cli_agents.rs` | curl on the bare-metal images (the owner picks its TLS library), for `termos agent install` there. |
 <!-- open-work:end -->

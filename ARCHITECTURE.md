@@ -322,7 +322,7 @@ Window = { id, title, source: Pty | App | Plugin | Agent, state: normal | minimi
   - **When:** debounced after structural changes and at shutdown. They are deleted when a session ends on purpose.
   - **Restore:** a fresh server restores them by policy, `always | ask | never` (default ask). Shells restart in their directories and allowlisted programs (`restore-programs`) are re-run.
 - **Logs:** `$XDG_STATE_HOME/termos/log/` (D-017).
-- **On Windows** (D-038): config lives in `%APPDATA%\termos`, state (snapshots, logs) in `%LOCALAPPDATA%\termos`; the `XDG_*` variables still override both. The default shell is `pwsh`, then `powershell`, then `%COMSPEC%`. Snapshots name no foreground programs there yet.
+- **On Windows** (D-038): config lives in `%APPDATA%\termos`, state (snapshots, logs) in `%LOCALAPPDATA%\termos`; the `XDG_*` variables still override both. The default shell is `pwsh`, then `powershell`, then `%COMSPEC%`. With no foreground process group there, the program a pane shows and saves is the newest one started under its shell; restored commands are quoted for PowerShell or cmd (D-106).
 
 ---
 

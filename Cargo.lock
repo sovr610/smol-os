@@ -5650,6 +5650,7 @@ dependencies = [
  "base64 0.23.1",
  "flate2",
  "portable-pty",
+ "sysinfo",
  "termos-core",
  "termos-render",
  "tokio",

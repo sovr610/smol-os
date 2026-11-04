@@ -582,6 +582,8 @@ impl Desktop {
             return Err(io::Error::other("the snapshot has no panes"));
         }
         let allow = d.config.session.restore_programs.clone();
+        // Restored programs are typed into the pane's shell, quoted for it.
+        let shell = snapshot::ShellKind::of(&d.config.shell_program(d.opts.env_shell.clone()));
         let area = d.layout_area();
         let mut map = std::collections::HashMap::new();
         let mut skipped = Vec::new();
@@ -620,9 +622,10 @@ impl Desktop {
                 vt.advance(text.as_bytes());
             }
             match snapshot::relaunch(saved, &allow) {
-                Relaunch::Program(argv) => {
-                    pty.write(format!("{}\r", snapshot::shell_quote(&argv)).into_bytes());
-                }
+                Relaunch::Program(argv) => match snapshot::command_line(&argv, shell) {
+                    Some(line) => pty.write(format!("{line}\r").into_bytes()),
+                    None => skipped.push(snapshot::program_name(&argv[0]).to_owned()),
+                },
                 Relaunch::Skipped(name) => skipped.push(name),
                 Relaunch::Shell => {}
             }
