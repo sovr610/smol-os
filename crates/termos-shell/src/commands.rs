@@ -101,6 +101,10 @@ pub enum Command {
     AgentResume(String),
     /// An external CLI agent (Claude Code, Codex…) in a terminal window.
     AgentExternal(String),
+    /// Install Claude Code or Codex CLI (`termos agent install`, D-094).
+    AgentInstall(String),
+    /// Update the CLI agents TermOS installed.
+    AgentUpdate,
     /// The agents' audit logs (empty: the newest).
     AuditOpen(String),
     /// The command center (D-093).
@@ -267,6 +271,12 @@ pub const COMMANDS: &[CommandInfo] = &[
         description: "External agent (Claude Code, Codex…)",
         arg: Some("claude"),
     },
+    CommandInfo {
+        name: "agent.install",
+        description: "Install Claude Code or Codex CLI (checked download)",
+        arg: Some("claude"),
+    },
+    info("agent.update", "Update Claude Code and Codex CLI"),
     info("audit.open", "AI agent audit logs"),
     info(
         "center.open",
@@ -467,6 +477,13 @@ impl FromStr for Command {
                     "`agent.external` needs a name: claude, codex, gemini, aider, opencode or one from [agents.external]".into(),
                 )),
             },
+            "agent.install" => match arg {
+                Some(a) => Ok(Command::AgentInstall(a.to_owned())),
+                None => Err(CommandError(
+                    "`agent.install` needs a name: claude or codex".into(),
+                )),
+            },
+            "agent.update" => no_arg(Command::AgentUpdate),
             "audit.open" => Ok(Command::AuditOpen(arg.unwrap_or("").to_owned())),
             "center.open" => no_arg(Command::CenterOpen),
             "network.open" => no_arg(Command::NetworkOpen),
@@ -576,6 +593,8 @@ impl fmt::Display for Command {
             Command::AgentResume(id) if id.is_empty() => f.write_str("agent.resume"),
             Command::AgentResume(id) => write!(f, "agent.resume {id}"),
             Command::AgentExternal(n) => write!(f, "agent.external {n}"),
+            Command::AgentInstall(n) => write!(f, "agent.install {n}"),
+            Command::AgentUpdate => f.write_str("agent.update"),
             Command::AuditOpen(id) if id.is_empty() => f.write_str("audit.open"),
             Command::AuditOpen(id) => write!(f, "audit.open {id}"),
             Command::CenterOpen => f.write_str("center.open"),

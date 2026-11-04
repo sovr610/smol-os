@@ -144,7 +144,11 @@ fn command_icon(c: &Command) -> Option<Icon> {
         Command::Task(_) => Icon::Run,
         Command::GitOpen => Icon::Git,
         Command::ClipboardOpen => Icon::Clipboard,
-        Command::AgentOpen(_) | Command::AgentResume(_) | Command::AgentExternal(_) => Icon::Agent,
+        Command::AgentOpen(_)
+        | Command::AgentResume(_)
+        | Command::AgentExternal(_)
+        | Command::AgentInstall(_)
+        | Command::AgentUpdate => Icon::Agent,
         Command::AuditOpen(_) => Icon::Audit,
         Command::CenterOpen => Icon::Center,
         _ => return None,

@@ -913,6 +913,14 @@ rewrite history.
   - **Cost** comes from the prices the agents already know (configured, or listed by the provider); no model or price is built in.
 - **Alternatives:** SQLite for the history (a C dependency for a few megabytes of append-only records); deriving history from saved conversations and audit logs alone (no per-turn timing, no system load); the window reading the desktop's state directly (it runs in the shell's process but lives in a crate the shell cannot depend on; the control API is already public and tested).
 
+## D-094: M10d owner answers: verified binaries, the CLI asks, their usage as numbers
+- **Status:** Accepted (owner) · 2026-11-04
+- **Decision:**
+  - **Install:** TermOS downloads each vendor's official native binary itself and checks it before use: Claude Code from Anthropic's release site (the release's `manifest.json`, with a SHA-256 for every platform), Codex CLI from OpenAI's GitHub releases (GitHub's SHA-256 digest of each asset). They live in TermOS's data folder, are updated with `termos agent update`, and need no Node.js and no downloaded script; the same works on the bare-metal images.
+  - **Permission:** Claude Code and Codex ask before each MCP tool call, as they already do. TermOS's MCP server enforces the user's allow and deny rules on top and audits every call; it does not ask a second time.
+  - **Usage:** the command center reads token counts, models and timestamps from their local session logs (`~/.claude/projects`, `~/.codex/sessions`), never the conversation text; a setting turns it off.
+- **Alternatives:** npm packages with Node.js from mise; running the vendors' install scripts; TermOS asking too (two prompts per action); showing only their windows and their calls to TermOS.
+
 ---
 
 ## Open questions (the owner will be asked before the milestone that needs each one)

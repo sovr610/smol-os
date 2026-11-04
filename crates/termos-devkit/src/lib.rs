@@ -13,6 +13,7 @@
 //! - [`tasks`]: build, run and test for a project.
 
 pub mod check;
+pub mod cli_agents;
 pub mod editor;
 pub mod lang;
 pub mod langs;

@@ -40,6 +40,26 @@ pub(crate) enum AgentCmd {
     History,
     /// The external agent presets (Claude Code, Codex CLI, …).
     Presets,
+    /// Install Claude Code or Codex CLI: the vendor's own program, checked
+    /// against its published SHA-256 (`claude`, `codex`, `claude@2.1.90`).
+    Install {
+        name: String,
+        /// Wait for Enter when it ends (TermOS's windows).
+        #[arg(long)]
+        wait: bool,
+    },
+    /// Update what TermOS installed (or only the one named).
+    Update {
+        name: Option<String>,
+        /// Wait for Enter when it ends (TermOS's windows).
+        #[arg(long)]
+        wait: bool,
+    },
+    /// Remove one TermOS installed (your sign-in and settings stay).
+    #[command(alias = "rm")]
+    Remove { name: String },
+    /// Which Claude Code and Codex CLI TermOS installed.
+    Status,
     /// Run an external agent preset here (what `agent.external` opens).
     External {
         name: String,
@@ -346,12 +366,40 @@ pub(crate) fn agent_command(
                 );
             }
         }
-        AgentCmd::External { name, args } => return external_command(&config, name, args),
+        AgentCmd::Install { name, wait } => {
+            return pause(*wait, crate::coding_agents::install(paths, name));
+        }
+        AgentCmd::Update { name, wait } => {
+            return pause(*wait, crate::coding_agents::update(paths, name.as_deref()));
+        }
+        AgentCmd::Remove { name } => return crate::coding_agents::remove(paths, name),
+        AgentCmd::Status => return crate::coding_agents::status(paths),
+        AgentCmd::External { name, args } => return external_command(&config, paths, name, args),
     }
     Ok(ExitCode::SUCCESS)
 }
 
-fn external_command(config: &Config, name: &str, args: &[String]) -> anyhow::Result<ExitCode> {
+/// In a TermOS window: the outcome stays until Enter.
+fn pause(wait: bool, result: anyhow::Result<ExitCode>) -> anyhow::Result<ExitCode> {
+    if !wait {
+        return result;
+    }
+    let code = result.unwrap_or_else(|e| {
+        eprintln!("termos: {e:#}");
+        ExitCode::FAILURE
+    });
+    println!("\n[press Enter to close]");
+    let mut line = String::new();
+    let _ = std::io::stdin().read_line(&mut line);
+    Ok(code)
+}
+
+fn external_command(
+    config: &Config,
+    paths: &Paths,
+    name: &str,
+    args: &[String],
+) -> anyhow::Result<ExitCode> {
     let presets = external::presets(&config.agents.external);
     let Some(preset) = presets.get(name) else {
         let names: Vec<&str> = presets.keys().map(String::as_str).collect();
@@ -360,6 +408,17 @@ fn external_command(config: &Config, name: &str, args: &[String]) -> anyhow::Res
             names.join(", ")
         );
     };
+    // Claude Code and Codex: TermOS's own install, or offered when there
+    // is none (D-094).
+    let mut preset = preset.clone();
+    let mut env = Vec::new();
+    if let Some(program) = preset.command.first()
+        && let Some((path, e)) = crate::coding_agents::resolve_external(paths, program)
+    {
+        preset.command[0] = path.display().to_string();
+        env = e;
+    }
+    let preset = &preset;
     let here = std::env::current_dir()?;
     let helper = std::env::current_exe().ok();
     let caps = sandbox::probe_now(helper.as_deref());
@@ -380,7 +439,7 @@ fn external_command(config: &Config, name: &str, args: &[String]) -> anyhow::Res
         );
     }
     let mut cmd = std::process::Command::new(&argv[0]);
-    cmd.args(&argv[1..]);
+    cmd.args(&argv[1..]).envs(env);
     match cmd.status() {
         Ok(s) => Ok(if s.success() {
             ExitCode::SUCCESS
@@ -389,7 +448,9 @@ fn external_command(config: &Config, name: &str, args: &[String]) -> anyhow::Res
         }),
         Err(e) => {
             eprintln!("termos: cannot start {}: {e}", preset.command[0]);
-            if let Some(url) = preset.install {
+            if termos_devkit::cli_agents::Tool::from_name(name).is_some() {
+                eprintln!("termos: install it with `termos agent install {name}`");
+            } else if let Some(url) = preset.install {
                 eprintln!("termos: install {} first: {url}", preset.description);
             }
             eprintln!("\n[press Enter to close]");

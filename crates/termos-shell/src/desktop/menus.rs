@@ -60,6 +60,10 @@ impl Desktop {
                 .iter()
                 .map(|(name, title)| Entry::item(*title, Command::AgentExternal((*name).into()))),
         );
+        agents.extend([
+            Entry::Separator,
+            Entry::item("Update Claude Code and Codex", Command::AgentUpdate),
+        ]);
         let layouts = Preset::ALL
             .into_iter()
             .map(|p| Entry::item(capitalized(p.name()), Command::LayoutSelect(p)))

@@ -29,7 +29,7 @@ questions (DECISIONS.md, "Open questions").
 | M10a | Mouse-first desktop: menus, context menus, hover and double-click; the `tos` command in every pane (D-084, D-085) | 🔍 |
 | M10b | Graphics: richer chrome, icons, wallpaper, pixel charts where the terminal can show them (D-084, D-087 to D-090) | 🔍 |
 | M10c | The command center: live views and history of the AI and the OS, with actions (D-084, D-092, D-093) | 🔍 |
-| M10d | Claude Code and Codex CLI: installed by TermOS, with a TermOS MCP server (D-084) | ⏳ |
+| M10d | Claude Code and Codex CLI: installed by TermOS, with a TermOS MCP server (D-084, D-094) | 🚧 |
 | M9b | Platform gaps: the Windows agent sandbox and input, snapshots and sensors on macOS and Windows, Kitty keyboard flags, app windows in sessions, the KMS console's clipboard, bell and images (D-077) | ⏳ |
 
 Unfinished work in code is always a `TODO(M<n>)` marker (D-018). The
@@ -886,7 +886,7 @@ Not shown live: agent sessions (no provider keys here; the registry, its Approve
 ---
 
 ## M10d — Claude Code and Codex CLI
-**Status:** ⏳ · Owner answers: installed by TermOS, with a TermOS MCP server, not shipped in images (D-084).
+**Status:** 🚧 · Owner answers: installed by TermOS, with a TermOS MCP server, not shipped in images (D-084); verified native binaries, the CLI asks for each tool call (TermOS rules and audit on top), their usage read as numbers only (D-094).
 
 **Deliverables**
 - `termos agent install claude|codex` (and from the menu) from their official sources on Linux, macOS, Windows and bare metal; updates; their sign-in in a TermOS window.

@@ -1,0 +1,956 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+//! Claude Code and Codex CLI, installed by TermOS (M10d, D-084, D-094).
+//!
+//! Each vendor's official native binary, downloaded with the system's
+//! `curl` (as mise is, D-053) and checked before it is kept:
+//!
+//! - **Claude Code** from Anthropic's release site: the channel's version
+//!   (`stable`), then that release's `manifest.json`, which gives the
+//!   SHA-256 of every platform's binary.
+//! - **Codex CLI** from OpenAI's GitHub releases: the latest release's
+//!   asset for this platform, with the SHA-256 digest GitHub publishes for
+//!   it.
+//!
+//! They go to `<data>/agents/<name>/<version>/`, with a link in
+//! `<data>/bin` (first on every pane's `PATH`), and are registered with
+//! TermOS's MCP server (`termos mcp serve`).
+
+use std::io;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+
+use serde_json::Value;
+
+use crate::mise::sha256_file;
+
+/// Anthropic's release site for Claude Code.
+pub const CLAUDE_RELEASES: &str = "https://downloads.claude.ai/claude-code-releases";
+/// OpenAI's latest Codex release, through GitHub's API.
+pub const CODEX_LATEST: &str = "https://api.github.com/repos/openai/codex/releases/latest";
+/// A tagged Codex release (`…/tags/rust-v0.46.0`).
+pub const CODEX_TAGS: &str = "https://api.github.com/repos/openai/codex/releases/tags";
+
+#[derive(Debug, thiserror::Error)]
+pub enum AgentError {
+    #[error("{0} is not offered for this computer ({1})")]
+    Unsupported(&'static str, String),
+    #[error("cannot download: {0}")]
+    Fetch(String),
+    #[error("the release information is not what TermOS expects: {0}")]
+    Release(String),
+    #[error(
+        "the download does not match its checksum (expected {expected}, got {got}); nothing was installed"
+    )]
+    Checksum { expected: String, got: String },
+    #[error("{0}")]
+    Io(#[from] io::Error),
+    #[error("{0}")]
+    Setup(String),
+}
+
+/// The CLI agents TermOS installs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Tool {
+    Claude,
+    Codex,
+}
+
+impl Tool {
+    pub const ALL: [Tool; 2] = [Tool::Claude, Tool::Codex];
+
+    /// The name in commands (`termos agent install claude`).
+    pub fn name(self) -> &'static str {
+        match self {
+            Tool::Claude => "claude",
+            Tool::Codex => "codex",
+        }
+    }
+
+    pub fn title(self) -> &'static str {
+        match self {
+            Tool::Claude => "Claude Code",
+            Tool::Codex => "Codex CLI",
+        }
+    }
+
+    /// The program's file name.
+    pub fn program(self) -> String {
+        exe(self.name())
+    }
+
+    pub fn from_name(name: &str) -> Option<Tool> {
+        Tool::ALL.into_iter().find(|t| t.name() == name)
+    }
+}
+
+fn exe(name: &str) -> String {
+    if cfg!(windows) {
+        format!("{name}.exe")
+    } else {
+        name.to_owned()
+    }
+}
+
+/// The computer, as the vendors name it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Platform {
+    /// `linux`, `macos` or `windows`.
+    pub os: &'static str,
+    /// `x86_64` or `aarch64`.
+    pub arch: &'static str,
+    /// A Linux without glibc (Alpine, TermOS's own images).
+    pub musl: bool,
+}
+
+impl Platform {
+    /// This computer.
+    pub fn here() -> Platform {
+        let musl = cfg!(target_env = "musl")
+            || (cfg!(target_os = "linux")
+                && std::fs::read_dir("/lib").is_ok_and(|d| {
+                    d.flatten()
+                        .any(|e| e.file_name().to_string_lossy().starts_with("ld-musl-"))
+                }));
+        Platform {
+            os: std::env::consts::OS,
+            arch: std::env::consts::ARCH,
+            musl,
+        }
+    }
+
+    fn describe(self) -> String {
+        format!(
+            "{} {}{}",
+            self.os,
+            self.arch,
+            if self.musl { " (musl)" } else { "" }
+        )
+    }
+
+    /// Claude Code's name for it (`linux-x64-musl`, `darwin-arm64`, …).
+    pub fn claude(self) -> Option<String> {
+        let arch = match self.arch {
+            "x86_64" => "x64",
+            "aarch64" => "arm64",
+            _ => return None,
+        };
+        Some(match self.os {
+            "linux" if self.musl => format!("linux-{arch}-musl"),
+            "linux" => format!("linux-{arch}"),
+            "macos" => format!("darwin-{arch}"),
+            "windows" => format!("win32-{arch}"),
+            _ => return None,
+        })
+    }
+
+    /// Codex's target triple. Its Linux builds are static (musl): they
+    /// run on glibc systems too.
+    pub fn codex(self) -> Option<String> {
+        let arch = match self.arch {
+            "x86_64" | "aarch64" => self.arch,
+            _ => return None,
+        };
+        Some(match self.os {
+            "linux" => format!("{arch}-unknown-linux-musl"),
+            "macos" => format!("{arch}-apple-darwin"),
+            "windows" => format!("{arch}-pc-windows-msvc"),
+            _ => return None,
+        })
+    }
+}
+
+/// How a release's file is packed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Packing {
+    /// The program itself.
+    Plain,
+    TarGz,
+    Zip,
+}
+
+/// A release to install.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Release {
+    pub tool: Tool,
+    pub version: String,
+    pub url: String,
+    /// Lowercase hex.
+    pub sha256: String,
+    pub packing: Packing,
+}
+
+/// Downloads (the system's `curl`; fixtures in tests).
+pub trait Fetch {
+    /// The body of `url`.
+    fn text(&self, url: &str) -> Result<String, AgentError>;
+    /// Saves `url` to `dest`.
+    fn file(&self, url: &str, dest: &Path) -> Result<(), AgentError>;
+}
+
+/// The system's `curl`, HTTPS only. A `GITHUB_TOKEN` in the environment is
+/// sent to GitHub's API (more requests an hour), through curl's standard
+/// input so other users cannot see it.
+pub struct Curl;
+
+impl Curl {
+    fn run(url: &str, out: Option<&Path>) -> Result<Vec<u8>, AgentError> {
+        let token = url
+            .starts_with("https://api.github.com/")
+            .then(|| std::env::var("GITHUB_TOKEN").or_else(|_| std::env::var("GH_TOKEN")))
+            .and_then(Result::ok)
+            .filter(|t| !t.is_empty());
+        let mut cmd = Command::new(exe("curl"));
+        cmd.args(["--fail", "--location", "--silent", "--show-error"])
+            .args(["--proto", "=https", "--tlsv1.2", "--retry", "3"])
+            .args(["--user-agent", "termos"]);
+        if token.is_some() {
+            cmd.args(["--header", "@-"]);
+        }
+        if let Some(dest) = out {
+            cmd.arg("--output").arg(dest);
+        }
+        cmd.arg(url)
+            .stdin(if token.is_some() {
+                Stdio::piped()
+            } else {
+                Stdio::null()
+            })
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let mut child = cmd
+            .spawn()
+            .map_err(|e| AgentError::Fetch(format!("cannot run curl: {e}")))?;
+        if let (Some(t), Some(mut stdin)) = (token, child.stdin.take()) {
+            use std::io::Write as _;
+            let _ = writeln!(stdin, "Authorization: Bearer {t}");
+        }
+        let output = child
+            .wait_with_output()
+            .map_err(|e| AgentError::Fetch(format!("curl: {e}")))?;
+        if !output.status.success() {
+            let why = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+            return Err(AgentError::Fetch(format!("{url}: {why}")));
+        }
+        Ok(output.stdout)
+    }
+}
+
+impl Fetch for Curl {
+    fn text(&self, url: &str) -> Result<String, AgentError> {
+        Curl::run(url, None).map(|b| String::from_utf8_lossy(&b).into_owned())
+    }
+    fn file(&self, url: &str, dest: &Path) -> Result<(), AgentError> {
+        Curl::run(url, Some(dest)).map(|_| ())
+    }
+}
+
+/// Claude Code's release for `platform`: `version`, or the `stable`
+/// channel's.
+pub fn claude_release(
+    fetch: &dyn Fetch,
+    platform: Platform,
+    version: Option<&str>,
+) -> Result<Release, AgentError> {
+    let plat = platform
+        .claude()
+        .ok_or_else(|| AgentError::Unsupported("Claude Code", platform.describe()))?;
+    let version = match version {
+        Some(v) => v.to_owned(),
+        None => fetch
+            .text(&format!("{CLAUDE_RELEASES}/stable"))?
+            .trim()
+            .to_owned(),
+    };
+    check_version(&version)?;
+    let manifest: Value =
+        serde_json::from_str(&fetch.text(&format!("{CLAUDE_RELEASES}/{version}/manifest.json"))?)
+            .map_err(|e| AgentError::Release(format!("manifest.json: {e}")))?;
+    let sha256 = manifest
+        .pointer(&format!("/platforms/{plat}/checksum"))
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            AgentError::Unsupported("Claude Code", format!("{plat}, not in the manifest"))
+        })?
+        .to_ascii_lowercase();
+    check_hex(&sha256)?;
+    Ok(Release {
+        tool: Tool::Claude,
+        url: format!(
+            "{CLAUDE_RELEASES}/{version}/{plat}/{}",
+            if platform.os == "windows" {
+                "claude.exe"
+            } else {
+                "claude"
+            }
+        ),
+        version,
+        sha256,
+        packing: Packing::Plain,
+    })
+}
+
+/// Codex CLI's release for `platform`: `version`, or the latest.
+pub fn codex_release(
+    fetch: &dyn Fetch,
+    platform: Platform,
+    version: Option<&str>,
+) -> Result<Release, AgentError> {
+    let triple = platform
+        .codex()
+        .ok_or_else(|| AgentError::Unsupported("Codex CLI", platform.describe()))?;
+    let url = match version {
+        Some(v) => {
+            check_version(v)?;
+            format!("{CODEX_TAGS}/rust-v{v}")
+        }
+        None => CODEX_LATEST.to_owned(),
+    };
+    let release: Value = serde_json::from_str(&fetch.text(&url)?)
+        .map_err(|e| AgentError::Release(format!("the release: {e}")))?;
+    let tag = release
+        .get("tag_name")
+        .and_then(Value::as_str)
+        .ok_or_else(|| AgentError::Release("no tag_name".into()))?;
+    let version = tag
+        .trim_start_matches("rust-v")
+        .trim_start_matches('v')
+        .to_owned();
+    check_version(&version)?;
+    // The CLI itself: `codex-<triple>.tar.gz`, or `.zip` (Windows: the
+    // program inside is `codex-<triple>.exe`); other programs in the
+    // release (`codex-responses-api-proxy-…`) are not it.
+    let wanted: Vec<(String, Packing)> = if platform.os == "windows" {
+        vec![
+            (format!("codex-{triple}.exe.zip"), Packing::Zip),
+            (format!("codex-{triple}.zip"), Packing::Zip),
+            (format!("codex-{triple}.exe.tar.gz"), Packing::TarGz),
+        ]
+    } else {
+        vec![(format!("codex-{triple}.tar.gz"), Packing::TarGz)]
+    };
+    let assets = release
+        .get("assets")
+        .and_then(Value::as_array)
+        .ok_or_else(|| AgentError::Release("no assets".into()))?;
+    let (asset, packing) = wanted
+        .iter()
+        .find_map(|(name, packing)| {
+            assets
+                .iter()
+                .find(|a| a.get("name").and_then(Value::as_str) == Some(name))
+                .map(|a| (a, *packing))
+        })
+        .ok_or_else(|| {
+            AgentError::Unsupported("Codex CLI", format!("{triple}, not in release {tag}"))
+        })?;
+    let url = asset
+        .get("browser_download_url")
+        .and_then(Value::as_str)
+        .filter(|u| u.starts_with("https://"))
+        .ok_or_else(|| AgentError::Release("no download URL".into()))?
+        .to_owned();
+    let sha256 = asset
+        .get("digest")
+        .and_then(Value::as_str)
+        .and_then(|d| d.strip_prefix("sha256:"))
+        .ok_or_else(|| {
+            AgentError::Release(format!(
+                "GitHub gives no SHA-256 digest for {}; refusing an unchecked download",
+                asset
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .unwrap_or("the asset")
+            ))
+        })?
+        .to_ascii_lowercase();
+    check_hex(&sha256)?;
+    Ok(Release {
+        tool: Tool::Codex,
+        version,
+        url,
+        sha256,
+        packing,
+    })
+}
+
+/// A version is a plain name: it becomes part of URLs and a folder.
+fn check_version(v: &str) -> Result<(), AgentError> {
+    let plain = !v.is_empty()
+        && v.len() <= 64
+        && v.starts_with(|c: char| c.is_ascii_digit())
+        && v.chars()
+            .all(|c| c.is_ascii_alphanumeric() || ".-+".contains(c));
+    if plain {
+        Ok(())
+    } else {
+        Err(AgentError::Release(format!("version {v:?}")))
+    }
+}
+
+fn check_hex(sha: &str) -> Result<(), AgentError> {
+    if sha.len() == 64 && sha.bytes().all(|b| b.is_ascii_hexdigit()) {
+        Ok(())
+    } else {
+        Err(AgentError::Release(format!("checksum {sha:?}")))
+    }
+}
+
+/// `tool`'s release for this computer: `version`, or the newest.
+pub fn release(
+    fetch: &dyn Fetch,
+    tool: Tool,
+    platform: Platform,
+    version: Option<&str>,
+) -> Result<Release, AgentError> {
+    match tool {
+        Tool::Claude => claude_release(fetch, platform, version),
+        Tool::Codex => codex_release(fetch, platform, version),
+    }
+}
+
+/// The newest release of `tool` for this computer.
+pub fn latest(fetch: &dyn Fetch, tool: Tool, platform: Platform) -> Result<Release, AgentError> {
+    release(fetch, tool, platform, None)
+}
+
+/// Where TermOS keeps `tool`.
+pub fn dir(data_dir: &Path, tool: Tool) -> PathBuf {
+    data_dir.join("agents").join(tool.name())
+}
+
+/// The folder TermOS puts first on every pane's `PATH`, where the
+/// installed programs are linked.
+pub fn bin_dir(data_dir: &Path) -> PathBuf {
+    data_dir.join("bin")
+}
+
+/// An installed tool.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Installed {
+    pub tool: Tool,
+    pub version: String,
+    /// The program.
+    pub path: PathBuf,
+}
+
+/// What TermOS has installed of `tool`.
+pub fn installed(data_dir: &Path, tool: Tool) -> Option<Installed> {
+    let d = dir(data_dir, tool);
+    let version = std::fs::read_to_string(d.join("current")).ok()?;
+    let version = version.trim().to_owned();
+    let path = d.join(&version).join(tool.program());
+    path.is_file().then_some(Installed {
+        tool,
+        version,
+        path,
+    })
+}
+
+/// Installs `release` (downloaded, checked, unpacked, made current and
+/// linked). Older versions are removed.
+pub fn install(
+    fetch: &dyn Fetch,
+    data_dir: &Path,
+    release: &Release,
+    say: &mut dyn FnMut(&str),
+) -> Result<Installed, AgentError> {
+    let tool = release.tool;
+    let root = dir(data_dir, tool);
+    std::fs::create_dir_all(&root)?;
+    let work = root.join(format!(".{}.partial", release.version));
+    let _ = std::fs::remove_dir_all(&work);
+    std::fs::create_dir_all(&work)?;
+    let download = work.join("download");
+    say(&format!(
+        "downloading {} {}…",
+        tool.title(),
+        release.version
+    ));
+    if let Err(e) = fetch.file(&release.url, &download) {
+        let _ = std::fs::remove_dir_all(&work);
+        return Err(e);
+    }
+    let got = sha256_file(&download)?;
+    if got != release.sha256 {
+        let _ = std::fs::remove_dir_all(&work);
+        return Err(AgentError::Checksum {
+            expected: release.sha256.clone(),
+            got,
+        });
+    }
+    say("checksum verified");
+    let program = work.join(tool.program());
+    match release.packing {
+        Packing::Plain => std::fs::rename(&download, &program)?,
+        Packing::TarGz | Packing::Zip => {
+            unpack(&download, &work)?;
+            let _ = std::fs::remove_file(&download);
+            // The archive holds one program, named after the platform.
+            let found = std::fs::read_dir(&work)?
+                .flatten()
+                .map(|e| e.path())
+                .find(|p| {
+                    p.is_file()
+                        && p.file_name()
+                            .is_some_and(|n| n.to_string_lossy().starts_with(tool.name()))
+                })
+                .ok_or_else(|| AgentError::Release("the archive holds no program".into()))?;
+            if found != program {
+                std::fs::rename(&found, &program)?;
+            }
+        }
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755))?;
+    }
+    let target = root.join(&release.version);
+    let _ = std::fs::remove_dir_all(&target);
+    std::fs::rename(&work, &target)?;
+    std::fs::write(root.join("current"), format!("{}\n", release.version))?;
+    // Older versions go (one still running stays until next time).
+    if let Ok(entries) = std::fs::read_dir(&root) {
+        for e in entries.flatten() {
+            let name = e.file_name().to_string_lossy().into_owned();
+            if e.path().is_dir() && name != release.version && !name.starts_with('.') {
+                let _ = std::fs::remove_dir_all(e.path());
+            }
+        }
+    }
+    let path = target.join(tool.program());
+    link(&path, &bin_dir(data_dir).join(tool.program()))?;
+    Ok(Installed {
+        tool,
+        version: release.version.clone(),
+        path,
+    })
+}
+
+fn unpack(archive: &Path, into: &Path) -> Result<(), AgentError> {
+    // `tar` reads both: GNU or BSD tar on Unix, bsdtar (which also reads
+    // zip files) on Windows 10 and later.
+    let status = Command::new(exe("tar"))
+        .arg("-xf")
+        .arg(archive)
+        .arg("-C")
+        .arg(into)
+        .stdin(Stdio::null())
+        .status()
+        .map_err(|e| AgentError::Setup(format!("cannot run tar: {e}")))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(AgentError::Setup(format!(
+            "cannot unpack the download ({status})"
+        )))
+    }
+}
+
+/// `link` names `target`: a symbolic link on Unix; a hard link (or a copy)
+/// on Windows.
+fn link(target: &Path, link: &Path) -> io::Result<()> {
+    if let Some(dir) = link.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    #[cfg(unix)]
+    {
+        // Made beside it and renamed over it: never a moment without one.
+        let tmp = link.with_extension(format!("new-{}", std::process::id()));
+        let _ = std::fs::remove_file(&tmp);
+        std::os::unix::fs::symlink(target, &tmp)?;
+        std::fs::rename(&tmp, link)
+    }
+    #[cfg(not(unix))]
+    {
+        // A program that is running cannot be removed on Windows, but it
+        // can be renamed out of the way (and is removed next time).
+        if let Some(dir) = link.parent()
+            && let Ok(entries) = std::fs::read_dir(dir)
+        {
+            for e in entries.flatten() {
+                if e.file_name().to_string_lossy().contains(".old-") {
+                    let _ = std::fs::remove_file(e.path());
+                }
+            }
+        }
+        if std::fs::remove_file(link).is_err() && link.exists() {
+            std::fs::rename(
+                link,
+                link.with_extension(format!("old-{}", std::process::id())),
+            )?;
+        }
+        std::fs::hard_link(target, link).or_else(|_| std::fs::copy(target, link).map(|_| ()))
+    }
+}
+
+/// Removes `tool`: its versions and its link.
+pub fn remove(data_dir: &Path, tool: Tool) -> io::Result<bool> {
+    let root = dir(data_dir, tool);
+    let had = root.exists();
+    let _ = std::fs::remove_file(bin_dir(data_dir).join(tool.program()));
+    if had {
+        std::fs::remove_dir_all(&root)?;
+    }
+    Ok(had)
+}
+
+/// The command lines that register `termos mcp serve` with `tool`, run
+/// with the installed program (`claude mcp add`); `None` for tools set up
+/// by editing their config ([`codex_config`]).
+pub fn mcp_register(tool: Tool, program: &Path, termos: &Path) -> Option<Vec<Vec<String>>> {
+    let p = program.display().to_string();
+    let t = termos.display().to_string();
+    match tool {
+        Tool::Claude => Some(vec![
+            // Replaced, so a moved termos is picked up.
+            vec![
+                p.clone(),
+                "mcp".into(),
+                "remove".into(),
+                "--scope".into(),
+                "user".into(),
+                "termos".into(),
+            ],
+            vec![
+                p,
+                "mcp".into(),
+                "add".into(),
+                "--scope".into(),
+                "user".into(),
+                "termos".into(),
+                "--".into(),
+                t,
+                "mcp".into(),
+                "serve".into(),
+            ],
+        ]),
+        Tool::Codex => None,
+    }
+}
+
+/// Codex's `config.toml` with `[mcp_servers.termos]` running
+/// `termos mcp serve` (the rest of the file kept as it is).
+pub fn codex_config(existing: &str, termos: &Path) -> Result<String, AgentError> {
+    let mut doc: toml_edit::DocumentMut = existing
+        .parse()
+        .map_err(|e| AgentError::Setup(format!("~/.codex/config.toml does not parse: {e}")))?;
+    let servers = doc
+        .entry("mcp_servers")
+        .or_insert_with(|| {
+            let mut t = toml_edit::Table::new();
+            t.set_implicit(true);
+            toml_edit::Item::Table(t)
+        })
+        .as_table_mut()
+        .ok_or_else(|| {
+            AgentError::Setup("`mcp_servers` in ~/.codex/config.toml is not a table".into())
+        })?;
+    let mut termos_table = toml_edit::Table::new();
+    termos_table["command"] = toml_edit::value(termos.display().to_string());
+    let mut args = toml_edit::Array::new();
+    args.push("mcp");
+    args.push("serve");
+    termos_table["args"] = toml_edit::value(args);
+    servers.insert("termos", toml_edit::Item::Table(termos_table));
+    Ok(doc.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::BTreeMap;
+    use std::sync::Mutex;
+
+    /// Recorded release data and downloads.
+    struct Fixture {
+        texts: BTreeMap<String, String>,
+        files: BTreeMap<String, Vec<u8>>,
+        asked: Mutex<Vec<String>>,
+    }
+
+    impl Fetch for Fixture {
+        fn text(&self, url: &str) -> Result<String, AgentError> {
+            self.asked.lock().expect("asked").push(url.to_owned());
+            self.texts
+                .get(url)
+                .cloned()
+                .ok_or_else(|| AgentError::Fetch(format!("{url}: 404")))
+        }
+        fn file(&self, url: &str, dest: &Path) -> Result<(), AgentError> {
+            self.asked.lock().expect("asked").push(url.to_owned());
+            let body = self
+                .files
+                .get(url)
+                .ok_or_else(|| AgentError::Fetch(format!("{url}: 404")))?;
+            std::fs::write(dest, body).map_err(AgentError::Io)
+        }
+    }
+
+    fn sha(bytes: &[u8]) -> String {
+        use sha2::{Digest, Sha256};
+        Sha256::digest(bytes)
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect()
+    }
+
+    const LINUX: Platform = Platform {
+        os: "linux",
+        arch: "x86_64",
+        musl: false,
+    };
+
+    #[test]
+    fn platforms_are_named_as_each_vendor_names_them() {
+        let p = |os, arch, musl| Platform { os, arch, musl };
+        assert_eq!(
+            p("linux", "x86_64", false).claude().as_deref(),
+            Some("linux-x64")
+        );
+        assert_eq!(
+            p("linux", "aarch64", true).claude().as_deref(),
+            Some("linux-arm64-musl")
+        );
+        assert_eq!(
+            p("macos", "aarch64", false).claude().as_deref(),
+            Some("darwin-arm64")
+        );
+        assert_eq!(
+            p("windows", "x86_64", false).claude().as_deref(),
+            Some("win32-x64")
+        );
+        assert_eq!(p("linux", "riscv64", false).claude(), None);
+        assert_eq!(
+            p("linux", "x86_64", false).codex().as_deref(),
+            Some("x86_64-unknown-linux-musl"),
+            "static builds run on glibc too"
+        );
+        assert_eq!(
+            p("macos", "x86_64", false).codex().as_deref(),
+            Some("x86_64-apple-darwin")
+        );
+        assert_eq!(
+            p("windows", "aarch64", false).codex().as_deref(),
+            Some("aarch64-pc-windows-msvc")
+        );
+        assert_eq!(Tool::from_name("codex"), Some(Tool::Codex));
+        assert_eq!(Tool::from_name("gemini"), None);
+    }
+
+    fn claude_fixture(binary: &[u8], checksum: &str) -> Fixture {
+        let manifest = serde_json::json!({
+            "version": "9.9.9",
+            "platforms": {
+                "linux-x64": { "checksum": checksum, "size": binary.len() },
+                "darwin-arm64": { "checksum": "0".repeat(64), "size": 1 },
+            }
+        });
+        Fixture {
+            texts: BTreeMap::from([
+                (format!("{CLAUDE_RELEASES}/stable"), "9.9.9\n".to_owned()),
+                (
+                    format!("{CLAUDE_RELEASES}/9.9.9/manifest.json"),
+                    manifest.to_string(),
+                ),
+            ]),
+            files: BTreeMap::from([(
+                format!("{CLAUDE_RELEASES}/9.9.9/linux-x64/claude"),
+                binary.to_vec(),
+            )]),
+            asked: Mutex::default(),
+        }
+    }
+
+    #[test]
+    fn claude_installs_from_the_manifest_and_is_linked() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let binary = b"#!/bin/sh\necho 9.9.9 (Claude Code)\n";
+        let f = claude_fixture(binary, &sha(binary));
+        let release = latest(&f, Tool::Claude, LINUX).expect("release");
+        assert_eq!(release.version, "9.9.9");
+        assert_eq!(
+            release.url,
+            format!("{CLAUDE_RELEASES}/9.9.9/linux-x64/claude")
+        );
+        let mut said = Vec::new();
+        let got =
+            install(&f, dir.path(), &release, &mut |s| said.push(s.to_owned())).expect("installed");
+        assert_eq!(std::fs::read(&got.path).expect("read"), binary);
+        assert_eq!(installed(dir.path(), Tool::Claude), Some(got.clone()));
+        let linked = bin_dir(dir.path()).join(Tool::Claude.program());
+        assert_eq!(std::fs::read(&linked).expect("linked"), binary);
+        assert!(said.iter().any(|s| s == "checksum verified"));
+        // Another platform is not in this manifest's fixture download.
+        let mac = Platform {
+            os: "macos",
+            arch: "aarch64",
+            musl: false,
+        };
+        assert!(latest(&f, Tool::Claude, mac).is_ok());
+        let musl = Platform {
+            musl: true,
+            ..LINUX
+        };
+        assert!(matches!(
+            latest(&f, Tool::Claude, musl),
+            Err(AgentError::Unsupported(..))
+        ));
+        assert!(remove(dir.path(), Tool::Claude).expect("removed"));
+        assert_eq!(installed(dir.path(), Tool::Claude), None);
+        assert!(!linked.exists());
+    }
+
+    #[test]
+    fn a_bad_checksum_installs_nothing() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let f = claude_fixture(b"tampered", &sha(b"the real one"));
+        let release = latest(&f, Tool::Claude, LINUX).expect("release");
+        let err = install(&f, dir.path(), &release, &mut |_| {}).expect_err("refused");
+        assert!(matches!(err, AgentError::Checksum { .. }), "{err}");
+        assert_eq!(installed(dir.path(), Tool::Claude), None);
+        assert!(!bin_dir(dir.path()).join(Tool::Claude.program()).exists());
+        // A manifest that is not JSON, a version that is not one.
+        let mut bad = claude_fixture(b"x", &sha(b"x"));
+        bad.texts
+            .insert(format!("{CLAUDE_RELEASES}/stable"), "<html>".to_owned());
+        assert!(matches!(
+            latest(&bad, Tool::Claude, LINUX),
+            Err(AgentError::Release(_))
+        ));
+        // A version asked for: no channel, and only plain names.
+        let f = claude_fixture(b"x", &sha(b"x"));
+        let r = super::release(&f, Tool::Claude, LINUX, Some("9.9.9")).expect("pinned");
+        assert_eq!(r.version, "9.9.9");
+        assert!(
+            !f.asked
+                .lock()
+                .expect("asked")
+                .iter()
+                .any(|u| u.ends_with("/stable"))
+        );
+        for v in ["../../etc", "latest", "", "9.9.9/linux-x64"] {
+            assert!(
+                super::release(&f, Tool::Claude, LINUX, Some(v)).is_err(),
+                "{v}"
+            );
+        }
+    }
+
+    fn codex_release_json(name: &str, digest: Option<&str>) -> String {
+        let mut asset = serde_json::json!({
+            "name": name,
+            "browser_download_url": format!("https://github.com/openai/codex/releases/download/rust-v0.166.0/{name}"),
+        });
+        if let Some(d) = digest {
+            asset["digest"] = Value::from(d);
+        }
+        serde_json::json!({
+            "tag_name": "rust-v0.166.0",
+            "assets": [
+                {
+                    "name": "codex-responses-api-proxy-x86_64-unknown-linux-musl.tar.gz",
+                    "browser_download_url": "https://github.com/x",
+                    "digest": format!("sha256:{}", "1".repeat(64)),
+                },
+                asset,
+            ]
+        })
+        .to_string()
+    }
+
+    #[test]
+    fn codex_comes_from_the_github_release_with_its_digest() {
+        let f = Fixture {
+            texts: BTreeMap::from([(
+                CODEX_LATEST.to_owned(),
+                codex_release_json(
+                    "codex-x86_64-unknown-linux-musl.tar.gz",
+                    Some(&format!("sha256:{}", "A".repeat(64))),
+                ),
+            )]),
+            files: BTreeMap::new(),
+            asked: Mutex::default(),
+        };
+        let r = latest(&f, Tool::Codex, LINUX).expect("release");
+        assert_eq!(r.version, "0.166.0");
+        assert_eq!(r.packing, Packing::TarGz);
+        assert_eq!(r.sha256, "a".repeat(64));
+        assert!(r.url.ends_with("/codex-x86_64-unknown-linux-musl.tar.gz"));
+        // A version asked for is looked up by its tag.
+        let err = super::release(&f, Tool::Codex, LINUX, Some("0.1.0")).expect_err("not recorded");
+        assert!(err.to_string().contains("tags/rust-v0.1.0"), "{err}");
+        // No digest: no unchecked download.
+        let f = Fixture {
+            texts: BTreeMap::from([(
+                CODEX_LATEST.to_owned(),
+                codex_release_json("codex-x86_64-unknown-linux-musl.tar.gz", None),
+            )]),
+            files: BTreeMap::new(),
+            asked: Mutex::default(),
+        };
+        let err = latest(&f, Tool::Codex, LINUX).expect_err("refused");
+        assert!(err.to_string().contains("no SHA-256"), "{err}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn codex_is_unpacked_from_its_archive() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let src = dir.path().join("src");
+        std::fs::create_dir_all(&src).expect("mkdir");
+        std::fs::write(
+            src.join("codex-x86_64-unknown-linux-musl"),
+            b"#!/bin/sh\necho codex-cli 0.166.0\n",
+        )
+        .expect("write");
+        let archive = dir.path().join("codex.tar.gz");
+        let ok = Command::new("tar")
+            .arg("-czf")
+            .arg(&archive)
+            .arg("-C")
+            .arg(&src)
+            .arg("codex-x86_64-unknown-linux-musl")
+            .status()
+            .expect("tar");
+        assert!(ok.success());
+        let bytes = std::fs::read(&archive).expect("read");
+        let name = "codex-x86_64-unknown-linux-musl.tar.gz";
+        let release_json = codex_release_json(name, Some(&format!("sha256:{}", sha(&bytes))));
+        let url = format!("https://github.com/openai/codex/releases/download/rust-v0.166.0/{name}");
+        let f = Fixture {
+            texts: BTreeMap::from([(CODEX_LATEST.to_owned(), release_json)]),
+            files: BTreeMap::from([(url, bytes)]),
+            asked: Mutex::default(),
+        };
+        let data = dir.path().join("data");
+        let r = latest(&f, Tool::Codex, LINUX).expect("release");
+        let got = install(&f, &data, &r, &mut |_| {}).expect("installed");
+        assert!(got.path.ends_with("0.166.0/codex"));
+        let out = Command::new(&got.path).output().expect("runs");
+        assert_eq!(String::from_utf8_lossy(&out.stdout), "codex-cli 0.166.0\n");
+    }
+
+    #[test]
+    fn mcp_registration() {
+        let termos = Path::new("/opt/termos/termos");
+        let lines = mcp_register(Tool::Claude, Path::new("/d/claude"), termos).expect("claude");
+        assert_eq!(
+            lines[1].join(" "),
+            "/d/claude mcp add --scope user termos -- /opt/termos/termos mcp serve"
+        );
+        assert!(mcp_register(Tool::Codex, Path::new("/d/codex"), termos).is_none());
+        let before = "# my settings\nmodel = \"fixture-model\"\n\n[mcp_servers.other]\ncommand = \"other\"\n";
+        let after = codex_config(before, termos).expect("edited");
+        assert!(
+            after.starts_with("# my settings\nmodel = \"fixture-model\""),
+            "{after}"
+        );
+        assert!(after.contains("[mcp_servers.other]"));
+        assert!(after.contains("[mcp_servers.termos]\ncommand = \"/opt/termos/termos\"\nargs = [\"mcp\", \"serve\"]"), "{after}");
+        // Again: the same, not twice.
+        let again = codex_config(&after, termos).expect("edited");
+        assert_eq!(again.matches("[mcp_servers.termos]").count(), 1);
+        assert!(codex_config("not = [toml", termos).is_err());
+    }
+}

@@ -1150,13 +1150,23 @@ impl Desktop {
 
     /// An external CLI agent (`termos agent external NAME`) in a float.
     fn open_external_agent(&mut self, name: &str, area: Rect) {
+        self.open_termos_window(
+            &["agent", "external", name],
+            &format!("agent: {name}"),
+            area,
+        );
+    }
+
+    /// `termos ARGS` in a float titled `title`, in the focused pane's
+    /// folder.
+    fn open_termos_window(&mut self, args: &[&str], title: &str, area: Rect) {
         let Some(exe) = self.termos_exe() else {
             self.notify(Level::Error, "cannot find the termos program");
             return;
         };
         let cwd = self.focused_cwd();
         let program = exe.display().to_string();
-        let args = vec!["agent".to_owned(), "external".to_owned(), name.to_owned()];
+        let args = args.iter().map(|a| (*a).to_owned()).collect();
         match self.spawn_pane(
             cwd,
             (area.w * 9 / 10, area.h * 9 / 10),
@@ -1164,12 +1174,12 @@ impl Desktop {
         ) {
             Ok(id) => {
                 if let Some(p) = self.panes.get_mut(&id) {
-                    p.title = format!("agent: {name}");
+                    p.title = title.to_owned();
                 }
                 self.session.active_mut().add_float(id, area);
                 self.animate(anim::Kind::FloatOpen(id), Instant::now());
             }
-            Err(e) => self.notify(Level::Error, format!("cannot start {name}: {e}")),
+            Err(e) => self.notify(Level::Error, format!("cannot start {title}: {e}")),
         }
     }
 
@@ -2136,6 +2146,14 @@ impl Desktop {
             Command::AuditOpen(arg) => self.launch(termos_core::app::LaunchKind::Audit, &arg),
             Command::CenterOpen => self.launch(termos_core::app::LaunchKind::Center, ""),
             Command::AgentExternal(name) => self.open_external_agent(&name, area),
+            Command::AgentInstall(name) => self.open_termos_window(
+                &["agent", "install", &name, "--wait"],
+                &format!("install {name}"),
+                area,
+            ),
+            Command::AgentUpdate => {
+                self.open_termos_window(&["agent", "update", "--wait"], "agent updates", area);
+            }
             Command::FileOpen(path) => {
                 use termos_apps::files::{OpenKind, open_kind};
                 let path = self.resolve_path(&path);
