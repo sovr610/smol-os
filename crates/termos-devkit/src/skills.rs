@@ -463,7 +463,10 @@ mod tests {
         let play_skills = play.dir.clone().expect("dir").join("skills");
         if let Ok(meta) = std::fs::symlink_metadata(&play_skills) {
             if meta.file_type().is_symlink() {
-                std::fs::remove_file(&play_skills).expect("unlink");
+                // Windows removes a link to a folder as a folder.
+                std::fs::remove_file(&play_skills)
+                    .or_else(|_| std::fs::remove_dir(&play_skills))
+                    .expect("unlink");
             } else {
                 std::fs::remove_dir_all(&play_skills).expect("rm");
             }

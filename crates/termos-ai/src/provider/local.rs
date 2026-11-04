@@ -172,9 +172,18 @@ mod tests {
         std::fs::set_permissions(&helper, std::fs::Permissions::from_mode(0o755)).expect("chmod");
         use secrecy::ExposeSecret as _;
 
-        let (url, token) = router(&p, Some(&helper), Some(Path::new("/x/config.toml")))
-            .await
-            .expect("router");
+        // A script just written can be briefly "busy" to run while another
+        // test thread forks; only that is retried.
+        let mut tries = 0;
+        let (url, token) = loop {
+            match router(&p, Some(&helper), Some(Path::new("/x/config.toml"))).await {
+                Err(e) if e.message.contains("Text file busy") && tries < 50 => {
+                    tries += 1;
+                    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                }
+                other => break other.expect("router"),
+            }
+        };
         assert_eq!(url, format!("http://127.0.0.1:{port}/v1"));
         assert_eq!(
             token.expose_secret(),
