@@ -910,6 +910,20 @@ Not shown live: agent sessions (no provider keys here; the registry, its Approve
 - **Their usage:** Claude Code and Codex logs (rebuilt from their formats, with marker text that must never come out): numbers only, a message written in several lines counted once, Codex's running totals turned into turns, appended lines read once and half lines left for later; the command center's data source shows a Claude Code log's tokens next to a real server.
 - **CI, for real** (`agents.yml`): both installed by `termos agent install` on Linux x86_64 and aarch64, macOS and Windows; both run; Claude Code's `mcp list` connects; Codex connects through `codex exec` against a stand-in model server that refuses at once; both connections found in TermOS's audit log (`claude-code`, `codex-mcp-client`); update, remove and unregister.
 
+**Budgets** (`cargo xtask perf 60`, release build, Linux x86_64, with the one-minute sampler running):
+
+| | M10d | Budget |
+| --- | --- | --- |
+| Keystroke→screen p50 / p99 | 0.57 / 2.15 ms | p99 < 16 ms |
+| Idle CPU, 60 s | 0.017% | < 1% |
+| Idle CPU with a 4K picture open, with a WASM widget | 0.017% | < 1% |
+| CPU with the system monitor open, 60 s | 0.53% | < 1% |
+| RSS, server + client | 26.7 MB | < 150 MB |
+| RSS with a 4K picture open | 80.9 MB | < 150 MB |
+| 300 000-line flood | 179 ms | no regression (172 ms in M10c; this container varies by about as much) |
+
+None of M10d runs while idle: the MCP server is a separate process the agent's CLI starts, and their logs are read only while the command center is open.
+
 **Found and fixed on the way**
 - Reading `config.toml` (from `termos mcp serve`, `termos agent external`, `termos config check`) made the server reload it every 150 ms for as long as it ran: inotify reports opens, and the server's own reload is one. Only a real change counts now (regression test).
 - On Windows, Codex's archive holds helper programs beside it; the installer now takes the program by its exact name (caught by CI).
