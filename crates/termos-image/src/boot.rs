@@ -438,6 +438,16 @@ pub fn boot(images: &Path, t: &Target, firmware: Firmware, dir: &Path) -> Result
             serial::data_kb,
         )
         .map_err(|e| run.failed(dir, name, e))?;
+    // The dev rootfs's line comes last, after curl's: `termos devroot
+    // status` as the desktop's user takes seconds under emulation. A
+    // missing one is a problem of the report, not of the run.
+    let devroot = run
+        .wait(
+            "TERMOS-DEVROOT report",
+            Duration::from_secs(120),
+            serial::devroot,
+        )
+        .ok();
     // The slot is marked a second or two after the first frame, long
     // before the reports above.
     let log = run.log();
@@ -450,7 +460,7 @@ pub fn boot(images: &Path, t: &Target, firmware: Firmware, dir: &Path) -> Result
         data_kb,
         slot: serial::slot(&log),
         curl: serial::curl(&log),
-        devroot: serial::devroot(&log),
+        devroot,
         tail: serial::tail(&log, 40),
     })
 }

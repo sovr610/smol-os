@@ -546,6 +546,8 @@ What was shown, and where:
 - **The real Debian, on CI** (`devroot` job, x86_64 and aarch64): created from the pinned layer, Debian 13 inside, a project folder outside the home bound, `hello` searched, installed, run and removed with apt and `jq` with the real mise through `termos pkg`, upgraded, deleted.
 - **Unit:** subordinate-ID files, the namespace and bubblewrap arguments, the clean environment, unpacking (modes, setuid, links, hard links, device nodes left out); the parsers of dpkg, apt, mise, Podman and the eight host managers (recorded output); the pinned layers.
 - **The app:** snapshots of each tab (installed, search results with what is installed marked, a question, a failure, a missing source); install, remove and upgrade send the right `termos pkg`; tabs by mouse; the list followed when its database changes. On a real desktop: the window lists mise's tools, a search and `y` run `termos pkg install mise jq` in a window.
+- **The images** (`images` workflow): both build with curl 8.19.0 on mbedTLS 3.6.5 (`TERMOS-CURL`); the boot test waits for `termos devroot status` as the desktop's user and requires "bubblewrap: ready".
+- **Found by CI:** apt checks signatures as its `_apt` user in `/tmp`, which bubblewrap's tmpfs made 0755, so every repository was refused as unsigned: `/tmp` is 1777 now and the stand-in test checks it. The boot test stopped reading the serial console at `TERMOS-DATA`, before the dev rootfs's line arrived on the emulated aarch64 machine: it now waits for that line.
 
 **Demo**
 1. **Here, as a user with subordinate IDs** (`unshare` 2.39, bubblewrap): the real Debian layer (49 407 895 bytes) downloaded, its SHA-256 matching the pinned one, unpacked in 2 s with owners mapped (`/etc/shadow`'s group is the user's subordinate ID for gid 42) and setuid bits kept; the stand-in rootfs created, entered (`uid=0`, `HOME=/root`, the project at its path, a file made inside owned by the user outside), updated and removed. Running Debian's own programs is CI's part: this sandbox refuses downloaded binaries.
@@ -945,7 +947,7 @@ Not shown live: agent sessions (no provider keys here; the registry, its Approve
   - [x] Their CLI asks for each call; `[agents.termos-mcp]` denies tools and commands on top (quitting, detaching and closing by default); every call audited (`mcp-…` logs) and in the history
   - [x] Registered on install (`claude mcp add --scope user`; `[mcp_servers.termos]` in Codex's `config.toml`); `termos mcp register|unregister` for CLIs installed otherwise
 - **The command center:** [x] their token counts, models and times from their session logs, never their text (`[center] cli-usage`, in Settings), next to TermOS's own agents; their MCP calls among the tool calls
-- **Bare metal:** [x] the images ship curl with mbedTLS (D-109), which the installer runs as on every other platform; the CLIs' musl builds are the ones picked there. The QEMU boot tests check that the image's curl is the mbedTLS build (`TERMOS-CURL`).
+- **Bare metal:** [x] the images ship curl with mbedTLS (D-109), which the installer runs as on every other platform; the CLIs' musl builds are the ones picked there. The QEMU boot tests check that the image's curl is the mbedTLS build (`TERMOS-CURL`: `curl 8.19.0 … libcurl/8.19.0 mbedTLS/3.6.5` on both images).
 
 **Acceptance:** CI installs both on every platform and completes an MCP handshake with each (no live API keys: their own `mcp` commands and recorded fixtures).
 
