@@ -624,6 +624,10 @@ impl SystemMonitor {
 }
 
 impl App for SystemMonitor {
+    fn reopen(&self) -> Option<String> {
+        Some("monitor.open".to_owned())
+    }
+
     fn icon(&self) -> termos_render::icons::Icon {
         termos_render::icons::Icon::Monitor
     }

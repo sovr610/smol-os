@@ -195,6 +195,15 @@ impl ImageViewer {
 }
 
 impl App for ImageViewer {
+    fn reopen(&self) -> Option<String> {
+        // A path that is not Unicode would not come back the same.
+        self.files
+            .get(self.index)
+            .map(PathBuf::as_path)
+            .and_then(|p| p.to_str())
+            .map(|p| format!("image.open {p}"))
+    }
+
     fn icon(&self) -> termos_render::icons::Icon {
         termos_render::icons::Icon::ImageViewer
     }
@@ -307,8 +316,10 @@ mod tests {
         let a = write_png(dir.path(), "a.png", 40, 20);
         write_png(dir.path(), "b.png", 10, 10);
         std::fs::write(dir.path().join("notes.txt"), "not an image").expect("write");
-        let mut v = ImageViewer::open(a);
+        let mut v = ImageViewer::open(a.clone());
         assert_eq!(v.files.len(), 2, "only images: {:?}", v.files);
+        // Saved with the session as the picture it shows (D-104).
+        assert_eq!(v.reopen(), Some(format!("image.open {}", a.display())));
         v.wait_loaded();
         let theme = Theme::default();
         let area = TuiRect::new(0, 0, 30, 10);

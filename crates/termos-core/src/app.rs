@@ -146,6 +146,13 @@ pub trait App: Send {
         let _ = now;
         AppEffect::None
     }
+    /// The palette command that opens this window again as it is now (the
+    /// folder, file or view it shows), so it is saved with the session
+    /// and comes back with it (D-104). `None` (the default): the window
+    /// is not restored.
+    fn reopen(&self) -> Option<String> {
+        None
+    }
 }
 
 /// Windows whose code lives in crates the shell does not depend on

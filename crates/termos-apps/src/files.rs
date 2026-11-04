@@ -1130,6 +1130,14 @@ fn fit_path(p: &Path, max: usize) -> String {
 }
 
 impl App for FileManager {
+    fn reopen(&self) -> Option<String> {
+        // A path that is not Unicode would not come back the same.
+        Some(self.dir.as_path())
+            .filter(|d| !d.as_os_str().is_empty())
+            .and_then(|p| p.to_str())
+            .map(|p| format!("files.open {p}"))
+    }
+
     fn icon(&self) -> Icon {
         Icon::Files
     }

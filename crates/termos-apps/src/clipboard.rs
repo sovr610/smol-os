@@ -194,6 +194,10 @@ impl ClipboardManager {
 }
 
 impl App for ClipboardManager {
+    fn reopen(&self) -> Option<String> {
+        Some("clipboard.open".to_owned())
+    }
+
     fn icon(&self) -> termos_render::icons::Icon {
         termos_render::icons::Icon::Clipboard
     }

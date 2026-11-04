@@ -439,6 +439,10 @@ fn write_atomically(path: &Path, text: &str) -> std::io::Result<()> {
 }
 
 impl App for Settings {
+    fn reopen(&self) -> Option<String> {
+        Some("settings.open".to_owned())
+    }
+
     fn icon(&self) -> termos_render::icons::Icon {
         termos_render::icons::Icon::Settings
     }

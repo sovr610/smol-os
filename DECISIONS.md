@@ -1057,6 +1057,20 @@ rewrite history.
   - **One gap stays:** modifier keys pressed alone (flag 8) are not passed on, since the desktop's keys have no such code.
 - **Alternatives:** always asking the terminal for every flag (all keys as escape codes for everyone); always asking for 1, 2 and 4 (releases for a program asking for flag 8 would still miss text keys); a key message carrying every field every time.
 
+## D-104: App windows are saved with the session as the command that reopens them
+- **Status:** Accepted (lead; extends D-033) · 2026-11-04
+- **Context:** Snapshots (D-033) saved terminals only, so a restored session lost its file manager, viewers and monitor. Apps keep their state in their own types, often with threads and caches, and that state is not worth serialising. The useful part is the folder, file or view.
+- **Decision:**
+  - **What is saved:** a new `App::reopen` gives the palette command that opens the window again as it is now: `files.open DIR`, `image.open PATH` (the picture shown), `markdown.open PATH`, `monitor.open`, `network.open`, `settings.open`, `clipboard.open`, `center.open`, `usage.open`. A path that is not Unicode gives none, rather than a different path.
+  - **The snapshot:** each app pane keeps that command (`reopen`, optional, so older snapshots still load; the format stays version 1).
+  - **Restoring:** the desktop builds the app from the command without placing it and puts it under a new id where the old one was in the saved layout: same float rectangle, same tile, same focus. A command that fails to open is logged and the window left out.
+  - **Not restored:**
+    - agent windows, which `agent.resume` already reopens with their conversation (bringing one back on its own would start a provider session unasked);
+    - the harness, whose runs are not resumable;
+    - the tutorial, notifications, About and plugin windows.
+  - **When it is saved:** the command is taken when the snapshot is written (after layout changes, and when the server stops). Browsing in a window without changing the layout is therefore saved at the next save.
+- **Alternatives:** serialising each app's state, which is more code per app for little gain; restoring agent windows with their conversation; saving app windows by kind only, so a file manager would come back in the home folder.
+
 ---
 
 ## Open questions (the owner will be asked before the milestone that needs each one)

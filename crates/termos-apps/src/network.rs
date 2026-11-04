@@ -219,6 +219,10 @@ impl NetworkPage {
 }
 
 impl App for NetworkPage {
+    fn reopen(&self) -> Option<String> {
+        Some("network.open".to_owned())
+    }
+
     fn icon(&self) -> termos_render::icons::Icon {
         termos_render::icons::Icon::Network
     }

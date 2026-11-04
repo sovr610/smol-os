@@ -1439,6 +1439,85 @@ async fn snapshots_keep_layout_and_scrollback() {
     assert!(grid.to_text().contains('│'), "the split is back");
 }
 
+/// App windows that can say how to reopen come back with the session, in
+/// their places (D-104); the tutorial does not.
+#[tokio::test]
+async fn app_windows_come_back_with_the_session() {
+    use termos_shell::commands::Command;
+    use termos_shell::snapshot::SavedKind;
+
+    let mut h = Harness::new("");
+    let docs = h.dir.path().join("my docs");
+    std::fs::create_dir_all(&docs).expect("mkdir");
+    std::fs::write(docs.join("zebra-notes.txt"), "z").expect("write");
+    let readme = docs.join("README.md");
+    std::fs::write(&readme, "# Restored heading\n\nSome text.\n").expect("write");
+    h.desktop
+        .run(Command::FilesOpen(docs.display().to_string()));
+    h.desktop
+        .run(Command::MarkdownOpen(readme.display().to_string()));
+    let before = h.screen();
+    assert!(before.contains("Restored heading"), "{before}");
+    h.desktop.run(Command::Tutorial);
+
+    let snap = h.desktop.snapshot();
+    let reopen: Vec<_> = snap
+        .panes
+        .iter()
+        .filter(|p| p.kind == SavedKind::App)
+        .map(|p| p.reopen.clone())
+        .collect();
+    assert_eq!(reopen.len(), 3, "{:?}", snap.panes);
+    assert!(reopen.contains(&Some(format!("files.open {}", docs.display()))));
+    assert!(reopen.contains(&Some(format!("markdown.open {}", readme.display()))));
+    assert!(reopen.contains(&None), "the tutorial is not restored");
+    let floats = |s: &termos_wm::workspace::Session| {
+        s.active().floats.iter().map(|f| f.rect).collect::<Vec<_>>()
+    };
+    assert_eq!(floats(&snap.layout).len(), 3);
+
+    let (tx, _rx) = mpsc::channel(1024);
+    let opts = DesktopOptions {
+        clipboard: termos_core::clipboard::ClipboardHistory::shared(50),
+        termos_exe: None,
+        launcher: None,
+        server_socket: None,
+        session_name: "again".into(),
+        config_path: h.config_path(),
+        paths: Paths {
+            config_dir: h.dir.path().join("config"),
+            state_dir: h.dir.path().join("state"),
+            runtime_dir: h.dir.path().join("run"),
+            data_dir: h.dir.path().join("data"),
+        },
+        env_shell: None,
+        pane_ids: termos_core::ids::PaneIds::new(),
+        pane_env: common::pane_env(),
+        cwd: None,
+    };
+    let config = Config::load(&h.config_path()).expect("config");
+    let (mut restored, _) = Desktop::from_snapshot(opts, config, tx, &snap).expect("restores");
+    // The terminal and two app windows, where they were; the tutorial's
+    // float is gone.
+    assert_eq!(restored.session().all_panes().len(), 3);
+    let saved_rects = floats(&snap.layout);
+    assert_eq!(floats(restored.session()), saved_rects[..2].to_vec());
+    restored.handle_client(
+        C,
+        ClientMsg::Hello {
+            version: termos_core::proto::PROTOCOL_VERSION,
+            caps: Caps::default(),
+            cols: COLS,
+            rows: ROWS,
+        },
+    );
+    let mut grid = Grid::new(COLS, ROWS);
+    restored.render(C, &mut grid);
+    let after = grid.to_text();
+    assert!(after.contains("Restored heading"), "{after}");
+    assert!(after.contains("Files · my docs"), "{after}");
+}
+
 /// Where `needle` is on `screen`: (column, row).
 fn locate(screen: &str, needle: &str) -> (u16, u16) {
     for (y, line) in screen.lines().enumerate() {

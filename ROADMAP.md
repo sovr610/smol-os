@@ -733,7 +733,7 @@ What was shown, and where (Linux, in an isolated `tmux -L termos-m7` with its ow
 **Progress**
 - [x] Terminal input through one decoder on every platform, and VT input mode on Windows: bracketed paste, the Kitty keyboard protocol and the capability probe there; a fuzz target and an end-to-end paste and Kitty-keys test (D-102)
 - [x] Kitty keyboard release events and alternate keys (flags 2 and 4): the terminal is asked for them only while the focused program wants them; desktop and end-to-end tests (D-103)
-- [ ] App windows saved and restored with the session
+- [x] App windows saved and restored with the session: each app gives the command that reopens it; restore puts it back in the saved layout (D-104)
 - [ ] The KMS console's clipboard, visual bell and pixel images
 - [ ] Foreground programs on macOS and Windows; GPU readings from the OS
 - [ ] Windows: job objects, saving at logoff, the bundled ConPTY and images in panes
@@ -1037,7 +1037,6 @@ Generated from the `TODO(M<n>)` markers in the code. Don't edit by hand; run `ca
 | M9b | `crates/termos-cli/src/kms/mod.rs` | the console's own clipboard and visual bell; images drawn as pixels rather than as blocks. |
 | M9b | `crates/termos-harness/src/backends.rs` | stop the CLI's whole process tree on Windows (a job |
 | M9b | `crates/termos-hw/src/lib.rs` | GPU temperature and power on macOS (SMC), and for non-NVIDIA GPUs on Windows. |
-| M9b | `crates/termos-shell/src/desktop.rs` | save and restore app windows (the folder, file or view an app shows) with the session. |
 | M9b | `crates/termos-shell/src/server.rs` | a hidden window for WM_ENDSESSION, so logoff and shutdown always save. |
 | M9b | `crates/termos-term/src/intercept.rs` | images from programs in panes on Windows, where ConPTY can filter APC and DCS sequences out. |
 | M9b | `crates/termos-term/src/pty.rs` | foreground program name, directory and command line on macOS (libproc) and Windows (process snapshot APIs), so snapshots there name and restore programs too. |

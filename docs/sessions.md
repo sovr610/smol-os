@@ -109,6 +109,12 @@ Restore session main saved at 14:02? (y/n)
     quitting them leaves you at a prompt.
   - Other programs are named in a notification ("not restarted: cargo"),
     so you know what to start yourself.
+  - App windows come back in their places, showing what they showed at
+    the last save: the file manager's folder, the picture or markdown file
+    being viewed, the system monitor, settings, clipboard history, the
+    command center and the usage page. Agent conversations come back with
+    `agent.resume`; the tutorial, notifications and harness windows are
+    not reopened.
 - **`n`:** the saved sessions are kept. Restore them later with `termos restore`
   or the palette command "Restore saved sessions". `termos ls` shows them.
 
@@ -130,6 +136,9 @@ snapshot-delay-ms = 2000
   anything else only the program's name is kept, so a password typed as a
   command-line argument never reaches the disk.
 - Pane text is saved only with `save-scrollback = true`.
+- For an app window, the snapshot holds the command that reopens it, such
+  as `files.open ~/projects` or `markdown.open ~/notes/todo.md`: a folder
+  or file name, never what is in it.
 
 ## Scripting with `termos msg`
 

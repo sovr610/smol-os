@@ -458,6 +458,10 @@ impl UsageApp {
 }
 
 impl App for UsageApp {
+    fn reopen(&self) -> Option<String> {
+        Some("usage.open".to_owned())
+    }
+
     fn title(&self) -> String {
         "Usage and accounts".into()
     }

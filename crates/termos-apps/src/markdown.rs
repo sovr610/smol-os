@@ -1001,6 +1001,13 @@ impl MarkdownViewer {
 }
 
 impl App for MarkdownViewer {
+    fn reopen(&self) -> Option<String> {
+        // A path that is not Unicode would not come back the same.
+        Some(self.path.as_path())
+            .and_then(|p| p.to_str())
+            .map(|p| format!("markdown.open {p}"))
+    }
+
     fn icon(&self) -> termos_render::icons::Icon {
         termos_render::icons::Icon::Markdown
     }

@@ -328,13 +328,13 @@ Window = { id, title, source: Pty | App | Plugin | Agent, state: normal | minimi
 ## 9. Apps and plugins (D-013)
 
 - **Built-in apps** (`termos-apps`) implement an in-process trait defined in `termos-core` (agent windows and devkit panels implement it too):
-  `App { title, icon, handle_key/handle_mouse/handle_paste -> effect, render(area, &mut ratatui::Buffer, theme), images, busy, catch_up, set_waker, deadline, on_timer }`.
+  `App { title, icon, handle_key/handle_mouse/handle_paste -> effect, render(area, &mut ratatui::Buffer, theme), images, busy, catch_up, set_waker, deadline, on_timer, reopen }`.
   - `icon` goes before the window's title; `busy` turns it into a spinner, which moves only while some client animates (D-090); `catch_up` takes in finished background work before the title is drawn.
   - They run on the server loop and push heavy work to their own threads, asking for a redraw with `AppWaker` when it is done.
   - **Timers (D-052):** `deadline`/`on_timer` are scheduled only while the app is on screen for some client, so hidden apps cost nothing (D-028).
   - **Effects:** redraw, close, notify, run a command, `Copy(text)` (clipboard and history), `PasteAndClose(text)`.
   - **Widgets:** `termos_core::widgets` has a braille line chart, sparklines, meters (shaded along their length with `fill_at`) and an image slot; `termos_render::graphics::chart` draws a chart as a picture (D-090).
-  - Saving and restoring app state with sessions is not done yet; app windows are not part of snapshots.
+  - **Saved with the session (D-104):** `reopen` gives the palette command that opens the window again as it is (`files.open DIR`, `image.open PATH`, `monitor.open`...). Snapshots store it, and restore builds the app from it into the saved layout. Apps without one (agents, the harness, the tutorial) are left out.
 - **The apps (D-049, D-052):**
   - image viewer (`image.open PATH`) and markdown viewer (`markdown.open PATH`, local pictures inline);
   - file manager (`files.open [DIR]`; `file.open PATH` opens by kind, `file.edit PATH` runs `$VISUAL`/`$EDITOR` in a new pane; deletes to the trash, D-050);

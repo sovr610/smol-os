@@ -567,9 +567,9 @@ impl Desktop {
     }
 
     /// Rebuilds a saved session (D-033): the layout, a shell in each saved
-    /// directory, and the allowlisted programs typed into their shells.
-    /// Built-in apps are not restored. Returns the desktop and the names of
-    /// programs that were running but not restarted.
+    /// directory, the allowlisted programs typed into their shells, and the
+    /// app windows that said how to reopen (D-104). Returns the desktop and
+    /// the names of programs that were running but not restarted.
     pub fn from_snapshot(
         opts: DesktopOptions,
         config: Config,
@@ -586,13 +586,22 @@ impl Desktop {
         let mut map = std::collections::HashMap::new();
         let mut skipped = Vec::new();
         for old in layout.all_panes() {
-            let Some(saved) = snap
-                .panes
-                .iter()
-                .find(|p| p.id == old.0 && p.kind == SavedKind::Terminal)
-            else {
+            let Some(saved) = snap.panes.iter().find(|p| p.id == old.0) else {
                 continue;
             };
+            if saved.kind == SavedKind::App {
+                // An app window that can come back (D-104) does, in its
+                // place; others are left out of the layout.
+                if let Some(reopen) = &saved.reopen {
+                    match d.restore_app(reopen) {
+                        Ok(id) => {
+                            map.insert(old, id);
+                        }
+                        Err(e) => tracing::warn!("not restoring `{reopen}`: {e}"),
+                    }
+                }
+                continue;
+            }
             let id = d.spawn_term(snapshot::restore_cwd(saved), (area.w, area.h))?;
             map.insert(old, id);
             let Some(pane) = d.panes.get_mut(&id) else {
@@ -619,7 +628,7 @@ impl Desktop {
             }
         }
         if !layout.remap_panes(|old| map.get(&old).copied()) {
-            return Err(io::Error::other("the snapshot has no terminal panes"));
+            return Err(io::Error::other("the snapshot has no panes to restore"));
         }
         layout.name.clone_from(&d.opts.session_name);
         d.session = layout;
@@ -660,17 +669,19 @@ impl Desktop {
                         argv: argv.filter(|a| snapshot::allowed(a, &cfg.restore_programs)),
                         title: p.title.clone(),
                         scrollback,
+                        reopen: None,
                     }
                 }
-                // TODO(M9b): save and restore app windows (the folder, file or view an app shows) with the session.
-                PaneKind::App(_) => PaneSnapshot {
+                // Built-in apps say how to open them again (D-104).
+                PaneKind::App(app) => PaneSnapshot {
                     id: p.id.0,
                     kind: SavedKind::App,
                     cwd: None,
                     program: None,
                     argv: None,
-                    title: String::new(),
+                    title: app.title(),
                     scrollback: None,
+                    reopen: app.reopen(),
                 },
             })
             .collect();
@@ -1058,7 +1069,75 @@ impl Desktop {
         id
     }
 
-    fn insert_app(&mut self, id: PaneId, mut app: Box<dyn App>) {
+    /// The built-in app window `cmd` opens, made but not placed; `None`
+    /// for commands that open no such window. Saved sessions use it to
+    /// bring app windows back where they were (D-104).
+    fn build_app(&self, cmd: &Command) -> Option<Box<dyn App>> {
+        Some(match cmd {
+            Command::ImageOpen(path) => {
+                Box::new(termos_apps::ImageViewer::open(self.resolve_path(path)))
+            }
+            Command::MarkdownOpen(path) => {
+                Box::new(termos_apps::MarkdownViewer::open(self.resolve_path(path)))
+            }
+            Command::FilesOpen(path) => {
+                let dir = if path.is_empty() {
+                    self.focused_cwd()
+                        .or_else(home_dir)
+                        .or_else(|| std::env::current_dir().ok())
+                        .unwrap_or_default()
+                } else {
+                    self.resolve_path(path)
+                };
+                Box::new(termos_apps::FileManager::open(dir))
+            }
+            Command::MonitorOpen => Box::new(termos_apps::SystemMonitor::open()),
+            Command::NetworkOpen => Box::new(termos_apps::NetworkPage::open()),
+            Command::SettingsOpen => {
+                Box::new(termos_apps::Settings::open(self.opts.config_path.clone()))
+            }
+            Command::ClipboardOpen => Box::new(termos_apps::ClipboardManager::new(
+                std::sync::Arc::clone(&self.opts.clipboard),
+            )),
+            _ => return None,
+        })
+    }
+
+    /// An app window for the saved command `reopen`, registered under a
+    /// new id but not placed (the restored layout places it).
+    fn restore_app(&mut self, reopen: &str) -> Result<PaneId, String> {
+        let cmd: Command = reopen
+            .parse()
+            .map_err(|e: crate::commands::CommandError| e.0)?;
+        let app = match &cmd {
+            Command::CenterOpen | Command::UsageOpen => {
+                let kind = if cmd == Command::CenterOpen {
+                    termos_core::app::LaunchKind::Center
+                } else {
+                    termos_core::app::LaunchKind::Usage
+                };
+                self.launcher_app(kind, "")?
+            }
+            _ => self
+                .build_app(&cmd)
+                .ok_or_else(|| format!("`{reopen}` opens no app window"))?,
+        };
+        let id = self.alloc_id();
+        self.register_app(id, app);
+        Ok(id)
+    }
+
+    fn insert_app(&mut self, id: PaneId, app: Box<dyn App>) {
+        self.register_app(id, app);
+        let area = self.layout_area();
+        self.session.active_mut().add_float(id, area);
+        self.animate(anim::Kind::FloatOpen(id), Instant::now());
+        self.dirty = true;
+        self.layout_changed = true;
+    }
+
+    /// Adds an app pane, with a waker for its background work.
+    fn register_app(&mut self, id: PaneId, mut app: Box<dyn App>) {
         let tx = self.pty_tx.clone();
         app.set_waker(AppWaker::new(move || {
             // A full queue already has a wakeup in it.
@@ -1077,11 +1156,6 @@ impl Desktop {
                 bell: false,
             },
         );
-        let area = self.layout_area();
-        self.session.active_mut().add_float(id, area);
-        self.animate(anim::Kind::FloatOpen(id), Instant::now());
-        self.dirty = true;
-        self.layout_changed = true;
     }
 
     /// The program `file.edit` runs (before the file): `$VISUAL` or
@@ -1147,10 +1221,15 @@ impl Desktop {
 
     /// A window from the launcher (agents, audit logs), in the focused
     /// pane's folder.
-    fn launch(&mut self, kind: termos_core::app::LaunchKind, arg: &str) {
+    /// A window the launcher opens (agents, the command center), not yet
+    /// placed.
+    fn launcher_app(
+        &self,
+        kind: termos_core::app::LaunchKind,
+        arg: &str,
+    ) -> Result<Box<dyn App>, String> {
         let Some(launcher) = self.opts.launcher.clone() else {
-            self.notify(Level::Error, "AI agents are not part of this build");
-            return;
+            return Err("AI agents are not part of this build".into());
         };
         let cwd = self
             .focused_cwd()
@@ -1163,7 +1242,11 @@ impl Desktop {
             socket: self.opts.server_socket.as_deref(),
             session: &self.session.name,
         };
-        match launcher.open(kind, arg, &ctx) {
+        launcher.open(kind, arg, &ctx)
+    }
+
+    fn launch(&mut self, kind: termos_core::app::LaunchKind, arg: &str) {
+        match self.launcher_app(kind, arg) {
             Ok(app) => {
                 let id = self.open_app(app);
                 // Agent windows are working windows: give them most of the
@@ -2345,41 +2428,23 @@ impl Desktop {
                 self.open_app(Box::new(app));
             }
             Command::ReloadConfig => self.reload_config(),
-            Command::ImageOpen(path) => {
-                let path = self.resolve_path(&path);
-                self.open_app(Box::new(termos_apps::ImageViewer::open(path)));
-            }
-            Command::MarkdownOpen(path) => {
-                let path = self.resolve_path(&path);
-                self.open_app(Box::new(termos_apps::MarkdownViewer::open(path)));
-            }
-            Command::FilesOpen(path) => {
-                let dir = if path.is_empty() {
-                    self.focused_cwd()
-                        .or_else(home_dir)
-                        .or_else(|| std::env::current_dir().ok())
-                        .unwrap_or_default()
-                } else {
-                    self.resolve_path(&path)
-                };
-                self.open_app(Box::new(termos_apps::FileManager::open(dir)));
+            Command::ImageOpen(_) | Command::MarkdownOpen(_) | Command::FilesOpen(_) => {
+                if let Some(app) = self.build_app(&cmd) {
+                    self.open_app(app);
+                }
             }
             Command::Task(name) => self.open_task(&name, area),
             Command::GitOpen => self.open_git(area),
-            Command::MonitorOpen => {
-                self.open_app(Box::new(termos_apps::SystemMonitor::open()));
-            }
-            Command::NetworkOpen => {
-                self.open_app(Box::new(termos_apps::NetworkPage::open()));
+            Command::MonitorOpen | Command::NetworkOpen => {
+                if let Some(app) = self.build_app(&cmd) {
+                    self.open_app(app);
+                }
             }
             Command::UpdateOpen => self.open_update(area),
-            Command::SettingsOpen => {
-                let path = self.opts.config_path.clone();
-                self.open_app(Box::new(termos_apps::Settings::open(path)));
-            }
-            Command::ClipboardOpen => {
-                let history = std::sync::Arc::clone(&self.opts.clipboard);
-                self.open_app(Box::new(termos_apps::ClipboardManager::new(history)));
+            Command::SettingsOpen | Command::ClipboardOpen => {
+                if let Some(app) = self.build_app(&cmd) {
+                    self.open_app(app);
+                }
             }
             Command::ClipboardClear => {
                 if let Ok(mut h) = self.opts.clipboard.lock() {

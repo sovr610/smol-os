@@ -5,9 +5,11 @@
 //! A snapshot is JSON at `<state>/sessions/<server>/<session>.json` (mode
 //! 0600, written atomically): the layout of every workspace, and per pane
 //! its working directory, the foreground program and, if enabled, the text
-//! of its scrollback. Restoring starts a shell in each saved directory and
-//! re-runs programs on the `[session] restore-programs` allowlist; others
-//! are only named.
+//! of its scrollback, or for an app window the command that opens it again.
+//! Restoring starts a shell in each saved directory and re-runs programs on
+//! the `[session] restore-programs` allowlist; others are only named. App
+//! windows that can say how to reopen (files, viewers, the monitor...)
+//! come back in their places (D-104).
 //!
 //! Command lines are stored only for allowlisted programs: anything else
 //! (which may carry a password on its command line) is saved by name.
@@ -40,7 +42,7 @@ pub struct SessionSnapshot {
 pub enum SavedKind {
     #[default]
     Terminal,
-    /// A built-in app (tutorial, notification center): not restored.
+    /// A built-in app: restored when it says how ([`PaneSnapshot::reopen`]).
     App,
 }
 
@@ -64,6 +66,10 @@ pub struct PaneSnapshot {
     /// Scrollback and screen text, oldest first (`save-scrollback`).
     #[serde(default)]
     pub scrollback: Option<Vec<String>>,
+    /// For an app window: the palette command that opens it again as it
+    /// was (D-104).
+    #[serde(default)]
+    pub reopen: Option<String>,
 }
 
 /// The program name of a command line (`/usr/bin/vim` → `vim`,
@@ -274,6 +280,7 @@ mod tests {
             argv: None,
             title: String::new(),
             scrollback: None,
+            reopen: None,
         }
     }
 

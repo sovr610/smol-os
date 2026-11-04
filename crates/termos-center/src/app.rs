@@ -1210,6 +1210,10 @@ impl CommandCenter {
 }
 
 impl App for CommandCenter {
+    fn reopen(&self) -> Option<String> {
+        Some("center.open".to_owned())
+    }
+
     fn title(&self) -> String {
         "Command center".into()
     }
