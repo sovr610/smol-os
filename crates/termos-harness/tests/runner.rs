@@ -6,7 +6,9 @@
 
 use std::io::{Read as _, Write as _};
 use std::net::TcpListener;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(unix)]
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -17,7 +19,9 @@ use termos_core::config::harness::BackendKind;
 use termos_core::paths::Paths;
 use termos_harness::backends::{ApiContext, Program, Programs};
 use termos_harness::plan::Plan;
-use termos_harness::runner::{Context, Harness, Phase, RunView, TaskState};
+#[cfg(unix)]
+use termos_harness::runner::TaskState;
+use termos_harness::runner::{Context, Harness, Phase, RunView};
 
 const T: Duration = Duration::from_secs(30);
 
@@ -56,11 +60,14 @@ fn config(toml: &str) -> Config {
     Config::parse(toml, Path::new("config.toml")).expect("config")
 }
 
-/// Stand-in CLIs in a folder: `claude` and `codex` scripts.
+/// Stand-in CLIs in a folder: `claude` and `codex` scripts (shell
+/// scripts, so Unix only).
+#[cfg(unix)]
 struct StandIns {
     bin: PathBuf,
 }
 
+#[cfg(unix)]
 impl Programs for StandIns {
     fn cli(&self, kind: BackendKind, account: Option<&str>) -> Result<Program, String> {
         let name = match kind {
@@ -150,6 +157,7 @@ exit "$(cat "$dir/exit-{name}-$a" 2>/dev/null || echo 0)"
     );
 }
 
+#[cfg(unix)]
 fn claude_result(text: &str, error: bool) -> String {
     format!(
         "{}\n{}\n",
@@ -160,6 +168,7 @@ fn claude_result(text: &str, error: bool) -> String {
     )
 }
 
+#[cfg(unix)]
 fn codex_result(text: &str) -> String {
     format!(
         "{}\n{}\n{}\n{}\n",

@@ -123,6 +123,7 @@ const CROSS_TEST_CRATES: &[&str] = &[
     "termos-plugin",
     "termos-apps",
     "termos-shell",
+    "termos-harness",
     "termos-cli",
 ];
 
