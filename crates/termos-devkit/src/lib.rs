@@ -12,6 +12,7 @@
 //! - [`templates`]: `termos create <template> [dir]`;
 //! - [`tasks`]: build, run and test for a project.
 
+pub mod accounts;
 pub mod check;
 pub mod cli_agents;
 pub mod editor;

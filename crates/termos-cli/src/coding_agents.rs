@@ -10,6 +10,7 @@ use std::process::ExitCode;
 use anyhow::{Context as _, bail};
 use termos_core::config::Config;
 use termos_core::paths::Paths;
+use termos_devkit::accounts::{Account, Accounts};
 use termos_devkit::cli_agents::{self as ca, Curl, Platform, Tool};
 
 /// `claude` or `claude@2.1.90`.
@@ -69,26 +70,43 @@ pub(crate) fn install_tool(
         got.path.display()
     ));
     if had.is_none() && config.agents.termos_mcp.register {
-        match register_tool(tool, &got.path) {
-            Ok(how) => say(&how),
-            // The install stands; the server can be added later.
-            Err(e) => eprintln!(
-                "termos: could not register TermOS's MCP server with {}: {e:#} (try `termos mcp register {}`)",
-                tool.title(),
-                tool.name()
-            ),
+        // In every account: each has its own settings (D-097).
+        for account in accounts(paths)?.list(tool) {
+            match register_tool(&got.path, &account) {
+                Ok(how) => say(&how),
+                // The install stands; the server can be added later.
+                Err(e) => eprintln!(
+                    "termos: could not register TermOS's MCP server with {}: {e:#} (try `termos mcp register {}`)",
+                    describe(&account),
+                    tool.name()
+                ),
+            }
         }
     }
     Ok(got)
 }
 
-fn home() -> Option<PathBuf> {
+/// The accounts of every CLI (D-097).
+pub(crate) fn accounts(paths: &Paths) -> anyhow::Result<Accounts> {
+    Accounts::load(&paths.data_dir).map_err(|e| anyhow::anyhow!("{e}"))
+}
+
+/// "Claude Code" for the default account, "Claude Code (work)" for another.
+pub(crate) fn describe(a: &Account) -> String {
+    if a.is_default() {
+        a.tool.title().to_owned()
+    } else {
+        format!("{} ({})", a.tool.title(), a.title())
+    }
+}
+
+pub(crate) fn home() -> Option<PathBuf> {
     std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
         .filter(|h| !h.is_empty())
         .map(PathBuf::from)
 }
 
-fn env(k: &str) -> Option<String> {
+pub(crate) fn env(k: &str) -> Option<String> {
     std::env::var(k).ok()
 }
 
@@ -109,14 +127,16 @@ fn plain(p: PathBuf) -> PathBuf {
     }
 }
 
-/// Registers `termos mcp serve` with `tool` (run as `program`).
-fn register_tool(tool: Tool, program: &Path) -> anyhow::Result<String> {
+/// Registers `termos mcp serve` with `account`'s CLI (run as `program`).
+pub(crate) fn register_tool(program: &Path, account: &Account) -> anyhow::Result<String> {
+    let tool = account.tool;
     let termos = termos_exe()?;
     match ca::mcp_register(tool, program, &termos) {
         Some(lines) => {
             for (i, argv) in lines.iter().enumerate() {
                 let out = std::process::Command::new(&argv[0])
                     .args(&argv[1..])
+                    .envs(account.env())
                     .stdin(std::process::Stdio::null())
                     .output()
                     .with_context(|| format!("cannot run {}", argv[0]))?;
@@ -132,13 +152,14 @@ fn register_tool(tool: Tool, program: &Path) -> anyhow::Result<String> {
             }
             Ok(format!(
                 "registered TermOS's MCP server with {} (`{} mcp list` shows it)",
-                tool.title(),
+                describe(account),
                 tool.name()
             ))
         }
         None => {
-            let dir =
-                ca::codex_home(&env, home().as_deref()).context("cannot find your home folder")?;
+            let dir = account
+                .home(&env, home().as_deref())
+                .context("cannot find your home folder")?;
             let file = dir.join("config.toml");
             let before = match std::fs::read_to_string(&file) {
                 Ok(t) => t,
@@ -150,7 +171,7 @@ fn register_tool(tool: Tool, program: &Path) -> anyhow::Result<String> {
             write_replacing(&file, &after)?;
             Ok(format!(
                 "registered TermOS's MCP server with {} (in {})",
-                tool.title(),
+                describe(account),
                 file.display()
             ))
         }
@@ -170,10 +191,10 @@ fn write_replacing(file: &Path, text: &str) -> anyhow::Result<()> {
 }
 
 /// `tool`'s program: TermOS's install, else the one on `PATH`.
-fn program_of(paths: &Paths, tool: Tool) -> Option<PathBuf> {
+pub(crate) fn program_of(paths: &Paths, tool: Tool) -> Option<PathBuf> {
     ca::installed(&paths.data_dir, tool)
         .map(|i| i.path)
-        .or_else(|| termos_devkit::mise::which(tool.name(), std::env::var_os("PATH").as_ref()))
+        .or_else(|| elsewhere(paths, tool))
 }
 
 /// The tools named, or both.
@@ -199,11 +220,13 @@ pub(crate) fn register(paths: &Paths, name: Option<&str>) -> anyhow::Result<Exit
             }
             continue;
         };
-        match register_tool(tool, &program) {
-            Ok(how) => say(&how),
-            Err(e) => {
-                eprintln!("termos: {}: {e:#}", tool.title());
-                failed = true;
+        for account in accounts(paths)?.list(tool) {
+            match register_tool(&program, &account) {
+                Ok(how) => say(&how),
+                Err(e) => {
+                    eprintln!("termos: {}: {e:#}", describe(&account));
+                    failed = true;
+                }
             }
         }
     }
@@ -217,46 +240,63 @@ pub(crate) fn register(paths: &Paths, name: Option<&str>) -> anyhow::Result<Exit
 /// `termos mcp unregister [NAME]`.
 pub(crate) fn unregister(paths: &Paths, name: Option<&str>) -> anyhow::Result<ExitCode> {
     for tool in tools_named(name)? {
+        for account in accounts(paths)?.list(tool) {
+            unregister_tool(paths, &account)?;
+        }
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+/// Takes TermOS's MCP server out of `account`'s settings.
+pub(crate) fn unregister_tool(paths: &Paths, account: &Account) -> anyhow::Result<()> {
+    let tool = account.tool;
+    {
         match tool {
             Tool::Claude => {
                 let Some(program) = program_of(paths, tool) else {
-                    continue;
+                    return Ok(());
                 };
                 let ok = std::process::Command::new(&program)
                     .args(["mcp", "remove", "--scope", "user", "termos"])
+                    .envs(account.env())
                     .stdin(std::process::Stdio::null())
                     .output()
                     .is_ok_and(|o| o.status.success());
                 if ok {
-                    say("removed TermOS's MCP server from Claude Code");
+                    say(&format!(
+                        "removed TermOS's MCP server from {}",
+                        describe(account)
+                    ));
                 }
             }
             Tool::Codex => {
-                let Some(dir) = ca::codex_home(&env, home().as_deref()) else {
-                    continue;
+                let Some(dir) = account.home(&env, home().as_deref()) else {
+                    return Ok(());
                 };
                 let file = dir.join("config.toml");
                 let Ok(before) = std::fs::read_to_string(&file) else {
-                    continue;
+                    return Ok(());
                 };
                 if ca::registered(tool, &before) {
                     write_replacing(&file, &ca::codex_config_without(&before)?)?;
                     say(&format!(
-                        "removed TermOS's MCP server from Codex CLI ({})",
+                        "removed TermOS's MCP server from {} ({})",
+                        describe(account),
                         file.display()
                     ));
                 }
             }
         }
     }
-    Ok(ExitCode::SUCCESS)
+    Ok(())
 }
 
-/// Whether TermOS's MCP server is in `tool`'s settings.
-fn is_registered(tool: Tool) -> Option<bool> {
+/// Whether TermOS's MCP server is in `account`'s settings.
+pub(crate) fn is_registered(account: &Account) -> Option<bool> {
+    let tool = account.tool;
     let file = match tool {
-        Tool::Claude => ca::claude_settings(&env, home().as_deref())?,
-        Tool::Codex => ca::codex_home(&env, home().as_deref())?.join("config.toml"),
+        Tool::Claude => account.claude_settings(&env, home().as_deref())?,
+        Tool::Codex => account.home(&env, home().as_deref())?.join("config.toml"),
     };
     let text = std::fs::read_to_string(file).ok()?;
     Some(ca::registered(tool, &text))
@@ -373,14 +413,23 @@ pub(crate) fn status(paths: &Paths) -> anyhow::Result<ExitCode> {
         if let Some(other) = elsewhere(paths, tool) {
             println!("{:<12} also on PATH: {}", "", other.display());
         }
-        match is_registered(tool) {
-            Some(true) => println!("{:<12} TermOS's MCP server: registered", ""),
-            Some(false) => println!(
-                "{:<12} TermOS's MCP server: not registered (`termos mcp register {}`)",
-                "",
-                tool.name()
-            ),
-            None => {}
+        let all = accounts(paths)?;
+        let list = all.list(tool);
+        for account in &list {
+            let whose = if list.len() > 1 {
+                format!(" ({})", account.name)
+            } else {
+                String::new()
+            };
+            match is_registered(account) {
+                Some(true) => println!("{:<12} TermOS's MCP server{whose}: registered", ""),
+                Some(false) => println!(
+                    "{:<12} TermOS's MCP server{whose}: not registered (`termos mcp register {}`)",
+                    "",
+                    tool.name()
+                ),
+                None => {}
+            }
         }
     }
     Ok(ExitCode::SUCCESS)

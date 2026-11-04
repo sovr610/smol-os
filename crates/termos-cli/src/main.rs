@@ -9,6 +9,7 @@
 //! such as `termos msg` and `termos detach` talk to the server and session
 //! the pane belongs to (`$TERMOS`).
 
+mod accounts_cmd;
 mod agents;
 mod client;
 mod coding_agents;
@@ -174,6 +175,11 @@ enum Cmd {
     Agent {
         #[command(subcommand)]
         action: agents::AgentCmd,
+    },
+    /// Several accounts of Claude Code and Codex CLI, and which is in use.
+    Account {
+        #[command(subcommand)]
+        action: accounts_cmd::AccountCmd,
     },
     /// TermOS's MCP server, for Claude Code and Codex CLI.
     Mcp {
@@ -398,6 +404,9 @@ fn run_cli(args: impl IntoIterator<Item = String>) -> anyhow::Result<ExitCode> {
         Some(Cmd::Secret { action }) => agents::secret_command(action, &paths, &config_path),
         Some(Cmd::Agent { action }) => agents::agent_command(action, &paths, &config_path),
         Some(Cmd::Mcp { action }) => agents::mcp_command(action, &paths, &config_path),
+        Some(Cmd::Account { action }) => {
+            accounts_cmd::account_command(action, &paths, &config_path)
+        }
         Some(Cmd::Audit { action }) => agents::audit_command(action, &paths),
         Some(Cmd::Sandbox { action }) => agents::sandbox_command(action, &paths),
         Some(Cmd::Model { action }) => models::model_command(action, &paths, &config_path),
@@ -536,6 +545,7 @@ fn run(cli: &Cli, paths: &Paths, config_path: &Path, t: &Target) -> anyhow::Resu
             | Cmd::Secret { .. }
             | Cmd::Agent { .. }
             | Cmd::Mcp { .. }
+            | Cmd::Account { .. }
             | Cmd::Audit { .. }
             | Cmd::Sandbox { .. }
             | Cmd::Model { .. }
