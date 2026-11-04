@@ -751,10 +751,13 @@ mod tests {
         assert_eq!(namespace_hint(&|_| None), None);
     }
 
+    #[cfg(unix)]
     fn strings(a: &[OsString]) -> Vec<String> {
         a.iter().map(|s| s.to_string_lossy().into_owned()).collect()
     }
 
+    // bubblewrap is Linux's; Windows paths without a drive are not absolute.
+    #[cfg(unix)]
     #[test]
     fn bubblewrap_binds_the_home_and_a_project_outside_it() {
         let env = vec![("HOME".to_owned(), "/root".to_owned())];
