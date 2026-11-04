@@ -836,14 +836,30 @@ Not shown here: pixel graphics (the CPU chart as a picture, a picture wallpaper)
 ---
 
 ## M10c — The command center
-**Status:** 🚧 · Owner answers: observe and act, with history (D-084); the machine sampled every minute, also while closed (D-092). Design: D-093.
+**Status:** 🚧 · Owner answers: observe and act, with history (D-084); the machine sampled every minute, also while closed (D-092). Design: D-093, ARCHITECTURE.md §4, §9 and §11; user guide [center.md](docs/center.md).
 
 **Deliverables**
-- A command center window (`tos center`, the menu, a key): the AI side (agent sessions, tokens and cost per provider and model, tool calls and decisions, the audit chain, local models and the router, MCP servers, external agents) and the OS side (processes, sessions and panes, hardware, logs, network, updates).
-- A local history (metrics and usage, kept for a configurable time, 7 days by default; secrets never stored), with charts over time.
-- Actions: stop an agent, approve or deny a pending permission, kill a process, open the related window or log.
+- **The window** (`center.open`, prefix `C`, the menu, `tos center`), mouse first, every action a button and a key:
+  - [x] **Overview:** agents running and asking (with Approve and Deny), tokens, cost and tool calls over the range, the audit chains, local models, CPU, memory, network, the busiest processes, sessions and panes, charts of CPU and tokens
+  - [x] **AI:** live sessions (profile, provider and model, state, tokens, cost, the pending call) with Approve, Deny, Stop and Audit; usage by model; tool calls by decision and the most used tools; every audit chain verified; local models and the router; MCP servers; CLI agents with how many windows run each
+  - [x] **System:** processes (End, after asking), every session's panes (Go, Close after asking), disks, network, version and updates, the system monitor, the log's last lines (Open)
+  - [x] **History:** 1 h, 24 h or 7 days of CPU and memory (a picture where the terminal shows pixels), tokens, cost, usage by model, decisions and what was done from the command center
+- **History** (D-092, D-093):
+  - [x] `termos_core::journal`: daily private JSON-lines files, numbers and names only (never prompts, tool arguments or secrets), kept `[center] keep-days` (7)
+  - [x] Agent sessions record every turn's tokens and cost, every tool decision, their start and end
+  - [x] The machine every minute, also while closed (`[center] sample = "1m" | "5m" | "off"`)
+- **Actions:** [x] stop an agent, approve or deny its pending call (the live registry, through the session's own input), end a process (SIGTERM; never TermOS itself), go to or close a pane (control API, new `pane.focus`), open the related window or log
+- **Settings:** [x] history kept and sampling under Command center
 
 **Acceptance:** each view is snapshot-tested against fixtures; the history survives a restart and expires; actions are tested end to end; idle CPU stays under budget with the window closed.
+
+**What the tests cover**
+- **Journal:** records survive a new `Journal` (a restart), ranges read back, a torn last line is skipped, files are private, days past keeping are deleted when a new day starts.
+- **Sampler:** one record per tick, from a fixture machine.
+- **History:** samples average into buckets, gaps stay empty, tokens and cost sum by bucket and by model (unpriced models have no cost), decisions and tools are counted, older records stay out of a short range.
+- **The window, against fixtures:** a snapshot of every tab; Approve, Deny and Stop through clicks and keys reach the registry; Audit and CLI agent buttons run their commands; End and Close ask, then act, and a failure says so; No cancels; Go goes; a new range reads the history again, the timer does not; the CPU history is a pixels-only picture.
+- **Agents:** a whole session against a mock provider is listed in the registry, its edit approved from it; the journal holds its start, every decision, its usage (adding up to the session's cost) and its end, and no secret.
+- **End to end, real binary:** the data source against a real server lists the session and panes, reads the machine and the log, brings a pane forward, closes another, ends a real process, and the history shows both actions; on Unix, the window in a real client shows the server's panes, and a click on Close and `y` close one.
 
 ---
 

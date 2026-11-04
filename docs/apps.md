@@ -6,6 +6,7 @@ move, resize, minimize or tile like any other. Open them from the palette
 
 | App | Palette | Command | Key |
 | --- | --- | --- | --- |
+| Command center ([center.md](center.md)) | "Command center" | `center.open` | prefix `C` |
 | Files | "Files" | `files.open [FOLDER]` | |
 | System monitor | "System monitor" | `monitor.open` | |
 | Clipboard history | "Clipboard history" | `clipboard.open` | prefix `=` |

@@ -41,6 +41,7 @@ tos notify --level warn "the build is slow today"
 | `tos open https://…` | Opens a web address in your browser (where there is one) |
 | `tos files [DIR]` | Browses a folder (this one by default) |
 | `tos monitor` | The system monitor |
+| `tos center` | The command center: AI agents and the system, live and over time ([center.md](center.md)) |
 | `tos settings` | Settings |
 | `tos clipboard` | The clipboard history |
 | `tos network`, `tos updates` | The network and updates windows |

@@ -237,7 +237,8 @@ history, settings and markdown viewer are in [apps.md](apps.md), and
 status-line widgets in WebAssembly in [widgets.md](widgets.md). Languages,
 editors, project templates, build/run/test panels and the Git UI are in
 [languages.md](languages.md). The `tos` command, which every pane has, is in
-[tos.md](tos.md).
+[tos.md](tos.md). The command center (`C-b C`), over the AI agents and the
+system with a 7-day history, is in [center.md](center.md).
 
 ## Test builds
 

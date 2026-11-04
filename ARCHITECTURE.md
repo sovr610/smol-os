@@ -339,6 +339,7 @@ Window = { id, title, source: Pty | App | Plugin | Agent, state: normal | minimi
   - clipboard manager (`clipboard.open`, prefix `=`): the server-wide history of copies, in memory only (D-050);
   - settings (`settings.open`): edits config.toml in place, keeping comments, and reloads;
   - About TermOS (`about.open`): version, system, file locations, licence (D-089).
+  - the command center (`center.open`, prefix `C`; termos-center, opened through the launcher, §11, D-093).
 - **Images (D-049):** apps report images with `App::images()` (a shared picture fitted into a cell rectangle, which may be scrolled partly above the app), shown through the ladder of §5.8.
 - **Plain TUI programs** are first-class without any integration: they run in PTY windows, including the images they print (Kitty graphics, Sixel; D-048) and the Kitty keyboard protocol (D-046).
 - **Out-of-process plugins (D-034):** a directory under `~/.config/termos/plugins/<name>/` with an executable and a `plugin.toml` (name, version, exec, `[permissions] windows/status/commands/notify`). Plugins run only while listed in `[plugins] enabled`.
@@ -397,6 +398,8 @@ termos-devkit holds all of it; the CLI wires it in, and the desktop reaches it b
 ## 11. AI agent runtime (M6; D-058–D-064)
 
 termos-ai holds all of it; the CLI hands the server a launcher for its windows (§4), and `termos secret|agent|audit|sandbox` reach it from the shell. User guide: [docs/agents.md](docs/agents.md).
+
+- **The command center (M10c, D-092, D-093):** sessions record each turn's tokens and cost, each tool decision and their start and end in `termos_core::journal` (one private JSON-lines file per UTC day under `<state>/center/`, numbers and names only, `[center] keep-days`), and list themselves in `termos_ai::registry` while they run (state, usage, cost, pending call; stop, approve, deny through the session's input). `termos-center` holds the window (Overview, AI, System, History), its data gathered on its own thread every 2 s while visible (termos-hw, the server's control API, audit chains, the log, the model cache and router, MCP servers, CLI agents) and the sampler thread that records CPU, memory and network every minute (`[center] sample`). User guide: [docs/center.md](docs/center.md).
 
 - **Providers (D-058, D-059):**
   ```rust
