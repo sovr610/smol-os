@@ -366,6 +366,8 @@ pub struct Live {
     history: Option<History>,
     /// Audit logs verified, by path and size, so each is read once.
     verified: BTreeMap<PathBuf, (u64, bool)>,
+    /// Claude Code's and Codex CLI's own usage (`[center] cli-usage`).
+    theirs: Option<crate::theirs::Reader>,
 }
 
 impl Live {
@@ -384,7 +386,16 @@ impl Live {
             runtime: None,
             history: None,
             verified: BTreeMap::new(),
+            theirs: None,
         }
+    }
+
+    /// Reads the CLIs' usage from `dirs` (rather than where the
+    /// environment says).
+    #[must_use]
+    pub fn with_cli_usage(mut self, dirs: crate::theirs::Dirs) -> Self {
+        self.theirs = Some(crate::theirs::Reader::new(dirs));
+        self
     }
 
     fn call(&mut self, method: &str, params: Option<Value>) -> Result<Value, String> {
@@ -552,7 +563,21 @@ impl Gather for Live {
         }
         let stale = self.history.as_ref().is_none_or(|h| h.range != range);
         if journal || stale {
-            let records = self.journal.read(now - range.secs());
+            let since = now - range.secs();
+            let mut records = self.journal.read(since);
+            if self.config.center.cli_usage {
+                let reader = self.theirs.get_or_insert_with(|| {
+                    let home = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
+                        .filter(|h| !h.is_empty())
+                        .map(PathBuf::from);
+                    crate::theirs::Reader::new(crate::theirs::Dirs::find(
+                        &|k| std::env::var(k).ok(),
+                        home.as_deref(),
+                    ))
+                });
+                records.extend(reader.read(since));
+                records.sort_by_key(|r| r.time);
+            }
             self.history = Some(history(&records, range, now));
         }
         if let Some(h) = &self.history {

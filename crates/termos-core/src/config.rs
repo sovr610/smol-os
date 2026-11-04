@@ -413,6 +413,9 @@ pub struct CenterConfig {
     /// How often CPU, memory and network are recorded, also while the
     /// command center is closed: "1m", "5m" or "off".
     pub sample: SampleEvery,
+    /// Claude Code's and Codex CLI's own usage: token counts, models and
+    /// times read from their session logs, never their text (D-094).
+    pub cli_usage: bool,
 }
 
 impl Default for CenterConfig {
@@ -420,6 +423,7 @@ impl Default for CenterConfig {
         Self {
             keep_days: 7,
             sample: SampleEvery::OneMinute,
+            cli_usage: true,
         }
     }
 }
@@ -652,6 +656,7 @@ sandbox = true           # in the agent sandbox where there is one (Linux)
 # The command center's history: AI usage, tool calls and the machine's load.
 keep-days = 7            # days kept on disk (1 to 365)
 sample = "1m"            # CPU, memory and network every "1m" or "5m", or "off"
+cli-usage = true         # Claude Code's and Codex's tokens from their logs (numbers only)
 
 [clipboard]
 # Copies remembered for the clipboard manager (prefix =), newest first.

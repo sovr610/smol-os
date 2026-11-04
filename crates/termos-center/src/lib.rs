@@ -17,5 +17,6 @@
 pub mod app;
 pub mod data;
 pub mod sampler;
+pub mod theirs;
 
 pub use app::CommandCenter;

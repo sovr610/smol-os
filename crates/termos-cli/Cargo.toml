@@ -68,6 +68,7 @@ proptest.workspace = true
 tempfile.workspace = true
 vt100.workspace = true
 rmcp.workspace = true
+jiff.workspace = true
 
 [lints]
 workspace = true

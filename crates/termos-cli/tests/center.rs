@@ -50,12 +50,27 @@ fn its_actions_reach_the_server_and_the_system() {
 
     let paths = env.paths();
     let journal = Arc::new(Journal::new(&paths.state_dir, 7));
+    // Claude Code's log, as it writes one: its numbers join the history.
+    let project = env.path().join(".claude/projects/-w");
+    std::fs::create_dir_all(&project).expect("mkdir");
+    let stamp = jiff::Timestamp::now().to_string();
+    std::fs::write(
+        project.join("s.jsonl"),
+        format!(
+            "{{\"type\":\"assistant\",\"timestamp\":\"{stamp}\",\"requestId\":\"r\",\"message\":{{\"id\":\"m\",\"model\":\"fixture-claude\",\"content\":[{{\"type\":\"text\",\"text\":\"hello\"}}],\"usage\":{{\"input_tokens\":7,\"output_tokens\":11}}}}}}\n"
+        ),
+    )
+    .expect("write");
     let mut live = Live::new(
         Some(env.socket()),
         Arc::clone(&journal),
         paths.clone(),
         Config::default(),
-    );
+    )
+    .with_cli_usage(termos_center::theirs::Dirs::find(
+        &|_| None,
+        Some(env.path()),
+    ));
     let snap = live.snapshot(Range::Hour, true);
     assert_eq!(snap.control_error, None);
     assert_eq!(snap.sessions.len(), 1);
@@ -63,6 +78,16 @@ fn its_actions_reach_the_server_and_the_system() {
     assert_eq!(snap.panes.len(), 2);
     assert!(snap.sample.is_some(), "the machine was read");
     assert!(snap.log_file.is_some(), "the server's log");
+    let theirs = snap
+        .history
+        .models
+        .iter()
+        .find(|m| m.provider == "claude-code")
+        .expect("Claude Code's usage");
+    assert_eq!(
+        (theirs.model.as_str(), theirs.input, theirs.output),
+        ("fixture-claude", 7, 11)
+    );
 
     // Go: the first pane comes to the front.
     live.go_to_pane(ids[0]).expect("go");

@@ -13,6 +13,7 @@ publish.workspace = true
 [dependencies]
 jiff.workspace = true
 ratatui-core.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 termos-ai.workspace = true
 termos-core.workspace = true

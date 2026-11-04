@@ -248,6 +248,14 @@ const SETTINGS: &[Setting] = &[
         Kind::Choice(&["1m", "5m", "off"]),
     ),
     s(
+        "Command center",
+        "center",
+        "cli-usage",
+        "CLI agents' usage",
+        "Claude Code and Codex tokens from their logs, not text",
+        Kind::Bool,
+    ),
+    s(
         "System",
         "",
         "",
