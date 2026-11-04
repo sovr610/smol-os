@@ -101,7 +101,7 @@ agents and models. A frontend is only a *client* of the server (D-007).
 | `termos-cli` | The `termos` binary: server, clients, every subcommand | M0 |
 | `termos-plugin` | Plugin protocol types and a blocking Rust SDK (D-034); WIT definitions for widgets later (M4) | M3 |
 | `termos-hw` | CPU, GPU, memory, temperature, disk, network and process readings (sysinfo plus sysfs and NVML probes, D-050), shared by the system monitor and models | M4 |
-| `termos-center` | The command center: its window, the data it gathers and the sampler that records the machine's load in the journal (D-093) | M10 |
+| `termos-center` | The command center: its window, the data it gathers and the sampler that records the machine's load in the journal (D-093); the usage app of every AI account (D-097) | M10 |
 | `xtask` | Repo automation: `ci`, `check-todos`, `todos` | M0 |
 
 **Dependency direction.** These are the edges we intend. There are no cycles, and a
@@ -111,7 +111,7 @@ crate never depends on one listed above it.
 | --- | --- |
 | `termos-cli` | everything below. It wires the window factories from apps, ai and devkit into the shell. |
 | `termos-shell` | wm, term, apps, plugin, core, render |
-| `termos-center` | ai, models, hw, core, render. The `termos` binary opens its window through the launcher. |
+| `termos-center` | ai, models, devkit, hw, core, render. The `termos` binary opens its windows through the launcher. |
 | `termos-ai` | term (PTY-backed `run_command`), core, render. It reaches `termos-models` only over HTTP. |
 | `termos-devkit` | term, core, render |
 | `termos-apps` | hw, core, render |
@@ -427,6 +427,7 @@ termos-ai holds all of it; the CLI hands the server a launcher for its windows (
   - **Installed by TermOS** (`termos_devkit::cli_agents`, `termos agent install|update|remove|status`): the vendors' native programs, fetched with the system's `curl` (HTTPS only) and checked before use. Claude Code: the `stable` channel's version, that release's `manifest.json`, the platform's SHA-256. Codex: the GitHub release's asset with the SHA-256 digest GitHub publishes (none: refused). They live in `<data>/agents/<name>/<version>/`, linked into `<data>/bin`, first on every pane's `PATH`. `agent.external claude|codex` runs TermOS's copy and offers to install when there is none; Claude Code's own updater is off for it (`DISABLE_AUTOUPDATER`).
   - **TermOS's MCP server** (`termos mcp serve`, `termos_ai::mcp_server`): MCP over stdio, written by hand (JSON-RPC lines; versions 2024-11-05 to 2025-11-25), reaching the server through the control API as the agent's own pane (`$TERMOS`, `$TERMOS_PANE`). Tools: `list_panes`, `read_pane` (the new `pane.read` method; keys masked), `send_to_pane` (never its own), `open_pane`, `open_file`, `run_command`, `notify`, `copy_to_clipboard`. The CLI asks before each call; `[agents.termos-mcp]` denies tools and commands on top; every call goes to an audit log (`mcp-<id>`) and to the journal. Installing registers it (`claude mcp add --scope user`; `[mcp_servers.termos]` in Codex's `config.toml`, edited with toml_edit).
   - **Their usage** (`termos_center::theirs`, `[center] cli-usage`): token counts, models and times from their session logs (`~/.claude/projects`, `~/.codex/sessions`), read incrementally into the command center's history; text fields are skipped by the deserializer.
+- **AI accounts (M11a, D-096, D-097):** several accounts per CLI, each a folder the CLI already supports (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`) under `<data>/accounts/` (`termos_devkit::accounts`, `termos account`). `<data>/bin/claude` and `codex` are links to `termos`, which runs the real program as the pinned or active account (`crates/termos-cli/src/shim.rs`). Switching: the menu's Accounts, `account.use`, and "Continue as" on an agent window, which copies its folder's newest conversation into the other account and resumes it (`termos_devkit::conversations`). The shell reaches accounts through the launcher (`accounts()`, `use_account()`). The usage app (`termos_center::usage`, `usage.open`) shows each account's plan limits as the CLI reported them (Codex's logs; Claude Code's status line, recorded by `termos agent statusline`), its 5-hour window and week against the user's budgets, its tokens, and TermOS's own agents by provider. User guide: [docs/accounts.md](docs/accounts.md).
 - **Secrets (D-017, D-058):** stored with the `keyring` crate (Secret Service on Linux, Keychain on macOS, Credential Manager on Windows), or in an age file locked with a passphrase where no keyring service exists, as on bare metal. They're handled as `secrecy` types, config refers to them as `keyring:<name>`, and they are redacted from everything TermOS writes.
 
 ---

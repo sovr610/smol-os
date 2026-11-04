@@ -87,7 +87,7 @@ fn accounts_are_profiles_with_their_own_folders() {
             "--no-sign-in",
         ],
     );
-    assert!(added.contains("added Claude Code (Work (Max))"), "{added}");
+    assert!(added.contains("added Claude Code · Work (Max)"), "{added}");
     let data = env.paths().data_dir;
     let work = data.join("accounts/claude/work");
     assert!(work.join("settings.json").exists(), "settings shared");

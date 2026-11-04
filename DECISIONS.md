@@ -950,6 +950,19 @@ rewrite history.
 
 ---
 
+## D-097: AI accounts: profiles, shims, carried conversations, the usage app
+- **Status:** Accepted · 2026-11-04
+- **Decision:**
+  - **Accounts are folders the CLIs already support:** `CLAUDE_CONFIG_DIR` and `CODEX_HOME`, each holding its own login (the macOS Keychain and Codex's keyring entries are keyed to the folder), settings and conversations, in `<data>/accounts/<cli>/<name>` (private). `default` is the CLI's own folder. An index (`<data>/accounts/accounts.toml`) keeps labels, budgets and the account in use. A new account links the default's settings, instructions and skills (copies where links are not allowed); Codex's `config.toml` is copied, as TermOS registers its server per account. Names and folders do not change after creation (a login can be tied to the folder's path); labels do.
+  - **Shims:** `<data>/bin/claude` and `codex` are links to `termos`, which answers to its name: it picks the account (pinned with `TERMOS_ACCOUNT_<CLI>`, else the one in use), sets the folder variable and becomes the real program (TermOS's install, else the next on `PATH`, never itself). A folder variable the user set wins. The shims exist only while the CLI does. This replaces the pane-wide `DISABLE_AUTOUPDATER` of D-095 (the shim sets it for TermOS's copy).
+  - **Carrying a conversation:** the newest conversation for the folder is copied into the other account (Claude Code: the transcript, its sub-agent and tool-result folder and its file snapshots, resumed by path; Codex: the session file, resumed by id). Copies, never moves.
+  - **The shell lists and switches accounts through the launcher** (`accounts()`, `use_account()`), so termos-shell still does not depend on termos-devkit; account tasks run `termos account …` in windows. termos-center now depends on termos-devkit (downward).
+  - **Limits:** Codex's from its logs (`rate_limits` on `token_count` lines, every shape Codex has used); Claude Code's only from what it passes its status line (`rate_limits.five_hour`, `seven_day`), recorded by `termos agent statusline` once the user turns it on. A status line of the user's own is chained, never replaced. Budgets are gauges; nothing is enforced.
+  - **Tokens for budgets** are input, output and cache writes; cache reads are shown apart. Claude Code's 5-hour window is counted from the hour of the first message after the last window ended.
+- **Alternatives:** swapping one login in and out of the default folder; reading login tokens to ask the vendors' usage endpoints (declined, D-096); a wrapper script per CLI instead of argv-dispatched links; moving conversations rather than copying.
+
+---
+
 ## Open questions (the owner will be asked before the milestone that needs each one)
 
 | ID | Question | Needed by | Current lean |

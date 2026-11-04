@@ -30,7 +30,7 @@ questions (DECISIONS.md, "Open questions").
 | M10b | Graphics: richer chrome, icons, wallpaper, pixel charts where the terminal can show them (D-084, D-087 to D-090) | 🔍 |
 | M10c | The command center: live views and history of the AI and the OS, with actions (D-084, D-092, D-093) | 🔍 |
 | M10d | Claude Code and Codex CLI: installed by TermOS, with a TermOS MCP server (D-084, D-094, D-095) | 🔍 |
-| M11a | AI accounts: several subscriptions per provider, switching with the conversation kept, the usage app (D-096) | 🚧 |
+| M11a | AI accounts: several subscriptions per provider, switching with the conversation kept, the usage app (D-096, D-097) | 🔍 |
 | M11b | Skills that teach Claude Code, Codex and other CLIs to use TermOS (D-096) | ⏳ |
 | M11c | The harness: one coding tool over Claude Code, Codex and API models, routing each task to the model that suits it (D-096) | ⏳ |
 | M9b | Platform gaps: the Windows agent sandbox and input, snapshots and sensors on macOS and Windows, Kitty keyboard flags, app windows in sessions, the KMS console's clipboard, bell and images (D-077) | ⏳ |
@@ -934,14 +934,26 @@ None of M10d runs while idle: the MCP server is a separate process the agent's C
 ---
 
 ## M11a — AI accounts and the usage app
-**Status:** 🚧 · Owner answers: usage from each account's own logs plus the limit data the CLIs record, budgets for Claude Code; accounts as profiles, switched by the user, the conversation kept (D-096).
+**Status:** 🔍 done, awaiting review · Owner answers: usage from each account's own logs plus the limit data the CLIs record, budgets for Claude Code; accounts as profiles, switched by the user, the conversation kept (D-096). Design: D-097, ARCHITECTURE.md §4 and §11; user guide [accounts.md](docs/accounts.md).
 
 **Deliverables**
-- Accounts: several of each CLI (Claude Code, Codex), each a profile in its own folder, signed in once; `termos account list|add|remove|use|rename`; the user's existing login is the `default` account; settings, instructions and skills shared between accounts; TermOS's MCP server registered in each.
-- Switching: `termos account use claude work`, the menu and the palette; `claude` and `codex` in every TermOS window follow the active account (or one pinned for the window); a running agent window restarts under another account and continues the same conversation.
-- The usage app: every account of every CLI, and TermOS's own agents by provider, on one window: tokens and models over 5 hours, today and 7 days; Codex's own 5-hour and weekly limit percentages; Claude Code's 5-hour window and week against a budget set per account; switch, open and sign in from it.
+- **Accounts:** [x] several of each CLI (Claude Code, Codex), each a profile in its own folder (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`), signed in once; `termos account list|add|use|sign-in|label|budget|statusline|remove`; the existing login is `default`; settings, instructions and skills shared from it (linked, copied where links are not allowed); TermOS's MCP server registered in each.
+- **Switching:** [x] `termos account use`, ◆ Menu → AI agents → Accounts and `account.use`; `claude` and `codex` in every TermOS window follow the account in use (TermOS's shims) or one pinned for the window (`TERMOS_ACCOUNT_CLAUDE`); "Continue as …" on an agent window (`agent.swap`) restarts it under another account, its folder's newest conversation copied there and resumed. Always the user's choice.
+- **The usage app** (`usage.open`, the menu, `tos usage`): [x] every account of each CLI with its plan's limits as the CLI reported them (Codex's logs; Claude Code's status line once `termos account statusline claude on`), its 5-hour window and week against a budget, its tokens today and over 7 days, its main model and a sparkline, who it is signed in as; TermOS's own agents by provider; Use, Open, Sign in, Budget, Add account and Show limits as buttons and keys. The command center counts every account too.
 
 **Acceptance:** accounts, switching and resuming are tested end to end with stand-in CLIs and recorded session logs; CI creates a second account for each real CLI and checks that it is separate and registered; the usage app is snapshot-tested.
+
+**What the tests cover**
+- **Accounts:** add, use (kept for other processes), budgets and labels, remove (a confirmation; `default` never), a broken index is an error rather than a reset; settings and skills shared but never the login; Codex's config copied; with the real binary and stand-in CLIs: the folder, the per-account MCP registration (`claude mcp add` run with the account's folder), the sign-in in the account's folder.
+- **Shims:** the account from the pin, then the one in use; the user's own folder wins; an unknown account and a missing CLI say so; with the real binary started as `claude`: the server makes the links, and each case runs the stand-in with the right folder.
+- **Carrying a conversation:** Claude Code's transcript with its sub-agents and file snapshots, Codex's session found by its folder (not just the newest), copied not moved, resume arguments; with the real binary: `--account work --resume-from default` copies and resumes, and a folder with no conversation starts a new one; on the desktop: an agent window as the account in use, "Continue as" in its place, `account.use`, the Accounts menu, account tasks in windows, `agent.external claude@work`.
+- **Limits:** Codex's `rate_limits` in every shape it has used (the newest reading kept), Claude Code's status line input, the status line chained after the user's own and put back; with the real binary: kept per account, the user's line still shown.
+- **The usage app:** a snapshot of every account with limits and budgets; buttons and keys run the desktop commands; stale limits are not shown; 5-hour windows open on the hour and close; tokens by account, model, day and provider add up; the live source reads every account's logs.
+- **CI, for real** (`agents.yml`, every platform): a second account of each CLI has its own settings with TermOS's server, the shims follow `account use` (`mcp list` connects), the status line keeps Claude Code's limits; then removed.
+
+**Found and fixed on the way**
+- Codex starts MCP servers with an emptied environment, so `termos mcp serve` under Codex could not find TermOS or its pane (M10d): its entry now forwards `TERMOS`, `TERMOS_PANE` and the XDG folders.
+- Registering TermOS's server waited for the CLI without limit; a CLI that stalls now gives up after a minute.
 
 ---
 

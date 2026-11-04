@@ -365,6 +365,12 @@ so they can work with your desktop:
   adds the server to the ones on your `PATH`; `termos mcp unregister` takes
   it out.
 
+### Several accounts
+
+Keep several accounts of each (three Claude subscriptions, say), switch
+between them, carry a conversation from one to another, and see each
+one's usage and plan limits: [AI accounts and usage](accounts.md).
+
 ### Their usage
 
 The command center counts their tokens next to TermOS's own agents: usage

@@ -92,12 +92,13 @@ pub(crate) fn accounts(paths: &Paths) -> anyhow::Result<Accounts> {
     Accounts::load(&paths.data_dir).map_err(|e| anyhow::anyhow!("{e}"))
 }
 
-/// "Claude Code" for the default account, "Claude Code (work)" for another.
+/// "Claude Code" for the default account, "Claude Code · Work" for
+/// another.
 pub(crate) fn describe(a: &Account) -> String {
     if a.is_default() {
         a.tool.title().to_owned()
     } else {
-        format!("{} ({})", a.tool.title(), a.title())
+        format!("{} · {}", a.tool.title(), a.title())
     }
 }
 
@@ -128,6 +129,34 @@ fn plain(p: PathBuf) -> PathBuf {
     }
 }
 
+/// How long a CLI may take to add or remove an MCP server.
+const REGISTER_LIMIT: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// Runs `cmd` without input, for at most `limit`: a CLI that waits for
+/// something (a prompt it cannot show) does not hold TermOS up.
+fn output_within(
+    mut cmd: std::process::Command,
+    limit: std::time::Duration,
+) -> anyhow::Result<std::process::Output> {
+    let mut child = cmd
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()?;
+    let start = std::time::Instant::now();
+    loop {
+        if child.try_wait()?.is_some() {
+            return Ok(child.wait_with_output()?);
+        }
+        if start.elapsed() > limit {
+            let _ = child.kill();
+            let _ = child.wait();
+            bail!("it did not finish within {} seconds", limit.as_secs());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+}
+
 /// Registers `termos mcp serve` with `account`'s CLI (run as `program`).
 pub(crate) fn register_tool(program: &Path, account: &Account) -> anyhow::Result<String> {
     let tool = account.tool;
@@ -135,11 +164,9 @@ pub(crate) fn register_tool(program: &Path, account: &Account) -> anyhow::Result
     match ca::mcp_register(tool, program, &termos) {
         Some(lines) => {
             for (i, argv) in lines.iter().enumerate() {
-                let out = std::process::Command::new(&argv[0])
-                    .args(&argv[1..])
-                    .envs(account.env())
-                    .stdin(std::process::Stdio::null())
-                    .output()
+                let mut cmd = std::process::Command::new(&argv[0]);
+                cmd.args(&argv[1..]).envs(account.env());
+                let out = output_within(cmd, REGISTER_LIMIT)
                     .with_context(|| format!("cannot run {}", argv[0]))?;
                 // The first line removes an older entry, which may not
                 // exist.
@@ -257,12 +284,10 @@ pub(crate) fn unregister_tool(paths: &Paths, account: &Account) -> anyhow::Resul
                 let Some(program) = program_of(paths, tool) else {
                     return Ok(());
                 };
-                let ok = std::process::Command::new(&program)
-                    .args(["mcp", "remove", "--scope", "user", "termos"])
-                    .envs(account.env())
-                    .stdin(std::process::Stdio::null())
-                    .output()
-                    .is_ok_and(|o| o.status.success());
+                let mut cmd = std::process::Command::new(&program);
+                cmd.args(["mcp", "remove", "--scope", "user", "termos"])
+                    .envs(account.env());
+                let ok = output_within(cmd, REGISTER_LIMIT).is_ok_and(|o| o.status.success());
                 if ok {
                     say(&format!(
                         "removed TermOS's MCP server from {}",
@@ -718,6 +743,21 @@ pub(crate) fn resolve_external(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn a_cli_that_hangs_is_given_up_on() {
+        let mut cmd = std::process::Command::new("sh");
+        cmd.args(["-c", "sleep 30"]);
+        let start = std::time::Instant::now();
+        let err = output_within(cmd, std::time::Duration::from_millis(200)).expect_err("gave up");
+        assert!(err.to_string().contains("did not finish"), "{err}");
+        assert!(start.elapsed() < std::time::Duration::from_secs(5));
+        let mut ok = std::process::Command::new("sh");
+        ok.args(["-c", "echo done"]);
+        let out = output_within(ok, std::time::Duration::from_secs(10)).expect("ran");
+        assert_eq!(String::from_utf8_lossy(&out.stdout), "done\n");
+    }
 
     #[test]
     fn verbatim_paths_are_made_plain() {
