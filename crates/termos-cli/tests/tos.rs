@@ -102,12 +102,13 @@ fn tos_in_a_pane_acts_on_it() {
         panes(&env).iter().any(|p| p["floating"] == true)
     });
     // A program in a pane of its own, its id printed, its text read back
-    // with the key it shows masked (what the agent skills do, D-098).
+    // with the key it shows masked (what the agent skills do, D-098), even
+    // where the pane wrapped it.
     let id_file = env.path().join("id.txt");
     let says = if cfg!(windows) {
-        "cmd /k echo pane-says-hi sk-ant-fixture0123456789abcdef"
+        "cmd /k echo pane-says-hi sk-ant-fixture0123456789abcdefghijklmnopqrstuvwxyz0123456789TAILEND"
     } else {
-        "sh -c 'echo pane-says-hi sk-ant-fixture0123456789abcdef; sleep 30'"
+        "sh -c 'echo pane-says-hi sk-ant-fixture0123456789abcdefghijklmnopqrstuvwxyz0123456789TAILEND; sleep 30'"
     };
     type_line(
         &env,
@@ -138,7 +139,10 @@ fn tos_in_a_pane_acts_on_it() {
         read = std::fs::read_to_string(&read_file).unwrap_or_default();
         read.contains("pane-says-hi [redacted]")
     });
-    assert!(!read.contains("sk-ant-fixture"), "{read}");
+    assert!(
+        !read.contains("sk-ant-fixture") && !read.contains("TAILEND"),
+        "{read}"
+    );
     let list_file = env.path().join("panes.txt");
     type_line(
         &env,

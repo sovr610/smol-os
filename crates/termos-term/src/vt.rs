@@ -87,6 +87,13 @@ pub trait VtBackend: Send {
     fn history_size(&self) -> usize;
     /// Text of a line: 0 is the top of the screen, negative is history.
     fn line_text(&self, line: i32) -> String;
+    /// The history and the screen as the program wrote them: rows the
+    /// terminal wrapped are joined back into one line.
+    fn logical_lines(&self) -> Vec<String> {
+        let history = i32::try_from(self.history_size()).unwrap_or(i32::MAX);
+        let rows = i32::from(self.size().1);
+        (-history..rows).map(|l| self.line_text(l)).collect()
+    }
     /// When a synchronized update (DEC 2026) started by the program must be
     /// flushed even if it never ends it.
     fn sync_deadline(&self) -> Option<Instant>;
@@ -168,6 +175,28 @@ impl Dimensions for Size {
 }
 
 impl AlacrittyVt {
+    /// A row's text, untrimmed, and whether it wraps onto the next.
+    fn row_text(&self, line: i32) -> (String, bool) {
+        let row = &self.term.grid()[Line(line)];
+        let mut s = String::new();
+        for x in 0..usize::from(self.cols) {
+            let c = &row[Column(x)];
+            if c.flags
+                .intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER)
+            {
+                continue;
+            }
+            s.push(c.c);
+            if let Some(extra) = c.zerowidth() {
+                s.extend(extra.iter());
+            }
+        }
+        let wraps = usize::from(self.cols)
+            .checked_sub(1)
+            .is_some_and(|last| row[Column(last)].flags.contains(Flags::WRAPLINE));
+        (s, wraps)
+    }
+
     pub fn new(cols: u16, rows: u16, scrollback: usize) -> Self {
         let (cols, rows) = (cols.max(MIN_COLS), rows.max(1));
         let listener = Listener::default();
@@ -604,21 +633,27 @@ impl VtBackend for AlacrittyVt {
         if line < -history || line >= i32::from(self.rows) {
             return String::new();
         }
-        let row = &self.term.grid()[Line(line)];
-        let mut s = String::new();
-        for x in 0..usize::from(self.cols) {
-            let c = &row[Column(x)];
-            if c.flags
-                .intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER)
-            {
-                continue;
-            }
-            s.push(c.c);
-            if let Some(extra) = c.zerowidth() {
-                s.extend(extra.iter());
+        self.row_text(line).0.trim_end().to_owned()
+    }
+
+    fn logical_lines(&self) -> Vec<String> {
+        let history = i32::try_from(self.history_size()).unwrap_or(i32::MAX);
+        let mut out = Vec::new();
+        let mut current = String::new();
+        for line in -history..i32::from(self.rows) {
+            let (text, wraps) = self.row_text(line);
+            if wraps {
+                // Its trailing blanks are the line's own.
+                current.push_str(&text);
+            } else {
+                current.push_str(text.trim_end());
+                out.push(std::mem::take(&mut current));
             }
         }
-        s.trim_end().to_owned()
+        if !current.is_empty() {
+            out.push(current);
+        }
+        out
     }
 
     fn sync_deadline(&self) -> Option<Instant> {
@@ -1130,6 +1165,19 @@ mod tests {
         assert!(vt.cursor().is_none(), "cursor is off-screen while scrolled");
         vt.scroll_to_bottom();
         assert_eq!(screen(&vt), "three\nfour\n");
+    }
+
+    #[test]
+    fn logical_lines_join_what_the_pane_wrapped() {
+        let mut vt = AlacrittyVt::new(8, 3, 100);
+        // "key=" then a long token, wrapped twice; a space at a wrap.
+        vt.advance(b"key=sk-0123456789ab\r\nhello   world\r\nend");
+        let history = i32::try_from(vt.history_size()).expect("small");
+        assert_eq!(vt.line_text(-history), "key=sk-0", "the rows as shown");
+        assert_eq!(
+            vt.logical_lines(),
+            ["key=sk-0123456789ab", "hello   world", "end"]
+        );
     }
 
     #[test]

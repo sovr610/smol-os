@@ -2044,10 +2044,9 @@ impl Desktop {
         let Some(PaneKind::Term { vt, .. }) = self.panes.get(&id).map(|p| &p.kind) else {
             return Err(format!("pane {id} is not a terminal"));
         };
-        let first = -i32::try_from(vt.history_size()).unwrap_or(i32::MAX);
-        let mut out: Vec<String> = (first..i32::from(vt.size().1))
-            .map(|l| vt.line_text(l))
-            .collect();
+        // Lines as the program wrote them, so nothing (a key, say) is cut
+        // in two where the pane wrapped it.
+        let mut out = vt.logical_lines();
         while out.last().is_some_and(String::is_empty) {
             out.pop();
         }
