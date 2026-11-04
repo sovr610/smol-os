@@ -21,6 +21,7 @@ mod install;
 mod kms;
 mod launcher;
 mod models;
+mod pkg_cmd;
 mod probe;
 #[cfg(any(windows, test))]
 mod shadow;
@@ -167,6 +168,12 @@ enum Cmd {
     Devroot {
         #[command(subcommand)]
         action: devroot_cmd::DevrootCmd,
+    },
+    /// Packages from mise, the dev rootfs, the system's package manager
+    /// and Podman: list, search, install, remove, upgrade.
+    Pkg {
+        #[command(subcommand)]
+        action: pkg_cmd::PkgCmd,
     },
     /// Edit files with the editor `[dev] editor` names (TermOS's Neovim by
     /// default, set up with the installed language servers).
@@ -432,6 +439,7 @@ fn run_cli(args: impl IntoIterator<Item = String>) -> anyhow::Result<ExitCode> {
         Some(Cmd::Task { name, wait }) => task_command(name.as_deref(), *wait),
         Some(Cmd::Git) => git_command(&paths),
         Some(Cmd::Devroot { action }) => devroot_cmd::devroot_command(action, &paths),
+        Some(Cmd::Pkg { action }) => pkg_cmd::pkg_command(action, &paths),
         Some(Cmd::Secret { action }) => agents::secret_command(action, &paths, &config_path),
         Some(Cmd::Agent { action }) => agents::agent_command(action, &paths, &config_path),
         Some(Cmd::Mcp { action }) => agents::mcp_command(action, &paths, &config_path),
@@ -577,6 +585,7 @@ fn run(cli: &Cli, paths: &Paths, config_path: &Path, t: &Target) -> anyhow::Resu
             | Cmd::Task { .. }
             | Cmd::Git
             | Cmd::Devroot { .. }
+            | Cmd::Pkg { .. }
             | Cmd::Secret { .. }
             | Cmd::Agent { .. }
             | Cmd::Mcp { .. }

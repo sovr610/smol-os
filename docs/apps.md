@@ -13,6 +13,7 @@ move, resize, minimize or tile like any other. Open them from the palette
 | Network | "Network: connections and Wi-Fi" | `network.open` | |
 | Updates (a window running `termos update install`) | "Updates: install a newer TermOS" | `update.open` | |
 | Settings | "Settings" | `settings.open` | |
+| Packages ([packages.md](packages.md)) | "Packages" | `packages.open` | |
 | Markdown viewer | | `markdown.open FILE` | |
 | Image viewer | | `image.open FILE` | |
 

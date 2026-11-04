@@ -122,6 +122,14 @@ pub enum Command {
     AuditOpen(String),
     /// The command center (D-093).
     CenterOpen,
+    /// The package manager app (D-110).
+    PackagesOpen,
+    /// `termos pkg ARGS` in a window: "install devroot gcc" (D-110).
+    PkgRun(String),
+    /// A window making the dev rootfs (`termos devroot create`).
+    DevrootCreate,
+    /// A shell in the dev rootfs, in the focused pane's folder.
+    DevrootEnter,
 }
 
 /// Static description of a command name.
@@ -267,6 +275,23 @@ pub const COMMANDS: &[CommandInfo] = &[
         arg: Some("lint"),
     },
     info("git.open", "Git (lazygit)"),
+    info(
+        "packages.open",
+        "Packages: mise, the dev rootfs, the system, Podman",
+    ),
+    CommandInfo {
+        name: "pkg.run",
+        description: "Install, remove or upgrade packages in a window",
+        arg: Some("install devroot gcc"),
+    },
+    info(
+        "devroot.enter",
+        "Dev rootfs: a shell in Debian (apt, no root)",
+    ),
+    info(
+        "devroot.create",
+        "Dev rootfs: download and set up Debian 13",
+    ),
     info("network.open", "Network: connections and Wi-Fi"),
     info("update.open", "Updates: install a newer TermOS"),
     info("settings.open", "Settings"),
@@ -432,6 +457,18 @@ impl FromStr for Command {
                 });
             }
         }
+        // `termos pkg`'s arguments are the rest of the line (D-110).
+        if let Some(rest) = s.trim_start().strip_prefix("pkg.run")
+            && (rest.is_empty() || rest.starts_with(char::is_whitespace))
+        {
+            let args = rest.split_whitespace().collect::<Vec<_>>().join(" ");
+            if args.is_empty() {
+                return Err(CommandError(
+                    "`pkg.run` needs `termos pkg`'s arguments".into(),
+                ));
+            }
+            return Ok(Command::PkgRun(args));
+        }
         // A goal is the rest of the line too (D-100).
         if let Some(rest) = s.trim_start().strip_prefix("harness.open")
             && (rest.is_empty() || rest.starts_with(char::is_whitespace))
@@ -556,6 +593,9 @@ impl FromStr for Command {
                 None => Err(CommandError("`task` needs a task name".into())),
             },
             "git.open" => no_arg(Command::GitOpen),
+            "packages.open" => no_arg(Command::PackagesOpen),
+            "devroot.create" => no_arg(Command::DevrootCreate),
+            "devroot.enter" => no_arg(Command::DevrootEnter),
             "agent.open" => Ok(Command::AgentOpen(arg.unwrap_or("").to_owned())),
             "agent.resume" => Ok(Command::AgentResume(arg.unwrap_or("").to_owned())),
             "agent.external" => match arg {
@@ -696,6 +736,10 @@ impl fmt::Display for Command {
             Command::AuditOpen(id) if id.is_empty() => f.write_str("audit.open"),
             Command::AuditOpen(id) => write!(f, "audit.open {id}"),
             Command::CenterOpen => f.write_str("center.open"),
+            Command::PackagesOpen => f.write_str("packages.open"),
+            Command::PkgRun(a) => write!(f, "pkg.run {a}"),
+            Command::DevrootCreate => f.write_str("devroot.create"),
+            Command::DevrootEnter => f.write_str("devroot.enter"),
         }
     }
 }
@@ -752,6 +796,22 @@ mod tests {
             Command::HarnessOpen("fix it".into()).to_string(),
             "harness.open fix it"
         );
+    }
+
+    #[test]
+    fn package_tasks_take_the_rest_of_the_line() {
+        assert_eq!(
+            "pkg.run remove podman termos-devroot --container".parse::<Command>(),
+            Ok(Command::PkgRun(
+                "remove podman termos-devroot --container".into()
+            ))
+        );
+        assert!("pkg.run".parse::<Command>().is_err());
+        assert_eq!(
+            "packages.open".parse::<Command>(),
+            Ok(Command::PackagesOpen)
+        );
+        assert!("devroot.enter now".parse::<Command>().is_err());
     }
 
     #[test]

@@ -350,13 +350,17 @@ jobs:
       languages: '["rust", "python", "go"]'
       runners: '["ubuntu-24.04"]'
 
-  # The dev rootfs for real (M5b, D-110): Debian 13's pinned layer,
-  # created, entered, a package installed with apt, upgraded and deleted,
-  # on both architectures.
+  # The dev rootfs and the package manager for real (M5b, D-110): Debian
+  # 13's pinned layer created, entered, a package installed and removed
+  # with apt and a tool with mise through `termos pkg`, upgraded and
+  # deleted, on both architectures.
   devroot:
     name: Dev rootfs (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
+    env:
+      # mise asks GitHub's API for jq's release.
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     strategy:
       fail-fast: false
       matrix:

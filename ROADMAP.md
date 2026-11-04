@@ -21,7 +21,7 @@ questions (DECISIONS.md, "Open questions").
 | M4a | Graphics and themes: capability probe, images, themes, animations, Kitty keyboard (D-042 to D-049) | 🔍 |
 | M4b | Apps, `termos-hw`, WASM widgets (D-042, D-050 to D-052) | 🔍 |
 | M5a | Languages and editors: `termos lang` (mise), managed Neovim/Helix with LSP and DAP, templates, task panels, Git UI (D-053 to D-057) | 🔍 |
-| M5b | Dev rootfs, Podman, package manager app (D-053, D-109) | 🚧 |
+| M5b | Dev rootfs, Podman, package manager app (D-053, D-109, D-110) | 🔍 |
 | M6 | AI agents: providers, agent windows, permissions, sandbox, audit, MCP, external agents, secrets (D-058 to D-064) | 🔍 |
 | M7 | Local models: Hugging Face downloads, fit estimates, llama.cpp, candle embeddings, the router, agents' local provider (D-065 to D-068) | 🔍 |
 | M8 | Bare-metal images: the KMS console, Buildroot images for x86_64, aarch64 and the Pis, QEMU boot tests (D-072 to D-076) | 🔍 |
@@ -525,16 +525,31 @@ What was shown, and where:
 ---
 
 ## M5b — Dev rootfs and packages
-**Status:** 🚧 in progress · Owner answers: split from M5 (D-053); Debian 13 from the official image, pinned by digest; rootless with subordinate IDs; the host's Podman, hosted only (D-109).
+**Status:** 🔍 done, awaiting review · Owner answers: split from M5 (D-053); Debian 13 from the official image, pinned by digest; rootless with subordinate IDs; the host's Podman, hosted only (D-109). Design: D-110, ARCHITECTURE.md §10, §13, §14 and §17; user guide [packages.md](docs/packages.md).
 
 **Deliverables**
-- **Dev rootfs:** `termos devroot create|enter|update`, used on bare metal and testable hosted on Linux.
-- **Podman:** integration where the hardware allows.
-- **Package manager UI:** an app over mise, the dev rootfs (apt) and the host package manager.
+- **Dev rootfs** (`termos devroot create|enter|update|status|stop|remove`, D-110):
+  - [x] Debian 13's official layer, pinned per architecture, downloaded with `curl` and checked by size and SHA-256; `--from FILE` (and `--sha256` for another file)
+  - [x] unpacked and entered in a user namespace with the user's subordinate IDs (root inside, never the host's), bubblewrap with the home and the project at their paths; apt and dpkg work; `update` is apt's upgrade; `remove` deletes it from inside
+  - [x] `status` says what is missing (programs, subordinate IDs, AppArmor's or the kernel's restriction) and how to fix it
+  - [x] the images: bubblewrap, util-linux's `unshare`, shadow's ID helpers, a range for `termos`; the boot test checks the dev rootfs can run
+- **Podman** (hosted only, D-109): [x] `termos devroot create --podman` (the same image by digest, in a container; the way on macOS and Windows); [x] its images and containers in the package manager
+- **Package manager** (D-110):
+  - [x] the app (`packages.open`, **Apps → Packages**, `tos packages`): a tab per source (mise, the dev rootfs's apt, the host's apt, dnf, pacman, zypper, apk, Homebrew, winget or Scoop, Podman); lists, searches, installs, removes and upgrades, confirmed and run in a window; follows the package database
+  - [x] `termos pkg list|search|install|remove|upgrade|setup|sources`
+  - [x] the desktop: `devroot.enter` (**Project → Dev rootfs shell**), `devroot.create`, `pkg.run`
 
 **Acceptance:** a dev rootfs is created, entered and updated in CI on x86_64 and aarch64 Linux; the package manager app lists and installs a mise tool and an apt package there (snapshot-tested).
 
-**Demo:** `termos devroot create`, install a package with apt inside it, and manage it from the package manager app.
+**What the tests cover**
+- **The dev rootfs, for real here and on CI's Linux runners** (`TERMOS_REQUIRE_DEVROOT`): the real `termos` makes one from a stand-in rootfs (the host's own `sh` and tools, a recording `apt-get`): a wrong checksum unpacks nothing; root inside, the home's files the user's outside, exit codes passed through; update, `termos pkg` listing from dpkg's database, search and install through apt inside; removal. Podman through a recording stand-in.
+- **The real Debian, on CI** (`devroot` job, x86_64 and aarch64): created from the pinned layer, Debian 13 inside, a project folder outside the home bound, `hello` searched, installed, run and removed with apt and `jq` with the real mise through `termos pkg`, upgraded, deleted.
+- **Unit:** subordinate-ID files, the namespace and bubblewrap arguments, the clean environment, unpacking (modes, setuid, links, hard links, device nodes left out); the parsers of dpkg, apt, mise, Podman and the eight host managers (recorded output); the pinned layers.
+- **The app:** snapshots of each tab (installed, search results with what is installed marked, a question, a failure, a missing source); install, remove and upgrade send the right `termos pkg`; tabs by mouse; the list followed when its database changes. On a real desktop: the window lists mise's tools, a search and `y` run `termos pkg install mise jq` in a window.
+
+**Demo**
+1. **Here, as a user with subordinate IDs** (`unshare` 2.39, bubblewrap): the real Debian layer (49 407 895 bytes) downloaded, its SHA-256 matching the pinned one, unpacked in 2 s with owners mapped (`/etc/shadow`'s group is the user's subordinate ID for gid 42) and setuid bits kept; the stand-in rootfs created, entered (`uid=0`, `HOME=/root`, the project at its path, a file made inside owned by the user outside), updated and removed. Running Debian's own programs is CI's part: this sandbox refuses downloaded binaries.
+2. **The rest, by CI** (`devroot` on both architectures): apt and mise for real, as listed above.
 ---
 
 ## M6 — AI agents
@@ -635,7 +650,7 @@ What was shown, and where (Linux, in an isolated `tmux -L termos-m7` with its ow
 - **Buildroot** (D-074): [x] the external tree in `termos-image`: the `termos` package, BusyBox init scripts, the session on tty1, GRUB configs, partition layouts, a kernel fragment; [x] targets for x86_64 (BIOS + UEFI disk image), aarch64 UEFI, Pi 5, Pi 4, and Pi 3 / Zero 2 W (best effort), each Buildroot's board defconfig plus TermOS fragments, checked setting by setting; [x] the x86_64 ISO (built and tested in M9)
 - **Display** (D-073): [x] the software rasterizer (swash, the built-in DejaVu Sans Mono, a glyph cache, box drawing and blocks from geometry, adjustable and density-scaled size); [x] the DRM/KMS console with double-buffered dumb buffers, page flips and damage-only copies
 - **Input and boot:** [x] libinput + XKB through libseat (layouts, repeat, VT switching, the mouse with a hardware cursor) (D-073); [x] booting straight into the console on tty1 (D-075)
-- **Provisioning** (D-075): [x] the data partition layout (homes and Wi-Fi state on `termos-data`; folders for the dev rootfs, models, containers); [ ] the dev rootfs itself (M5b)
+- **Provisioning** (D-075): [x] the data partition layout (homes and Wi-Fi state on `termos-data`; folders for the dev rootfs, models, containers); [x] the dev rootfs itself (M5b, D-110)
 - **QEMU boot tests** (D-076): [x] `cargo xtask image boot` (x86_64 OVMF and SeaBIOS, aarch64 virt) with the serial marker, a screendump check and RAM measurement; [x] the `images` CI workflow
 - **Legal:** [x] `cargo xtask image build --legal-info`, kept by CI
 
@@ -1048,8 +1063,5 @@ Nothing M11a adds runs while idle: the shims run only when `claude` or `codex` s
 Generated from the `TODO(M<n>)` markers in the code. Don't edit by hand; run `cargo xtask todos --write`.
 
 <!-- open-work:begin (generated by `cargo xtask todos --write`) -->
-| Milestone | Where | What |
-| --- | --- | --- |
-| M5b | `crates/termos-apps/src/lib.rs` | package manager UI over mise, the dev rootfs and the host package manager. |
-| M5b | `crates/termos-devkit/src/lib.rs` | the package manager app over mise, the dev rootfs, the host and Podman. |
+_No open work markers._
 <!-- open-work:end -->

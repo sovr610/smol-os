@@ -1,0 +1,13 @@
+---
+source: crates/termos-devkit/src/packages_app.rs
+expression: "render(&mut a, 72, 9)"
+---
+  mise   Dev rootfs (apt)   Host (dnf)   Podman
+ Search "hello": 2 found
+●hello              example package based on GNU hello
+ hello-traditional  the classic greeting, and a good example
+
+
+
+
+ enter install · d remove · / search · esc back · tab source · q close

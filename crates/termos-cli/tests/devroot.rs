@@ -93,6 +93,10 @@ fn stand_in_rootfs(dir: &Path) -> (std::path::PathBuf, String) {
         &tree.join("usr/bin/apt-get"),
         "#!/bin/sh\necho \"apt-get $*\" >> /var/log/apt-calls\n",
     );
+    script(
+        &tree.join("usr/bin/apt-cache"),
+        "#!/bin/sh\necho 'hello - example package based on GNU hello'\necho 'hello-traditional - the classic greeting'\n",
+    );
     std::fs::write(
         tree.join("var/lib/dpkg/status"),
         "Package: base-files\nStatus: install ok installed\nVersion: 13.8\nDescription: Debian base system miscellaneous files\n\n\
@@ -197,6 +201,29 @@ fn the_dev_rootfs_is_created_entered_updated_and_removed() {
     let code = env.run(&["devroot", "enter", "--", "/bin/sh", "-c", "exit 7"]);
     assert_eq!(code.status.code(), Some(7));
 
+    // The package manager's source: listed from dpkg's database, searched
+    // and installed with apt inside.
+    let listed = ok(&env.run(&["pkg", "list", "devroot"]), "pkg list");
+    assert!(listed.contains("bash"), "{listed}");
+    assert!(listed.contains("5.2.37-2"), "{listed}");
+    let found = ok(
+        &env.run(&["pkg", "search", "devroot", "hello"]),
+        "pkg search",
+    );
+    assert!(found.contains("hello-traditional"), "{found}");
+    let installed = ok(
+        &env.run(&["pkg", "install", "devroot", "hello"]),
+        "pkg install",
+    );
+    assert!(
+        installed.contains("$ apt-get install hello (in the dev rootfs)"),
+        "{installed}"
+    );
+    let calls = std::fs::read_to_string(data.join("rootfs/var/log/apt-calls")).expect("calls");
+    assert!(calls.contains("apt-get install hello"), "{calls}");
+    let bad = env.run(&["pkg", "install", "devroot", "-y"]);
+    assert!(!bad.status.success(), "an option is not a package");
+
     let updated = ok(&env.run(&["devroot", "update"]), "update");
     assert!(updated.contains("Up to date"), "{updated}");
     let calls = std::fs::read_to_string(data.join("rootfs/var/log/apt-calls")).expect("calls");
@@ -276,4 +303,93 @@ fn podman_runs_the_same_image_in_a_container() {
     assert!(log.contains("rm --force termos-devroot"), "{log}");
     let status = ok(&env.run(&["devroot", "status"]), "status");
     assert!(status.contains("No dev rootfs"), "{status}");
+}
+
+/// mise as the package manager's source, through a stand-in that answers
+/// like mise and records what it was asked to do.
+#[test]
+fn pkg_lists_searches_and_installs_mise_tools() {
+    let bin = tempfile::tempdir().expect("tempdir");
+    let calls = bin.path().join("calls");
+    let mise = bin.path().join("mise");
+    script(
+        &mise,
+        &format!(
+            "#!/bin/sh\ncase \"$1\" in\n\
+             --version) echo '2026.10.14 linux-x64 (2026-10-18)';;\n\
+             ls) echo '{{\"go\": [{{\"version\": \"1.25.3\", \"installed\": true, \"active\": true}}]}}';;\n\
+             registry) printf 'jq   aqua:jqlang/jq\\njqp  aqua:noahgorstein/jqp\\nripgrep aqua:BurntSushi/ripgrep\\n';;\n\
+             *) echo \"$*\" >> '{}';;\n\
+             esac\n",
+            calls.display()
+        ),
+    );
+    let env = common::Env::with_vars("", vec![("TERMOS_MISE", mise)]);
+    let sources = ok(&env.run(&["pkg", "sources"]), "sources");
+    assert!(
+        sources
+            .lines()
+            .any(|l| l.starts_with("mise") && l.ends_with("ready")),
+        "{sources}"
+    );
+    assert!(sources.contains("No dev rootfs yet"), "{sources}");
+    let listed = ok(&env.run(&["pkg", "list", "mise"]), "list");
+    assert!(
+        listed.contains("go") && listed.contains("1.25.3"),
+        "{listed}"
+    );
+    let found = ok(&env.run(&["pkg", "search", "mise", "jq"]), "search");
+    assert!(
+        found.contains("jqp") && !found.contains("ripgrep"),
+        "{found}"
+    );
+    ok(&env.run(&["pkg", "install", "mise", "jq"]), "install");
+    ok(&env.run(&["pkg", "remove", "mise", "jq"]), "remove");
+    ok(&env.run(&["pkg", "upgrade", "mise"]), "upgrade");
+    let log = std::fs::read_to_string(&calls).expect("calls");
+    assert_eq!(
+        log.lines().collect::<Vec<_>>(),
+        ["use --global jq@latest", "unuse --global jq", "upgrade"]
+    );
+    let unknown = env.run(&["pkg", "list", "apt"]);
+    assert!(String::from_utf8_lossy(&unknown.stderr).contains("unknown source"));
+}
+
+/// The package manager window in a real client: it lists mise's tools,
+/// searches, and a confirmed install runs `termos pkg` in a window.
+#[test]
+fn the_packages_window_installs_in_a_window() {
+    let bin = tempfile::tempdir().expect("tempdir");
+    let calls = bin.path().join("calls");
+    let mise = bin.path().join("mise");
+    script(
+        &mise,
+        &format!(
+            "#!/bin/sh\ncase \"$1\" in\n\
+             --version) echo '2026.10.14 linux-x64 (2026-10-18)';;\n\
+             ls) echo '{{\"go\": [{{\"version\": \"1.25.3\", \"installed\": true, \"active\": true}}]}}';;\n\
+             registry) printf 'jq   aqua:jqlang/jq\\njqp  aqua:noahgorstein/jqp\\n';;\n\
+             *) echo \"$*\" >> '{}';;\n\
+             esac\n",
+            calls.display()
+        ),
+    );
+    let env = common::Env::with_vars("", vec![("TERMOS_MISE", mise)]);
+    let t = common::Termos::start_in(env);
+    t.wait_ready();
+    let wait = std::time::Duration::from_secs(20);
+    assert!(t.env.run(&["msg", "packages.open"]).status.success());
+    t.wait_for("the packages window", wait, |s| {
+        s.contains("Packages") && s.contains("Dev rootfs (apt)") && s.contains("1.25.3")
+    });
+    t.send(b"/jq\r");
+    t.wait_for("what mise has", wait, |s| s.contains("jqp"));
+    t.send(b"\r");
+    t.wait_for("the question", wait, |s| {
+        s.contains("Install jq with mise? y/n")
+    });
+    t.send(b"y");
+    t.wait_for("its window", wait, |s| s.contains("press Enter to close"));
+    let log = std::fs::read_to_string(&calls).expect("calls");
+    assert!(log.contains("use --global jq@latest"), "{log}");
 }

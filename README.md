@@ -63,6 +63,7 @@ That checks the latency, idle-CPU and memory budgets on a release build
 - [docs/bare-metal.md](docs/bare-metal.md): TermOS as the whole system: installing from the live ISO, updates, Wi-Fi, building images, booting them in QEMU, the console.
 - [docs/releasing.md](docs/releasing.md): making a release: the signing keys, the tag, the draft.
 - [docs/models.md](docs/models.md): local models: Hugging Face downloads, what fits your machine, llama.cpp, the model router.
+- [docs/packages.md](docs/packages.md): the dev rootfs (Debian, apt without root) and the package manager over mise, the dev rootfs, your system and Podman.
 - [ARCHITECTURE.md](ARCHITECTURE.md): how the system is put together.
 - [ROADMAP.md](ROADMAP.md): milestones M0–M9b and open work.
 - [DECISIONS.md](DECISIONS.md): the decision log and open questions.

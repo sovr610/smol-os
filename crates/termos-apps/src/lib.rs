@@ -32,8 +32,6 @@ pub use monitor::SystemMonitor;
 pub use network::NetworkPage;
 pub use settings::Settings;
 
-// TODO(M5b): package manager UI over mise, the dev rootfs and the host package manager.
-
 /// Drawing apps in tests: the text of an app rendered at a size.
 #[cfg(test)]
 pub(crate) mod testing {

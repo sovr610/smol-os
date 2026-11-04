@@ -53,6 +53,17 @@ impl Launcher for Windows {
                     },
                 ))))
             }
+            LaunchKind::Packages => {
+                let backend = termos_devkit::packages::System {
+                    data_dir: ctx.paths.data_dir.clone(),
+                    termos: std::env::current_exe()
+                        .map_err(|e| format!("cannot find the termos program: {e}"))?,
+                };
+                Ok(Box::new(termos_devkit::packages_app::PackagesApp::open(
+                    std::sync::Arc::new(backend),
+                    None,
+                )))
+            }
             LaunchKind::Harness => {
                 let (secrets, helper, config_file, home) = self.agents.shared(ctx);
                 let project = ctx

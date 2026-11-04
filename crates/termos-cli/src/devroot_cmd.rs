@@ -421,7 +421,7 @@ fn enter(data: &Path, command: &[String]) -> anyhow::Result<ExitCode> {
     crate::run_as(cmd, "the dev rootfs")
 }
 
-fn update(data: &Path) -> anyhow::Result<ExitCode> {
+pub(crate) fn update(data: &Path) -> anyhow::Result<ExitCode> {
     let mut state = devroot::load(data).ok_or(DevrootError::NotCreated)?;
     println!("Upgrading the dev rootfs's packages (apt)…");
     let status = inside(data, &state, &sh(devroot::UPDATE))?

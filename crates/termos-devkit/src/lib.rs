@@ -14,7 +14,9 @@
 //! - [`accounts`], [`cli_agents`], [`conversations`]: Claude Code and
 //!   Codex CLI, their accounts and conversations (D-095, D-097);
 //! - [`skills`]: TermOS's skills for the coding CLIs (D-098);
-//! - [`devroot`]: the dev rootfs, Debian 13 entered without root (D-110).
+//! - [`devroot`]: the dev rootfs, Debian 13 entered without root (D-110);
+//! - [`packages`], [`packages_app`]: packages from mise, the dev rootfs,
+//!   the host and Podman, and the package manager app (D-110).
 
 pub mod accounts;
 pub mod check;
@@ -26,8 +28,7 @@ pub mod lang;
 pub mod langs;
 pub mod mise;
 pub mod packages;
+pub mod packages_app;
 pub mod skills;
 pub mod tasks;
 pub mod templates;
-
-// TODO(M5b): the package manager app over mise, the dev rootfs, the host and Podman.

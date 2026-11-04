@@ -175,6 +175,7 @@ impl Launcher for AgentLauncher {
             LaunchKind::Center => Err("the command center is not part of this build".into()),
             LaunchKind::Usage => Err("the usage app is not part of this build".into()),
             LaunchKind::Harness => Err("the harness is not part of this build".into()),
+            LaunchKind::Packages => Err("the package manager is not part of this build".into()),
         }
     }
 }

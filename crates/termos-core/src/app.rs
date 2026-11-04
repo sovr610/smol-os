@@ -223,6 +223,9 @@ pub enum LaunchKind {
     /// The coding harness, planning the argument as its goal
     /// (`harness.open [goal]`, D-100).
     Harness,
+    /// The package manager: mise, the dev rootfs, the host, Podman
+    /// (`packages.open`, D-110).
+    Packages,
 }
 
 /// What the desktop knows when it opens a launched window.

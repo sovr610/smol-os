@@ -1,0 +1,13 @@
+---
+source: crates/termos-devkit/src/packages_app.rs
+expression: "render(&mut a, 72, 9)"
+---
+  mise   Dev rootfs (apt)   Host (dnf)   Podman
+ Installed: 3
+ bash    5.2.37-2           GNU Bourne Again SHell
+ hello   2.10-5             example package based on GNU hello
+ zlib1g  1:1.3.dfsg+reall…  compression library - runtime
+
+
+
+ / search · d remove · u upgrade all · r reload · tab source · q close

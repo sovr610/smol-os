@@ -5532,15 +5532,19 @@ version = "0.0.0"
 dependencies = [
  "flate2",
  "insta",
+ "ratatui-core",
  "rustix",
  "serde",
  "serde_json",
  "sha2 0.10.9",
  "tar",
  "tempfile",
+ "termos-core",
+ "termos-render",
  "thiserror 2.0.21",
  "toml 1.1.8+spec-1.1.0",
  "toml_edit",
+ "unicode-width",
 ]
 
 [[package]]

@@ -112,7 +112,8 @@ That is the boot test CI runs: it waits for the console's first frame,
 takes a screenshot (`target/image/<target>-boot/screen-*.png`), and checks
 the memory in use once the desktop has settled (the budget is 150 MB),
 that the data partition grew into a disk 1 GiB bigger than the image, and
-that the image's `curl` is the mbedTLS build TermOS downloads with.
+that the image's `curl` is the mbedTLS build TermOS downloads with, and
+that the dev rootfs can run (`termos devroot status`).
 `--update` then puts a newer version on the same disk with `termos update`
 and starts it, then a broken one, which falls back; `--install` starts the
 live ISO with an empty disk, installs onto it with `termos install`, and
@@ -200,8 +201,8 @@ logind) to build and run.
              and each slot's kernel and device trees under slot-a/ and slot-b/)
 2  rootfs-a  system copy A, read-only (squashfs), with its kernel in /boot
 3  rootfs-b  system copy B, written by updates
-4  data      ext4, label termos-data: /home, Wi-Fi networks, update records, and later the
-             dev rootfs, models, containers; grown to the end of the disk on first boot
+4  data      ext4, label termos-data: /home (with the dev rootfs), Wi-Fi networks, update
+             records, and later models and containers; grown to the end of the disk on first boot
 ```
 
 - The system partition is read-only; what you keep lives on the data
@@ -215,6 +216,9 @@ logind) to build and run.
   the system console.
 - `curl`, built with mbedTLS and the image's CA certificates, is what
   `termos agent install` and mise download with (D-109).
+- The system has no package manager: compilers and libraries go in the dev
+  rootfs, a Debian you enter without root (`termos devroot create`, then
+  `termos devroot enter`; [packages.md](packages.md)).
 
 ## Limits
 

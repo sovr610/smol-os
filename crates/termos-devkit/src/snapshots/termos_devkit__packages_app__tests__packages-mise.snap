@@ -1,0 +1,13 @@
+---
+source: crates/termos-devkit/src/packages_app.rs
+expression: "render(&mut a, 72, 9)"
+---
+  mise   Dev rootfs (apt)   Host (dnf)   Podman
+ Installed: 3
+ go      1.25.3
+ node    22.11.0  active
+ python  3.13.9   active
+
+
+
+ / search · d remove · u upgrade all · r reload · tab source · q close

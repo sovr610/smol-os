@@ -1,0 +1,10 @@
+---
+source: crates/termos-devkit/src/packages_app.rs
+expression: "render(&mut a, 72, 6)"
+---
+  mise   Dev rootfs (apt)   Host (dnf)   Podman
+ Not available here
+ Podman is not installed (https://podman.io).
+
+
+ tab next source · q close

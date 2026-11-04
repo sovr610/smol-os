@@ -1159,6 +1159,26 @@ rewrite history.
   - fakeroot-style root (no real owners; apt's sandbox user fails); a setuid helper;
   - Podman on the images (its runtime, networking and storage drivers add tens of megabytes and a daemon-like service for one feature).
 
+
+## D-110: The dev rootfs and the package manager
+- **Status:** Accepted · 2026-11-04
+- **Context:** D-109's answers: Debian 13 from the official image pinned by digest, rootless with subordinate IDs, the host's Podman. M5b also asks for a package manager over mise, the dev rootfs and the host.
+- **Decision:**
+  - **The image:** the official `debian:trixie` image's one layer, per architecture (amd64, arm64), downloaded with `curl` from the repository the official image is built from (by commit; the same bytes as the registry's blob) and checked by size and SHA-256 against values compiled into TermOS before anything is unpacked. `--from FILE` takes a copy already here; any other file needs its SHA-256 (`--sha256`). Podman pulls the same image by its index digest.
+  - **The namespace:** util-linux 2.38's `unshare --user --map-user=0 --map-group=0 --map-users=1:SUBUID:65536 --map-groups=1:SUBGID:65536`, which runs shadow's `newuidmap` and `newgidmap`: the user is root inside, the first 65 536 subordinate IDs are 1 to 65 536 (`nobody` included), and `setgroups` stays allowed, so apt's `_apt` sandbox works. TermOS reads the ranges itself (by name or number, as `newuidmap` does) and `termos devroot status` names what is missing or which kernel setting refuses (Ubuntu's AppArmor restriction, `unprivileged_userns_clone`, `max_user_namespaces`).
+  - **Unpacking and removing** run as `termos` itself inside that namespace (hidden `devroot unpack` and `devroot wipe`): the `tar` crate keeps owners, modes, setuid bits and times; device nodes and pipes are left out (bubblewrap gives `/dev`). The files then belong to subordinate IDs the user cannot delete from outside, so `remove` deletes from inside, and only a `rootfs` folder in a `devroot` folder.
+  - **Entering:** bubblewrap inside the namespace: the rootfs as `/`; its own `/dev`, `/proc` (a PID namespace), and tmpfs `/tmp` and `/run`; the host's `/sys`, `resolv.conf` and `hosts` read-only; the home read-write at its own path, and the current folder too when it is outside the home and not a system folder; the host's network; a clean environment (root's `HOME`, Debian's `PATH`, `TERM`, the proxies, `TERMOS_DEVROOT=1`, `debian_chroot=devroot` for the prompt). `enter` becomes that process, so the terminal, signals and exit code are the shell's.
+  - **Updating** is `apt-get update` and `apt-get -y upgrade`, keeping changed configuration files. A newer pinned image comes with a TermOS release and is used by the next `create`.
+  - **Podman** (`--podman`; the only way off Linux): a container `termos-devroot` idling on `sleep infinity`, the home bound at its path (`/mnt/c/…` from Windows), SELinux labels off for it; `enter` starts it when stopped and runs `podman exec`; `stop` stops it; `remove` deletes the container and leaves the image.
+  - **The images:** bubblewrap, util-linux's `unshare`, shadow with subordinate IDs (its `newuidmap` and `newgidmap` setuid, its `su` not built), and `/etc/subuid` and `/etc/subgid` giving `termos` 100000–165535. The QEMU boot test checks that `termos devroot status` reports bubblewrap ready.
+  - **The package manager** (`packages.open`, in termos-devkit, opened through the launcher like the command center): a tab per source. mise lists with `mise ls --json` and searches its registry; the dev rootfs is listed from dpkg's status file read directly and searched with `apt-cache search` inside; the host's manager (apt, dnf, pacman, zypper, apk, Homebrew, winget, Scoop, the first found) with its own list and search commands; Podman with its images, containers and `podman search`. Lists and searches run on threads; while the window is drawn it lists again when the source's package database changes (dpkg's status, rpm's or pacman's folder, apk's database, mise's installs), so nothing runs while it is idle (D-028). Installing, removing and upgrading are confirmed in the window, then run as `termos pkg install|remove|upgrade SOURCE NAME --wait` in a window of their own, where apt asks its questions and `sudo` (or `doas`) its password. A package name is one argument: no option, space or shell character. `termos pkg` does the same from any terminal, with `list`, `search`, `setup` (fetching mise, or creating the dev rootfs) and `sources`.
+- **Alternatives:**
+  - util-linux's `--map-auto` (it maps the first block whatever its size); setting the namespace up ourselves with `newuidmap` and a pipe (works with any `unshare`, but more moving parts, while 2.38 is in Debian 12, Ubuntu 23.04, Fedora 36 and the images; older systems use Podman);
+  - unpacking with the system's `tar` (BusyBox's and GNU's differ on owners and options);
+  - the host's `/dev/pts` bound in (opening new terminals inside then depends on the host's `ptmx`);
+  - PackageKit for the host's packages (missing on many systems, and on macOS and Windows);
+  - installing from the app without a window (no place for apt's questions or the password).
+
 ---
 
 ## Open questions (the owner will be asked before the milestone that needs each one)

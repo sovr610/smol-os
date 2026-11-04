@@ -1,0 +1,10 @@
+---
+source: crates/termos-devkit/src/packages_app.rs
+expression: "render(&mut a, 72, 6)"
+---
+  mise   Dev rootfs (apt)   Host (dnf)   Podman
+ Installed
+ Cannot list: rpm: cannot open the package database
+
+
+ / search · d remove · u upgrade all · r reload · tab source · q close

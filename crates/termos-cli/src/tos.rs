@@ -108,6 +108,9 @@ enum TosCmd {
     Files { dir: Option<PathBuf> },
     /// The system monitor.
     Monitor,
+    /// The package manager: mise, the dev rootfs, the system's packages,
+    /// Podman.
+    Packages,
     /// The command center: AI agents and the system, live and over time.
     Center,
     /// Usage and accounts: every Claude Code and Codex account.
@@ -385,6 +388,7 @@ fn run(tos: Tos) -> anyhow::Result<ExitCode> {
             named(&format!("files.open {}", p.display()))?;
         }
         TosCmd::Monitor => named("monitor.open")?,
+        TosCmd::Packages => named("packages.open")?,
         TosCmd::Center => named("center.open")?,
         TosCmd::Usage => named("usage.open")?,
         TosCmd::Harness { goal } => {

@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-3.0-or-later
-# The dev rootfs end to end (M5b, D-110): download Debian 13's pinned
-# layer, check it, unpack it in a user namespace with the runner's
-# subordinate IDs, enter it with bubblewrap, install a package with apt,
-# upgrade, and delete it. Runs in an isolated data folder.
+# The dev rootfs and the package manager end to end (M5b, D-110):
+# download Debian 13's pinned layer, check it, unpack it in a user
+# namespace with the runner's subordinate IDs, enter it with bubblewrap;
+# through `termos pkg` (what the package manager app lists with and runs
+# in its windows) search, install and remove a package with apt and a
+# tool with mise; upgrade; delete it. Runs in an isolated data folder.
 set -euo pipefail
 T="$(realpath "${1:?usage: devroot-e2e.sh <termos binary>}")"
 
@@ -29,9 +31,24 @@ grep -qx 0 "$base/inside"
 grep -qx "$base" "$base/inside"
 test "$(stat -c %u "$base/made-inside")" = "$(id -u)"
 
-"$T" devroot enter -- apt-get install -y --no-install-recommends hello
+"$T" pkg search devroot hello | tee "$base/found"
+grep -q '^  hello ' "$base/found"
+"$T" pkg install devroot hello < <(yes)
+"$T" pkg list devroot | tee "$base/listed"
+grep -q '^  hello ' "$base/listed"
 "$T" devroot enter -- hello | tee "$base/hello"
 grep -q 'Hello, world!' "$base/hello"
+"$T" pkg remove devroot hello < <(yes)
+if "$T" pkg list devroot | grep -q '^  hello '; then exit 1; fi
+
+# mise's source: TermOS fetches its pinned mise when there is none.
+"$T" pkg setup mise
+"$T" pkg search mise jq | tee "$base/mise-found"
+grep -q '^  jq ' "$base/mise-found"
+"$T" pkg install mise jq
+"$T" pkg list mise | tee "$base/mise-listed"
+grep -q '^  jq ' "$base/mise-listed"
+"$T" pkg remove mise jq
 
 "$T" devroot update
 "$T" devroot status | tee "$base/updated"

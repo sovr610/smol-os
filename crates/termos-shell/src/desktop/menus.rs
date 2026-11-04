@@ -147,6 +147,7 @@ impl Desktop {
                     Entry::item("Files", Command::FilesOpen(String::new())),
                     Entry::item("System monitor", Command::MonitorOpen),
                     Entry::item("Clipboard history", Command::ClipboardOpen),
+                    Entry::item("Packages", Command::PackagesOpen),
                     Entry::item("Network", Command::NetworkOpen),
                     Entry::item("Updates", Command::UpdateOpen),
                     Entry::item("Settings", Command::SettingsOpen),
@@ -162,6 +163,7 @@ impl Desktop {
                     Entry::item("Run", Command::Task("run".into())),
                     Entry::item("Test", Command::Task("test".into())),
                     Entry::item("Git", Command::GitOpen),
+                    Entry::item("Dev rootfs shell", Command::DevrootEnter),
                 ],
             )
             .icon(Icon::Project),

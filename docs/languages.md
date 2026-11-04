@@ -222,6 +222,13 @@ lint = "go vet ./..."
   the task in the focused pane's project. It stays open until you press
   Enter, and the task's next run replaces it.
 
+## System packages
+
+Compilers, libraries and other system packages that mise does not have go in
+the dev rootfs, a Debian 13 you enter without root, and the package manager
+app shows mise's tools, the dev rootfs, your system's packages and Podman in
+one window: [packages.md](packages.md).
+
 ## Git
 
 Prefix `g` (or "Git (lazygit)" in the palette, `git.open`) opens

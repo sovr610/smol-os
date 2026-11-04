@@ -1113,11 +1113,11 @@ impl Desktop {
             .parse()
             .map_err(|e: crate::commands::CommandError| e.0)?;
         let app = match &cmd {
-            Command::CenterOpen | Command::UsageOpen => {
-                let kind = if cmd == Command::CenterOpen {
-                    termos_core::app::LaunchKind::Center
-                } else {
-                    termos_core::app::LaunchKind::Usage
+            Command::CenterOpen | Command::UsageOpen | Command::PackagesOpen => {
+                let kind = match cmd {
+                    Command::CenterOpen => termos_core::app::LaunchKind::Center,
+                    Command::UsageOpen => termos_core::app::LaunchKind::Usage,
+                    _ => termos_core::app::LaunchKind::Packages,
                 };
                 self.launcher_app(kind, "")?
             }
@@ -2461,6 +2461,23 @@ impl Desktop {
             }
             Command::AuditOpen(arg) => self.launch(termos_core::app::LaunchKind::Audit, &arg),
             Command::CenterOpen => self.launch(termos_core::app::LaunchKind::Center, ""),
+            Command::PackagesOpen => self.launch(termos_core::app::LaunchKind::Packages, ""),
+            Command::PkgRun(args) => {
+                let mut a = vec!["pkg"];
+                a.extend(args.split_whitespace());
+                a.push("--wait");
+                self.open_termos_window(&a, &format!("packages: {args}"), area);
+            }
+            Command::DevrootCreate => {
+                self.open_termos_window(
+                    &["devroot", "create", "--wait"],
+                    "dev rootfs: create",
+                    area,
+                );
+            }
+            Command::DevrootEnter => {
+                self.open_termos_window(&["devroot", "enter"], "dev rootfs", area);
+            }
             Command::AgentExternal(name) => self.open_external_agent(&name, area),
             Command::AgentInstall(name) => {
                 self.open_termos_window(
