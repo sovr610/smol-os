@@ -53,7 +53,13 @@ pub struct Toolbox {
     pub sandbox: SandboxSetup,
     pub redactor: Redactor,
     pub mcp: mcp::Hub,
+    /// Only reading, listing and searching files, and nothing that needs
+    /// the user's approval (`termos agent ask`, D-098).
+    pub read_only: bool,
 }
+
+/// The tools a read-only session is offered.
+pub const READ_ONLY_TOOLS: &[&str] = &["read_file", "list_dir", "search_code"];
 
 impl std::fmt::Debug for Toolbox {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -254,6 +260,10 @@ impl Toolbox {
     /// Tools offered to the model: the built-in ones and the MCP servers'.
     pub fn specs(&self) -> Vec<ToolSpec> {
         let mut specs = builtin_specs();
+        if self.read_only {
+            specs.retain(|s| READ_ONLY_TOOLS.contains(&s.name.as_str()));
+            return specs;
+        }
         specs.extend(self.mcp.specs());
         specs
     }
@@ -456,7 +466,15 @@ impl Toolbox {
         let mut asks: Vec<(String, bool)> = Vec::new();
         let mut allowed = Vec::new();
         for a in &call.actions {
+            if self.read_only && !matches!(a, Action::Read(_)) {
+                return Decision::Deny(
+                    "this session only reads files (a headless ask, D-098)".into(),
+                );
+            }
             match self.policy.decide(a, approvals) {
+                Decision::Ask { why, .. } if self.read_only => {
+                    return Decision::Deny(format!("{why}, and a headless ask has no one to ask"));
+                }
                 Decision::Deny(why) => return Decision::Deny(why),
                 Decision::Ask { why, remember } => asks.push((why, remember)),
                 Decision::Allow(why) => allowed.push(why),
@@ -1196,6 +1214,38 @@ mod tests {
             },
             redactor: Redactor::new(),
             mcp: mcp::Hub::default(),
+            read_only: false,
+        }
+    }
+
+    #[test]
+    fn a_read_only_toolbox_only_reads_and_never_asks() {
+        let (dir, mut tb) = ws();
+        tb.read_only = true;
+        let names: Vec<String> = tb.specs().into_iter().map(|s| s.name).collect();
+        assert_eq!(names, READ_ONLY_TOOLS);
+        let approvals = SessionApprovals::default();
+        let decide = |tool: &str, args: Value| {
+            let call = tb.prepare("id", tool, &args).expect("prepared");
+            tb.decide(&call, &approvals)
+        };
+        assert!(matches!(
+            decide("read_file", json!({"path": "src/lib.rs"})),
+            Decision::Allow(_)
+        ));
+        // Writing and commands, even when offered by name.
+        for (tool, args) in [
+            ("write_file", json!({"path": "x", "content": "y"})),
+            ("run_command", json!({"command": "ls"})),
+            ("fetch_url", json!({"url": "https://example.com/"})),
+        ] {
+            assert!(matches!(decide(tool, args), Decision::Deny(_)), "{tool}");
+        }
+        // Reading outside the workspace would ask: refused instead.
+        let outside = dir.path().parent().expect("parent").join("elsewhere.txt");
+        match decide("read_file", json!({"path": outside.display().to_string()})) {
+            Decision::Deny(why) => assert!(why.contains("no one to ask"), "{why}"),
+            other => panic!("{other:?}"),
         }
     }
 

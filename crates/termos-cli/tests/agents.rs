@@ -225,6 +225,136 @@ fn an_agent_session_leaves_no_key_behind() {
     }
 }
 
+/// The model reads the question's file, then answers with what it read.
+fn read_then_answer(req: &serde_json::Value) -> Vec<String> {
+    let results: Vec<String> = req["messages"]
+        .as_array()
+        .map(|m| {
+            m.iter()
+                .filter(|x| x["role"] == "tool")
+                .filter_map(|x| x["content"].as_str().map(str::to_owned))
+                .collect()
+        })
+        .unwrap_or_default();
+    if results.is_empty() {
+        vec![
+            chunk(
+                serde_json::json!({"tool_calls": [{"index": 0, "id": "c1", "type": "function",
+                    "function": {"name": "read_file", "arguments": "{\"path\":\"notes.txt\"}"}}]}),
+                Some("tool_calls"),
+            ),
+            "data: [DONE]\n\n".into(),
+        ]
+    } else {
+        let said = if results[0].contains("the build needs zig") {
+            "It says the build needs zig."
+        } else {
+            "I could not read it."
+        };
+        vec![
+            chunk(serde_json::json!({"content": said}), Some("stop")),
+            "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":40,\"completion_tokens\":7}}\n\n"
+                .into(),
+            "data: [DONE]\n\n".into(),
+        ]
+    }
+}
+
+#[test]
+fn agent_ask_answers_on_stdout() {
+    let (base, bodies) = mock_provider(read_then_answer);
+    let config = format!(
+        "[agents.providers.lab]\nkind = \"openai-compatible\"\nbase-url = \"{base}/v1\"\n\
+         [agents.profiles.quick]\nmodel = \"fixture-model\"\n"
+    );
+    let env = Env::new(&config);
+    let project = env.path().join("project");
+    std::fs::create_dir_all(&project).expect("project");
+    std::fs::write(project.join("notes.txt"), "the build needs zig\n").expect("notes");
+
+    let out = env.run_in(
+        &project,
+        &[
+            "agent",
+            "ask",
+            "--profile",
+            "quick",
+            "What",
+            "do",
+            "the",
+            "notes",
+            "say?",
+        ],
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success(),
+        "{stdout}{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(stdout.trim(), "It says the build needs zig.");
+    let sent = bodies.lock().expect("lock").clone();
+    assert!(sent[0].contains("What do the notes say?"), "{}", sent[0]);
+
+    // The question from standard input, and JSON out.
+    let mut cmd = env.command_in(
+        &project,
+        &[
+            "agent",
+            "ask",
+            "--profile",
+            "quick",
+            "--json",
+            "Notes:",
+            "-",
+        ],
+    );
+    cmd.stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped());
+    let mut child = cmd.spawn().expect("spawn");
+    child
+        .stdin
+        .take()
+        .expect("stdin")
+        .write_all(b"what do they say?")
+        .expect("write");
+    let out = child.wait_with_output().expect("wait");
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).expect("json");
+    assert_eq!(v["answer"], "It says the build needs zig.");
+    assert_eq!(v["model"], "fixture-model");
+    assert_eq!(v["tokens"]["output"], 7);
+    let session = v["session"].as_str().expect("session").to_owned();
+    let sent = bodies.lock().expect("lock").clone();
+    assert!(
+        sent.iter().any(|b| b.contains("Notes: what do they say?")),
+        "{sent:?}"
+    );
+
+    // Saved, so `agent history` lists it; and the profiles.
+    let out = env.run(&["agent", "history"]);
+    assert!(String::from_utf8_lossy(&out.stdout).contains(&session));
+    let out = env.run(&["agent", "profiles"]);
+    let listed = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        listed.contains("quick") && listed.contains("fixture-model"),
+        "{listed}"
+    );
+
+    // A profile with no model says what to pass.
+    let out = env.run_in(&project, &["agent", "ask", "hello"]);
+    assert!(!out.status.success());
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains("--model") && err.contains("fixture-model"),
+        "{err}"
+    );
+}
+
 #[test]
 fn audit_verify_finds_tampering() {
     let env = Env::new("");

@@ -177,6 +177,10 @@ pub(crate) fn account_command(
                     .unwrap_or_default()
             );
             let config = Config::load(config_path).unwrap_or_default();
+            // TermOS's skills, in its folder too (D-098).
+            for line in crate::skills_cmd::ensure(paths, &config) {
+                println!("termos: {line}");
+            }
             match program_of(paths, t) {
                 Some(program) => {
                     if config.agents.termos_mcp.register {

@@ -25,6 +25,8 @@ tos notify --level warn "the build is slow today"
 | `tos split [auto\|right\|down] [-- COMMAND…]` | Splits this pane; with a command, runs it in the new pane |
 | `tos run [--float] COMMAND…` | Runs a command in a new pane beside this one, or in a floating window |
 | `tos float [-- COMMAND…]` | Floats this pane (or tiles it again); with a command, opens a floating window running it |
+| `tos panes` | Lists this session's panes: id, workspace, kind, title, folder (`*` marks this one) |
+| `tos read ID [-n LINES]` | Prints the last lines of a pane's text, its scrollback and screen, with keys and passwords masked |
 | `tos zoom` | Zooms this pane, or unzooms it |
 | `tos close` | Closes this pane (after asking) |
 | `tos title NAME…` | Names this pane; `tos title` with no name shows the program's own title again |
@@ -61,6 +63,16 @@ Relative paths are relative to the folder you are in.
 
 `tos copy` puts the text in TermOS's clipboard history and, like any copy in
 TermOS, in your terminal's clipboard.
+
+`-p` on `tos run`, `tos split` and `tos float` prints the new pane's id, for
+`tos read`:
+
+```bash
+id=$(tos run -p npm run dev)
+tos read "$id" -n 40
+```
+
+Coding agents use these through TermOS's skills ([skills.md](skills.md)).
 
 ## AI agents
 

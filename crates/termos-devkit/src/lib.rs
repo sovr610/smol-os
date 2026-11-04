@@ -10,7 +10,10 @@
 //! - [`editor`]: TermOS's Neovim and Helix, with the installed servers
 //!   and debuggers;
 //! - [`templates`]: `termos create <template> [dir]`;
-//! - [`tasks`]: build, run and test for a project.
+//! - [`tasks`]: build, run and test for a project;
+//! - [`accounts`], [`cli_agents`], [`conversations`]: Claude Code and
+//!   Codex CLI, their accounts and conversations (D-095, D-097);
+//! - [`skills`]: TermOS's skills for the coding CLIs (D-098).
 
 pub mod accounts;
 pub mod check;
@@ -20,6 +23,7 @@ pub mod editor;
 pub mod lang;
 pub mod langs;
 pub mod mise;
+pub mod skills;
 pub mod tasks;
 pub mod templates;
 

@@ -70,6 +70,10 @@ pub(crate) fn install_tool(
         got.version,
         got.path.display()
     ));
+    // TermOS's skills, for it to read (D-098).
+    for line in crate::skills_cmd::ensure(paths, config) {
+        say(&line);
+    }
     if had.is_none() && config.agents.termos_mcp.register {
         // In every account: each has its own settings (D-097).
         for account in accounts(paths)?.list(tool) {

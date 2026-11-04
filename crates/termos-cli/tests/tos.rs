@@ -101,6 +101,55 @@ fn tos_in_a_pane_acts_on_it() {
     wait("a floating pane", || {
         panes(&env).iter().any(|p| p["floating"] == true)
     });
+    // A program in a pane of its own, its id printed, its text read back
+    // with the key it shows masked (what the agent skills do, D-098).
+    let id_file = env.path().join("id.txt");
+    let says = if cfg!(windows) {
+        "cmd /k echo pane-says-hi sk-ant-fixture0123456789abcdef"
+    } else {
+        "sh -c 'echo pane-says-hi sk-ant-fixture0123456789abcdef; sleep 30'"
+    };
+    type_line(
+        &env,
+        first,
+        &format!("tos run -p {says} > \"{}\"", id_file.display()),
+    );
+    wait("the new pane's id", || {
+        std::fs::read_to_string(&id_file).is_ok_and(|t| t.trim().parse::<u64>().is_ok())
+    });
+    let id: u64 = std::fs::read_to_string(&id_file)
+        .expect("id")
+        .trim()
+        .parse()
+        .expect("a number");
+    assert!(
+        panes(&env).iter().any(|p| p["id"] == id),
+        "a pane with that id"
+    );
+    let read_file = env.path().join("read.txt");
+    let mut read = String::new();
+    wait("tos read", || {
+        type_line(
+            &env,
+            first,
+            &format!("tos read {id} -n 20 > \"{}\"", read_file.display()),
+        );
+        std::thread::sleep(Duration::from_millis(300));
+        read = std::fs::read_to_string(&read_file).unwrap_or_default();
+        read.contains("pane-says-hi [redacted]")
+    });
+    assert!(!read.contains("sk-ant-fixture"), "{read}");
+    let list_file = env.path().join("panes.txt");
+    type_line(
+        &env,
+        first,
+        &format!("tos panes > \"{}\"", list_file.display()),
+    );
+    wait("tos panes", || {
+        std::fs::read_to_string(&list_file).is_ok_and(|t| {
+            t.lines().any(|l| l.starts_with(&format!("*{first} "))) && t.lines().count() >= 4
+        })
+    });
 
     // Outside a pane it says what it needs.
     let out = std::process::Command::new(&link)

@@ -23,6 +23,7 @@ mod probe;
 #[cfg(any(windows, test))]
 mod shadow;
 mod shim;
+mod skills_cmd;
 mod tos;
 mod tryboot;
 mod update;
@@ -189,6 +190,12 @@ enum Cmd {
     Mcp {
         #[command(subcommand)]
         action: agents::McpCmd,
+    },
+    /// TermOS's skills, which teach Claude Code, Codex and the other
+    /// coding CLIs to use TermOS.
+    Skills {
+        #[command(subcommand)]
+        action: skills_cmd::SkillsCmd,
     },
     /// The agents' tamper-evident audit logs.
     Audit {
@@ -412,6 +419,7 @@ fn run_cli(args: impl IntoIterator<Item = String>) -> anyhow::Result<ExitCode> {
         Some(Cmd::Secret { action }) => agents::secret_command(action, &paths, &config_path),
         Some(Cmd::Agent { action }) => agents::agent_command(action, &paths, &config_path),
         Some(Cmd::Mcp { action }) => agents::mcp_command(action, &paths, &config_path),
+        Some(Cmd::Skills { action }) => skills_cmd::skills_command(action, &paths, &config_path),
         Some(Cmd::Account { wait, action }) => agents::pause(
             *wait,
             accounts_cmd::account_command(action, &paths, &config_path),
@@ -554,6 +562,7 @@ fn run(cli: &Cli, paths: &Paths, config_path: &Path, t: &Target) -> anyhow::Resu
             | Cmd::Secret { .. }
             | Cmd::Agent { .. }
             | Cmd::Mcp { .. }
+            | Cmd::Skills { .. }
             | Cmd::Account { .. }
             | Cmd::Audit { .. }
             | Cmd::Sandbox { .. }
@@ -1397,6 +1406,7 @@ fn run_server(paths: &Paths, config_path: &Path, t: &Target) -> anyhow::Result<E
     opts.handle_signals = true;
     opts.pane_env.extend(pane_path(paths));
     shim::ensure(paths);
+    skills_cmd::ensure(paths, &config);
     // Agent windows and audit logs (termos-ai), which the shell opens
     // without depending on it (ARCHITECTURE.md §4).
     let home = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })

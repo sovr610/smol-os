@@ -15,8 +15,9 @@ termos account add claude work --label "Work (Max)"
 ```
 
 That makes the folder, shares your settings, instructions (`CLAUDE.md`,
-`AGENTS.md`) and skills into it, registers TermOS's MCP server there, and
-offers to sign in. Sign in later with `termos account sign-in claude work`.
+`AGENTS.md`) and skills into it (TermOS's own skills too,
+[skills.md](skills.md)), registers TermOS's MCP server there, and offers to
+sign in. Sign in later with `termos account sign-in claude work`.
 Your login is never shared or copied between accounts.
 
 ```bash

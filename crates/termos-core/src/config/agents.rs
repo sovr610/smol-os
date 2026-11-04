@@ -31,6 +31,24 @@ pub struct AgentsConfig {
     pub external: BTreeMap<String, ExternalAgentConfig>,
     /// TermOS's own MCP server, for Claude Code and Codex CLI (D-094).
     pub termos_mcp: TermosMcpConfig,
+    /// TermOS's skills for the coding CLIs (D-098).
+    pub skills: SkillsConfig,
+}
+
+/// `[agents.skills]`: the skills that teach Claude Code, Codex and the
+/// other coding CLIs to use TermOS (D-098).
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(default, deny_unknown_fields, rename_all = "kebab-case")]
+pub struct SkillsConfig {
+    /// Install and update them by themselves (with the CLIs, new accounts
+    /// and when the server starts).
+    pub install: bool,
+}
+
+impl Default for SkillsConfig {
+    fn default() -> Self {
+        Self { install: true }
+    }
 }
 
 impl Default for AgentsConfig {
@@ -43,6 +61,7 @@ impl Default for AgentsConfig {
             mcp: BTreeMap::new(),
             external: BTreeMap::new(),
             termos_mcp: TermosMcpConfig::default(),
+            skills: SkillsConfig::default(),
         }
     }
 }

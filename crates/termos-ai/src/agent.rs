@@ -239,6 +239,12 @@ pub struct Launch {
     pub journal: Option<Arc<Journal>>,
     /// Where the command center finds the session while it runs.
     pub registry: Option<Arc<Registry>>,
+    /// The provider and model, over the profile's.
+    pub provider: Option<String>,
+    pub model: Option<String>,
+    /// No one is there to answer (`termos agent ask`, D-098): the session
+    /// only reads, and what it would ask is an error instead.
+    pub headless: bool,
 }
 
 impl std::fmt::Debug for Launch {
@@ -350,6 +356,116 @@ pub fn start(launch: Launch) -> std::io::Result<Handle> {
         r.register(&handle);
     }
     Ok(handle)
+}
+
+/// What a headless session's model is told, after the system prompt.
+const HEADLESS_NOTE: &str = "\n\nAnother program asked you this (`termos agent ask`), and no one is there \
+     to answer your questions. You can read, list and search files; you cannot change files, run \
+     commands or fetch anything, and a call that would need approval is refused. Answer directly \
+     and completely in plain text: your reply is the whole result.";
+
+/// A headless ask's result.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Answer {
+    /// What the model answered (its text after the question).
+    pub text: String,
+    pub provider: String,
+    pub model: String,
+    pub usage: Usage,
+    /// US dollars, when the model's prices are known.
+    pub cost: Option<f64>,
+    /// The saved conversation (`[agents] history`), which a window can
+    /// continue.
+    pub session: String,
+    /// Notices and errors on the way: refused calls, retries, limits.
+    pub notes: Vec<String>,
+}
+
+/// Runs one question with no one there to answer the session
+/// (`termos agent ask`, D-098): read-only, and every choice it would ask
+/// for is an error instead. `progress` sees the view after each change.
+pub async fn ask(
+    mut launch: Launch,
+    prompt: String,
+    progress: impl Fn(&View) + Send + Sync + 'static,
+) -> Result<Answer, String> {
+    launch.headless = true;
+    let view = Arc::new(Mutex::new(View::new(
+        &launch.profile,
+        launch.workspace.clone(),
+    )));
+    let watched = Arc::clone(&view);
+    let waker = AppWaker::new(move || {
+        if let Ok(v) = watched.lock() {
+            progress(&v);
+        }
+    });
+    let shared = Shared {
+        view: Arc::clone(&view),
+        waker: Arc::new(Mutex::new(Some(waker))),
+    };
+    // Nothing is sent: a headless session waits for no answer. The sender
+    // stays open, or the session would take its end for a closed window.
+    let (_open, mut rx) = mpsc::unbounded_channel();
+    let mut session = Session::begin(&launch, &shared, &mut rx)
+        .await
+        .map_err(|e| e.unwrap_or_else(|| "the session ended".into()))?;
+    let turn = session.turn(prompt, &mut rx).await;
+    session.end().await;
+    if turn.is_err() {
+        return Err("the session ended".into());
+    }
+    let v = view
+        .lock()
+        .map_err(|_| "the session's view is gone".to_owned())?;
+    let start = v
+        .items
+        .iter()
+        .rposition(|i| matches!(i, Item::User(_)))
+        .map_or(0, |i| i + 1);
+    // The answer is the model's last reply: what it said after its last
+    // tool call (before it, it was working).
+    let last_tool = v.items[start..]
+        .iter()
+        .rposition(|i| matches!(i, Item::Tool(_)))
+        .map_or(start, |i| start + i + 1);
+    let mut texts = Vec::new();
+    let mut notes = Vec::new();
+    let mut errors = Vec::new();
+    for (n, item) in v.items.iter().enumerate().skip(start) {
+        match item {
+            Item::Assistant { text, .. } if n >= last_tool && !text.trim().is_empty() => {
+                texts.push(text.trim().to_owned());
+            }
+            Item::Notice(n) => notes.push(n.clone()),
+            Item::Error(e) => errors.push(e.clone()),
+            Item::Tool(t) => {
+                if let ToolState::Denied(why) = &t.state {
+                    notes.push(format!("{} refused: {why}", t.summary));
+                }
+            }
+            _ => {}
+        }
+    }
+    if texts.is_empty() {
+        let mut why = errors;
+        why.extend(notes);
+        return Err(if why.is_empty() {
+            "the model gave no answer".into()
+        } else {
+            why.join("; ")
+        });
+    }
+    notes.extend(errors);
+    Ok(Answer {
+        text: texts.join("\n\n"),
+        provider: v.provider.clone(),
+        model: v.model.clone(),
+        usage: v.usage,
+        cost: v.cost,
+        session: v.session_id.clone(),
+        notes,
+    })
 }
 
 /// The session's side of the shared view.
@@ -537,7 +653,8 @@ impl Session {
             ));
         }
         // The provider.
-        let provider_name = match (&resumed, &profile.provider) {
+        let chosen = launch.provider.as_ref().or(profile.provider.as_ref());
+        let provider_name = match (&resumed, chosen) {
             (Some(s), _) => s.provider.clone(),
             (None, Some(p)) => p.clone(),
             (None, None) if agents.providers.len() == 1 => {
@@ -545,6 +662,12 @@ impl Session {
             }
             (None, None) => {
                 let names: Vec<String> = agents.providers.keys().cloned().collect();
+                if launch.headless {
+                    return Err(Some(format!(
+                        "pick a provider with --provider ({}), or set `provider` in the profile",
+                        names.join(", ")
+                    )));
+                }
                 shared.phase(
                     Phase::PickProvider {
                         names: names.clone(),
@@ -573,7 +696,7 @@ impl Session {
         let mut redactor = Redactor::new();
         let key = match &pcfg.key {
             Some(r) => {
-                let k = read_secret(&store, r.name(), shared, rx).await?;
+                let k = read_secret(&store, r.name(), launch.headless, shared, rx).await?;
                 redactor.add(&k);
                 Some(k)
             }
@@ -582,7 +705,7 @@ impl Session {
         let mut mcp_keys = BTreeMap::new();
         for name in &profile.mcp_servers {
             if let Some(r) = agents.mcp.get(name).and_then(|m| m.key.as_ref()) {
-                match read_secret(&store, r.name(), shared, rx).await {
+                match read_secret(&store, r.name(), launch.headless, shared, rx).await {
                     Ok(k) => {
                         redactor.add(&k);
                         mcp_keys.insert(name.clone(), k);
@@ -610,9 +733,30 @@ impl Session {
         }
         let provider = provider::build(&provider_name, &pcfg, key).map_err(|e| Some(e.message))?;
         // The model.
-        let (model, listed) = match (&resumed, profile.model.as_deref().filter(|m| !m.is_empty())) {
+        let chosen = launch
+            .model
+            .as_deref()
+            .or(profile.model.as_deref())
+            .filter(|m| !m.is_empty());
+        let (model, listed) = match (&resumed, chosen) {
             (Some(s), _) => (s.model.clone(), None),
             (None, Some(m)) => (m.to_owned(), None),
+            (None, None) if launch.headless => {
+                let listed = match provider.list_models().await {
+                    Ok(m) if !m.is_empty() => {
+                        let ids: Vec<&str> = m.iter().take(12).map(|m| m.id.as_str()).collect();
+                        format!(
+                            "; {provider_name} lists {}{}",
+                            ids.join(", "),
+                            if m.len() > ids.len() { ", …" } else { "" }
+                        )
+                    }
+                    _ => String::new(),
+                };
+                return Err(Some(format!(
+                    "pick a model with --model, or set `model` in the profile{listed}"
+                )));
+            }
             (None, None) => {
                 shared.phase(Phase::Starting, "listing models…");
                 let (models, error) = match provider.list_models().await {
@@ -663,7 +807,7 @@ impl Session {
             hidden,
         };
         let sandbox_line = caps.describe(profile.sandbox);
-        let hub = if profile.mcp_servers.is_empty() {
+        let hub = if profile.mcp_servers.is_empty() || launch.headless {
             mcp::Hub::default()
         } else {
             shared.phase(Phase::Starting, "starting MCP servers…");
@@ -685,12 +829,16 @@ impl Session {
             shared.error(p.clone());
         }
         let workspace = policy.workspace.clone();
-        let system = system_prompt(&workspace, &sandbox_line, &profile);
+        let mut system = system_prompt(&workspace, &sandbox_line, &profile);
+        if launch.headless {
+            system.push_str(HEADLESS_NOTE);
+        }
         let tools = Toolbox {
             policy,
             sandbox: setup,
             redactor,
             mcp: hub,
+            read_only: launch.headless,
         };
         // The session's identity, audit log and history.
         let (id, messages, usage, created) = match resumed {
@@ -1232,10 +1380,11 @@ async fn next_interrupt(rx: &mut mpsc::UnboundedReceiver<Input>) -> Interrupt {
 }
 
 /// Reads a secret, asking for the secrets file's passphrase while it is
-/// locked.
+/// locked (`headless`: saying so instead).
 async fn read_secret(
     slot: &Arc<SecretSlot>,
     name: &str,
+    headless: bool,
     shared: &Shared,
     rx: &mut mpsc::UnboundedReceiver<Input>,
 ) -> Result<SecretString, Option<String>> {
@@ -1248,6 +1397,14 @@ async fn read_secret(
             .map_err(|e| Some(e.to_string()))?;
         match got {
             Ok(k) => return Ok(k),
+            Err(SecretError::Locked) if headless => {
+                return Err(Some(
+                    "the secrets file is locked, and a headless ask cannot ask for its passphrase: \
+                     use a profile whose provider needs no key (a local model), or keep the key \
+                     in the OS keyring ([secrets] store = \"keyring\")"
+                        .into(),
+                ));
+            }
             Err(SecretError::Locked) => {
                 shared.phase(
                     Phase::NeedPassphrase {

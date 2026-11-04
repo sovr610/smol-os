@@ -38,6 +38,11 @@ tools to work with its windows, and shows their usage in the command center.
 `termos agent models anthropic` lists the models from the shell, which also
 checks the key.
 
+`termos agent ask "QUESTION"` asks once from the shell and prints the answer:
+read-only, for scripts and for other coding agents
+([skills.md](skills.md#termos-agent-ask)). `termos agent profiles` lists the
+profiles.
+
 ## The window
 
 ```text
@@ -364,6 +369,13 @@ so they can work with your desktop:
 - **Installed them yourself?** `termos mcp register` (or `register claude`)
   adds the server to the ones on your `PATH`; `termos mcp unregister` takes
   it out.
+
+### Skills
+
+TermOS installs skills that teach Claude Code, Codex and the other coding
+CLIs what TermOS offers: panes for servers and watchers, reading them,
+opening files, notifications, its developer tools and `termos agent ask`.
+See [skills.md](skills.md).
 
 ### Several accounts
 

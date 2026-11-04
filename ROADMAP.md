@@ -31,7 +31,7 @@ questions (DECISIONS.md, "Open questions").
 | M10c | The command center: live views and history of the AI and the OS, with actions (D-084, D-092, D-093) | 🔍 |
 | M10d | Claude Code and Codex CLI: installed by TermOS, with a TermOS MCP server (D-084, D-094, D-095) | 🔍 |
 | M11a | AI accounts: several subscriptions per provider, switching with the conversation kept, the usage app (D-096, D-097) | 🔍 |
-| M11b | Skills that teach Claude Code, Codex and other CLIs to use TermOS (D-096) | ⏳ |
+| M11b | Skills that teach Claude Code, Codex and other CLIs to use TermOS, and `termos agent ask` (D-096, D-098) | 🚧 |
 | M11c | The harness: one coding tool over Claude Code, Codex and API models, routing each task to the model that suits it (D-096) | ⏳ |
 | M9b | Platform gaps: the Windows agent sandbox and input, snapshots and sensors on macOS and Windows, Kitty keyboard flags, app windows in sessions, the KMS console's clipboard, bell and images (D-077) | ⏳ |
 
@@ -972,11 +972,12 @@ Nothing M11a adds runs while idle: the shims run only when `claude` or `codex` s
 ---
 
 ## M11b — Skills for the agent CLIs
-**Status:** ⏳ · Owner answers: D-096.
+**Status:** 🚧 · Owner answers: D-096, D-098.
 
 **Deliverables**
-- Skills that teach Claude Code, Codex and other CLIs what TermOS offers and how to use it: its MCP tools, `tos`, panes for servers and watchers, task panels, TermOS's own agents and models.
-- Installed with the CLIs and into every account; kept up to date by TermOS.
+- [ ] Skills that teach Claude Code, Codex and other CLIs what TermOS offers and how to use it: its MCP tools, `tos`, panes for servers and watchers, task panels, TermOS's own agents and models (`termos`, `termos-dev`, `termos-agents`).
+- [ ] Installed into every Claude Code account and the shared `~/.agents/skills` (Codex, Gemini CLI, opencode); kept up to date by TermOS, never over a skill of the user's; `termos skills install|remove|status|show`; `[agents.skills] install`.
+- [ ] `termos agent ask`: TermOS's agent answers once on standard output, read-only, audited and counted, so the CLIs can hand sub-tasks to an API model or a local one.
 
 **Acceptance:** each CLI lists the skills (CI, real CLIs, no keys).
 

@@ -31,6 +31,36 @@ pub(crate) enum SecretCmd {
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum AgentCmd {
+    /// Ask TermOS's agent once and print its answer: read-only (it reads
+    /// and searches the files here, nothing else), for programs such as
+    /// Claude Code or Codex handing it a question.
+    Ask {
+        /// The agent profile (`termos agent profiles` lists them).
+        #[arg(long, default_value = "default")]
+        profile: String,
+        /// The provider, over the profile's.
+        #[arg(long)]
+        provider: Option<String>,
+        /// The model, over the profile's.
+        #[arg(long)]
+        model: Option<String>,
+        /// The folder it may read (default: the current one).
+        #[arg(long, value_name = "DIR")]
+        workspace: Option<PathBuf>,
+        /// Print JSON: the answer, the model, its tokens and cost, the
+        /// saved conversation.
+        #[arg(long)]
+        json: bool,
+        /// Show its file reads and refusals on stderr as they happen.
+        #[arg(long, short)]
+        verbose: bool,
+        /// The question; a lone `-` (or no question) reads standard input
+        /// (`git diff | termos agent ask "Review this:" -`).
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        prompt: Vec<String>,
+    },
+    /// The agent profiles, with their provider and model.
+    Profiles,
     /// List the models a provider offers (from its API).
     Models {
         /// A provider under [agents.providers].
@@ -143,6 +173,175 @@ pub(crate) enum SandboxCmd {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true, required = true)]
         command: Vec<String>,
     },
+}
+
+/// `termos agent ask`'s options.
+struct Ask {
+    profile: String,
+    provider: Option<String>,
+    model: Option<String>,
+    workspace: Option<PathBuf>,
+    json: bool,
+    verbose: bool,
+}
+
+/// The question: the arguments, with a lone `-` (or nothing at all)
+/// standing for standard input.
+fn ask_text(args: &[String], stdin: &mut dyn std::io::Read) -> anyhow::Result<String> {
+    let mut read_stdin = || -> anyhow::Result<String> {
+        let mut text = String::new();
+        stdin
+            .read_to_string(&mut text)
+            .context("cannot read the question from standard input")?;
+        Ok(text)
+    };
+    let text = if args.is_empty() {
+        read_stdin()?
+    } else {
+        let mut parts = Vec::new();
+        for a in args {
+            parts.push(if a == "-" { read_stdin()? } else { a.clone() });
+        }
+        parts.join(" ")
+    };
+    if text.trim().is_empty() {
+        bail!("no question: give it as arguments or on standard input");
+    }
+    Ok(text)
+}
+
+/// `termos agent ask` (D-098): TermOS's agent, once, read-only.
+fn ask_command(
+    ask: &Ask,
+    args: &[String],
+    config: &Config,
+    paths: &Paths,
+    config_path: &Path,
+) -> anyhow::Result<ExitCode> {
+    if args.is_empty() && std::io::stdin().is_terminal() {
+        bail!("no question: `termos agent ask \"…\"`, or pipe it in");
+    }
+    let prompt = ask_text(args, &mut std::io::stdin())?;
+    let workspace = match &ask.workspace {
+        Some(w) => w.clone(),
+        None => std::env::current_dir()?,
+    };
+    let workspace = workspace
+        .canonicalize()
+        .with_context(|| format!("cannot open {}", workspace.display()))?;
+    // The provider's key: unlock the secrets file here when someone is at
+    // the terminal to type its passphrase.
+    let agents = &config.agents;
+    let profile = agents
+        .profiles
+        .get(&ask.profile)
+        .cloned()
+        .unwrap_or_default();
+    let provider = ask.provider.clone().or(profile.provider).or_else(|| {
+        (agents.providers.len() == 1)
+            .then(|| agents.providers.keys().next().cloned())
+            .flatten()
+    });
+    let needs_key = provider
+        .as_ref()
+        .and_then(|p| agents.providers.get(p))
+        .is_some_and(|p| p.key.is_some());
+    let store = SecretStore::open(config.secrets.store, &paths.data_dir);
+    if needs_key
+        && store.is_locked()
+        && store.file_exists()
+        && (std::io::stdin().is_terminal() || std::io::stderr().is_terminal())
+    {
+        store.unlock(read_hidden(&format!(
+            "Passphrase for {}",
+            store.file().display()
+        ))?)?;
+    }
+    let launch = termos_ai::agent::Launch {
+        agents: agents.clone(),
+        secrets: std::sync::Arc::new(termos_ai::agent::SecretSlot::with(store)),
+        paths: paths.clone(),
+        profile: ask.profile.clone(),
+        workspace,
+        resume: None,
+        helper: std::env::current_exe().ok(),
+        config_file: Some(config_path.to_owned()),
+        home: home(),
+        journal: Some(std::sync::Arc::new(termos_core::journal::Journal::new(
+            &paths.state_dir,
+            config.center.keep_days,
+        ))),
+        registry: None,
+        provider: ask.provider.clone(),
+        model: ask.model.clone(),
+        headless: true,
+    };
+    let shown = std::sync::Mutex::new(std::collections::HashSet::<String>::new());
+    let verbose = ask.verbose;
+    let progress = move |v: &termos_ai::agent::View| {
+        if !verbose {
+            return;
+        }
+        use termos_ai::agent::{Item, ToolState};
+        let Ok(mut shown) = shown.lock() else { return };
+        for item in &v.items {
+            let Item::Tool(t) = item else { continue };
+            let line = match &t.state {
+                ToolState::Done => format!("· {}", t.summary),
+                ToolState::Failed => format!("· {} (failed)", t.summary),
+                ToolState::Denied(why) => format!("· {} refused: {why}", t.summary),
+                _ => continue,
+            };
+            if shown.insert(t.id.clone()) {
+                eprintln!("{line}");
+            }
+        }
+    };
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+    let answer = rt
+        .block_on(termos_ai::agent::ask(launch, prompt, progress))
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    let mut out = std::io::stdout().lock();
+    if ask.json {
+        let u = answer.usage;
+        let v = serde_json::json!({
+            "answer": answer.text,
+            "provider": answer.provider,
+            "model": answer.model,
+            "tokens": {
+                "input": u.input,
+                "output": u.output,
+                "cache_read": u.cache_read,
+                "cache_write": u.cache_write,
+            },
+            "cost_usd": answer.cost,
+            "session": answer.session,
+            "notes": answer.notes,
+        });
+        writeln!(out, "{}", serde_json::to_string_pretty(&v)?)?;
+    } else {
+        writeln!(out, "{}", answer.text)?;
+        if verbose {
+            for n in &answer.notes {
+                eprintln!("note: {n}");
+            }
+            eprintln!(
+                "{} {} · {} in, {} out{} · session {}",
+                answer.provider,
+                answer.model,
+                answer.usage.input + answer.usage.cache_read + answer.usage.cache_write,
+                answer.usage.output,
+                answer
+                    .cost
+                    .map(|c| format!(" · ${c:.4}"))
+                    .unwrap_or_default(),
+                answer.session
+            );
+        }
+    }
+    Ok(ExitCode::SUCCESS)
 }
 
 fn home() -> Option<PathBuf> {
@@ -306,6 +505,49 @@ pub(crate) fn agent_command(
 ) -> anyhow::Result<ExitCode> {
     let config = load_config(config_path)?;
     match action {
+        AgentCmd::Ask {
+            profile,
+            provider,
+            model,
+            workspace,
+            json,
+            verbose,
+            prompt,
+        } => {
+            let ask = Ask {
+                profile: profile.clone(),
+                provider: provider.clone(),
+                model: model.clone(),
+                workspace: workspace.clone(),
+                json: *json,
+                verbose: *verbose,
+            };
+            return ask_command(&ask, prompt, &config, paths, config_path);
+        }
+        AgentCmd::Profiles => {
+            let agents = &config.agents;
+            let only = (agents.providers.len() == 1)
+                .then(|| agents.providers.keys().next().cloned())
+                .flatten();
+            let mut names: Vec<&String> = agents.profiles.keys().collect();
+            let default = "default".to_owned();
+            if !agents.profiles.contains_key("default") {
+                names.insert(0, &default);
+            }
+            for name in names {
+                let p = agents.profiles.get(name).cloned().unwrap_or_default();
+                let provider = p
+                    .provider
+                    .clone()
+                    .or_else(|| only.clone())
+                    .unwrap_or_else(|| "(asks)".into());
+                let model = p.model.clone().unwrap_or_else(|| "(asks)".into());
+                println!("{name:<16} {provider:<14} {model}");
+            }
+            if agents.providers.is_empty() {
+                println!("no providers: add one under [agents.providers.<name>] (docs/agents.md)");
+            }
+        }
         AgentCmd::Models { provider } => {
             let Some(pcfg) = config.agents.providers.get(provider) else {
                 bail!("no provider named {provider} under [agents.providers]");

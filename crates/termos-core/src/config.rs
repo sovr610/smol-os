@@ -715,6 +715,11 @@ history = true                # keep conversations (mode 0600) to resume them
 # deny = []                   # e.g. ["read_pane", "send_to_pane"]
 # deny-commands = ["session.quit", "client.detach", "workspace.kill", "pane.kill"]
 
+# TermOS's skills, which teach Claude Code, Codex and the other coding CLIs
+# to use TermOS (`termos skills status`). TermOS installs and updates them.
+# [agents.skills]
+# install = true
+
 [secrets]
 # Where API keys live: auto | keyring | file. auto uses the secrets file if
 # there is one, else the OS keyring when it works, else the file (an age

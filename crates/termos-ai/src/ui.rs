@@ -94,6 +94,9 @@ impl AgentLauncher {
             home: self.home.clone(),
             journal: self.journal.clone(),
             registry: self.registry.clone(),
+            provider: None,
+            model: None,
+            headless: false,
         }
     }
 }

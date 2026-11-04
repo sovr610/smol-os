@@ -963,6 +963,21 @@ rewrite history.
 
 ---
 
+## D-098: M11b: skills for the agent CLIs, and `termos agent ask`
+- **Status:** Accepted (owner answers) · 2026-11-04
+- **Context:** M11b teaches the coding CLIs what TermOS offers. The owner chose (2026-11-04): skills for Claude Code (each account's own skills folder) and for every CLI that reads the shared Agent Skills folder `~/.agents/skills` (Codex, Gemini CLI, opencode); installed and updated automatically; and a headless way for those CLIs to hand work to TermOS's own agents now, which M11c builds on.
+- **Decision:**
+  - **Skills, written by TermOS and built into the binary:** `termos` (working in TermOS: panes for servers and watchers, reading them, opening files, notifications, the `tos` command and the MCP tools), `termos-dev` (languages, project templates, build/run/test tasks, the editor and Git UI) and `termos-agents` (asking TermOS's agents and local models, accounts and usage). Each is a folder with a `SKILL.md` (`name` and `description` front matter, which every CLI that follows the Agent Skills format reads). They tell the CLI to check that it runs inside TermOS (`TERMOS` set) before using it.
+  - **Where:** each Claude Code account's `skills` folder (an account that links the default's folder is covered once: folders are compared by their real path), and `~/.agents/skills`, read by Codex, Gemini CLI and opencode. opencode also reads `~/.claude/skills`, so it may list a TermOS skill twice; the copies are the same.
+  - **Ownership:** each installed skill folder holds a `.termos-skill` file with the SHA-256 of every file TermOS wrote. TermOS updates a skill only when its files still match those sums (an unchanged copy of an older version), never touches a folder of the same name without that file (the user's own skill), and leaves a copy the user edited alone (`termos skills install --force` replaces it). Removing deletes only TermOS's unchanged copies.
+  - **When:** automatically with `termos agent install` and `update`, when an account is added, and when the server starts (a few small file reads, once). Claude Code's folders only while Claude Code is there (TermOS's install or on `PATH`); the shared folder only while Codex, Gemini CLI or opencode is. `[agents.skills] install = false`, or `termos skills remove` (which TermOS remembers until `termos skills install`), turns this off. `termos skills status` shows every folder and copy.
+  - **`termos agent ask`:** runs TermOS's agent once, in the calling process, and prints its answer: `--profile`, `--provider` and `--model` choose the model (a local one through the model router costs nothing), the prompt comes from the arguments or standard input, `--json` adds the model, tokens, cost and the saved conversation's id. It is read-only: the model is offered only reading, listing and searching files; any call that would need the user's approval is refused (no one is there to ask), and no MCP servers start. Every call is audited, the conversation is saved (it can be continued in a window), and its tokens and cost go into the command center's history. A question it would have to ask (which provider, which model, the secrets file's passphrase) is an error that says what to pass instead.
+  - **No new MCP tool for asking:** an answer can take minutes, longer than Codex's MCP call timeout (60 s by default); the CLIs run `termos agent ask` as a command instead, which they can also run in the background.
+  - **CI** (agents.yml) checks that the real Claude Code and Codex load the skills: each is run once against a stand-in model server on the runner (a fixture key, no account), which records the requests, and the requests must list the TermOS skills.
+- **Alternatives:** each CLI's own folder for Gemini CLI and opencode (duplicates for opencode); installing only on request; asking through the server (it holds the unlocked secrets file, but would need deferred control replies across the launcher seam; M11c's harness runs inside the server anyway); skills generated from the user's configuration (they would change with every setting and leak its names into the CLIs' prompts).
+
+---
+
 ## Open questions (the owner will be asked before the milestone that needs each one)
 
 | ID | Question | Needed by | Current lean |

@@ -395,3 +395,76 @@ fn the_status_line_keeps_claude_codes_limits() {
             .success()
     );
 }
+
+/// TermOS's skills (M11b, D-098): put where Claude Code (every account)
+/// and the shared Agent Skills folder's CLIs read them when the server
+/// starts, never over the user's own, and kept off once removed.
+#[test]
+fn the_skills_follow_the_clis_and_their_accounts() {
+    let w = world();
+    let env = &w.env;
+    let home = env.path().to_owned();
+    // A skill of the user's with one of TermOS's names.
+    let theirs = home.join(".agents/skills/termos-dev");
+    std::fs::create_dir_all(&theirs).expect("mkdir");
+    std::fs::write(theirs.join("SKILL.md"), "their own").expect("write");
+
+    // The server installs them as it starts: both CLIs are on PATH.
+    let out = env.run(&["new", "-d"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    for dir in [".claude/skills", ".agents/skills"] {
+        let skill = home.join(dir).join("termos-agents/SKILL.md");
+        assert!(skill.is_file(), "{}", skill.display());
+        let text = std::fs::read_to_string(&skill).expect("read");
+        assert!(text.starts_with("---\nname: termos-agents\n"), "{text}");
+        assert!(text.contains("termos agent ask"));
+    }
+    assert!(home.join(".claude/skills/termos/.termos-skill").is_file());
+    assert_eq!(
+        std::fs::read_to_string(theirs.join("SKILL.md")).expect("read"),
+        "their own"
+    );
+    assert!(
+        home.join(".claude/skills/mine").is_dir(),
+        "the user's skill stays"
+    );
+
+    // A new account links the default's skills: one folder for both.
+    run(env, &["account", "add", "claude", "work", "--no-sign-in"]);
+    let status = run(env, &["skills", "status"]);
+    assert!(
+        status.contains("Claude Code (default), Claude Code · work"),
+        "{status}"
+    );
+    assert!(
+        status.contains("a skill of yours has this name"),
+        "{status}"
+    );
+    assert!(
+        home.join("data/termos/accounts/claude/work/skills/termos/SKILL.md")
+            .is_file()
+    );
+
+    // Removed, they stay removed when the server starts again.
+    let removed = run(env, &["skills", "remove"]);
+    assert!(removed.contains("removed"), "{removed}");
+    assert!(!home.join(".claude/skills/termos").exists());
+    assert!(theirs.join("SKILL.md").is_file(), "never theirs");
+    run(env, &["kill-server"]);
+    run(env, &["new", "-d"]);
+    assert!(!home.join(".claude/skills/termos").exists());
+    let status = run(env, &["skills", "status"]);
+    assert!(status.contains("turned it off"), "{status}");
+
+    // Back on request; `show` prints one.
+    let installed = run(env, &["skills", "install"]);
+    assert!(installed.contains("installed"), "{installed}");
+    assert!(home.join(".claude/skills/termos/SKILL.md").is_file());
+    let shown = run(env, &["skills", "show", "termos"]);
+    assert!(shown.contains("tos run -p"), "{shown}");
+    run(env, &["kill-server"]);
+}

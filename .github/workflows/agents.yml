@@ -9,10 +9,13 @@ name: Agent CLIs
 # and connects to the server (an MCP handshake, which TermOS's audit log
 # records): Claude Code through `claude mcp list`, Codex through `codex
 # exec` against a stand-in model server that refuses at once (Codex
-# starts its MCP servers first).
+# starts its MCP servers first). TermOS's skills (M11b, D-098) are
+# installed with them, and each CLI lists them to the model: the
+# stand-in records what each sends (Claude Code gets a short answer, with
+# a fixture key, in each account).
 # No account and no API key: nothing here signs in. Runs when the
-# installer or the MCP server changes, nightly (the vendors release
-# often) and on demand.
+# installer, the MCP server or the skills change, nightly (the vendors
+# release often) and on demand.
 
 on:
   schedule:
@@ -25,6 +28,12 @@ on:
       - "crates/termos-devkit/src/accounts.rs"
       - "crates/termos-cli/src/accounts_cmd.rs"
       - "crates/termos-cli/src/shim.rs"
+      - "crates/termos-devkit/src/skills.rs"
+      - "crates/termos-devkit/skills/**"
+      - "crates/termos-cli/src/skills_cmd.rs"
+      - ".github/scripts/refusing-model.py"
+      - ".github/scripts/skills-listed.py"
+      - ".github/scripts/claude-skills.sh"
       - ".github/workflows/agents.yml"
   workflow_dispatch:
 
@@ -73,6 +82,9 @@ jobs:
           $termos agent install codex
           $termos agent status | tee status.txt
           grep -c "TermOS's MCP server: registered" status.txt | grep -qx 2
+          # Their skills: three, in Claude Code's folder and the shared one.
+          $termos skills status | tee skills.txt
+          grep -cE "^  termos[a-z-]* +installed$" skills.txt | grep -qx 6
       - name: They run
         run: |
           bin="$XDG_DATA_HOME/termos/bin"
@@ -88,7 +100,12 @@ jobs:
           "$bin/claude$ext" mcp list | tee mcp.txt
           grep -i "termos" mcp.txt | grep -qi "connected"
           bash .github/scripts/mcp-audited.sh claude
-      - name: Codex CLI connects to TermOS's MCP server
+      - name: Claude Code lists TermOS's skills
+        run: |
+          bin="$XDG_DATA_HOME/termos/bin"
+          ext=""; [ "$RUNNER_OS" = Windows ] && ext=.exe
+          bash .github/scripts/claude-skills.sh "$bin/claude$ext" 8766
+      - name: Codex CLI connects to TermOS's MCP server and lists its skills
         run: |
           bin="$XDG_DATA_HOME/termos/bin"
           ext=""; [ "$RUNNER_OS" = Windows ] && ext=.exe
@@ -96,7 +113,7 @@ jobs:
           grep -q "termos" mcp.txt
           # A model server that refuses every request.
           py=$(command -v python3 || command -v python)
-          "$py" .github/scripts/refusing-model.py 8765 &
+          "$py" .github/scripts/refusing-model.py 8765 "$RUNNER_TEMP/codex-requests.jsonl" &
           # Its settings first: top-level keys before any table.
           cfg="$CODEX_HOME/config.toml"
           { printf 'model = "fixture-model"\nmodel_provider = "fixture"\n\n'
@@ -112,6 +129,8 @@ jobs:
           cat codex.txt
           cd "$GITHUB_WORKSPACE"
           bash .github/scripts/mcp-audited.sh codex
+          # Its request to the model lists TermOS's skills (~/.agents/skills).
+          "$py" .github/scripts/skills-listed.py "$RUNNER_TEMP/codex-requests.jsonl" /v1/
       - name: A second account of each, separate and registered
         env:
           DISABLE_AUTOUPDATER: "1"
@@ -132,6 +151,8 @@ jobs:
           $termos account use claude second
           "$bin/claude$ext" mcp list | tee mcp.txt
           grep -i "termos" mcp.txt | grep -qi "connected"
+          # The second account lists TermOS's skills too.
+          bash .github/scripts/claude-skills.sh "$bin/claude$ext" 8767
           $termos account use codex second
           "$bin/codex$ext" mcp list | tee mcp.txt
           grep -q "termos" mcp.txt

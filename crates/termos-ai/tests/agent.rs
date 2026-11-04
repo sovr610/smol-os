@@ -173,6 +173,9 @@ fn a_session_fixes_a_bug_with_approvals() {
         home: Some(dir.path().join("home")),
         journal: Some(Arc::clone(&journal)),
         registry: Some(Arc::clone(&registry)),
+        provider: None,
+        model: None,
+        headless: false,
     })
     .expect("start");
     let live = registry.list();
@@ -395,4 +398,182 @@ fn collect(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
             out.push(p);
         }
     }
+}
+
+/// The headless model: reads a file, tries to write one, then answers.
+fn headless_script(req: &common::Recorded) -> Answer {
+    if req.path.ends_with("/models") {
+        return Answer::Json(
+            200,
+            r#"{"data":[{"id":"fixture-coder","created":1}]}"#.into(),
+        );
+    }
+    let body = req.json();
+    let results = body["messages"]
+        .as_array()
+        .map_or(0, |m| m.iter().filter(|x| x["role"] == "tool").count());
+    match results {
+        0 => tool_call("c1", "read_file", serde_json::json!({"path": "src/lib.rs"})),
+        1 => tool_call(
+            "c2",
+            "write_file",
+            serde_json::json!({"path": "src/lib.rs", "content": "broken"}),
+        ),
+        _ => Answer::Stream(vec![
+            chunk(
+                serde_json::json!({"content": "add() subtracts: it returns a - b."}),
+                Some("stop"),
+            ),
+            "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":50,\"completion_tokens\":5}}\n\n"
+                .into(),
+            "data: [DONE]\n\n".into(),
+        ]),
+    }
+}
+
+fn headless_launch(
+    dir: &std::path::Path,
+    base: &str,
+    key: Option<&str>,
+    model: Option<&str>,
+) -> Launch {
+    let paths = Paths {
+        config_dir: dir.join("config"),
+        state_dir: dir.join("state"),
+        runtime_dir: dir.join("run"),
+        data_dir: dir.join("data"),
+    };
+    let store = SecretStore::with_backend(
+        Backend::File,
+        termos_ai::secrets::file_path(&paths.data_dir),
+    )
+    .with_work_factor(2);
+    if !termos_ai::secrets::file_path(&paths.data_dir).exists() {
+        store
+            .create(SecretString::from("pass".to_owned()))
+            .expect("create");
+    }
+    store.relock();
+    let mut agents = AgentsConfig::default();
+    agents.providers.insert(
+        "lab".into(),
+        ProviderConfig {
+            kind: ProviderKind::OpenaiCompatible,
+            base_url: Some(format!("{base}/v1")),
+            key: key.map(|k| SecretRef::parse(k).expect("ref")),
+            max_tokens: None,
+            prices: Default::default(),
+        },
+    );
+    Launch {
+        agents,
+        secrets: Arc::new(SecretSlot::with(store)),
+        journal: Some(Arc::new(termos_core::journal::Journal::new(
+            &paths.state_dir,
+            7,
+        ))),
+        paths,
+        profile: "default".into(),
+        workspace: dir.join("project"),
+        resume: None,
+        helper: None,
+        config_file: None,
+        home: Some(dir.join("home")),
+        registry: None,
+        provider: None,
+        model: model.map(str::to_owned),
+        headless: false,
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_headless_ask_reads_answers_and_writes_nothing() {
+    let server = MockServer::start(headless_script).await;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let ws = dir.path().join("project");
+    std::fs::create_dir_all(ws.join("src")).expect("ws");
+    let source = "pub fn add(a: i32, b: i32) -> i32 {\n    a - b\n}\n";
+    std::fs::write(ws.join("src/lib.rs"), source).expect("file");
+    let launch = headless_launch(dir.path(), &server.base, None, Some("fixture-coder"));
+    let state = launch.paths.state_dir.clone();
+
+    let answer = agent::ask(launch, "What does add() do?".into(), |_| {})
+        .await
+        .expect("answered");
+    assert_eq!(answer.text, "add() subtracts: it returns a - b.");
+    assert_eq!(answer.model, "fixture-coder");
+    assert!(answer.usage.output >= 5, "{:?}", answer.usage);
+    assert!(
+        answer
+            .notes
+            .iter()
+            .any(|n| n.contains("read-only") || n.contains("only reads")),
+        "{:?}",
+        answer.notes
+    );
+    // Nothing was written, and the model was offered only reading tools.
+    assert_eq!(
+        std::fs::read_to_string(ws.join("src/lib.rs")).expect("file"),
+        source
+    );
+    for r in server
+        .requests()
+        .iter()
+        .filter(|r| r.path.ends_with("/chat/completions"))
+    {
+        let tools: Vec<String> = r.json()["tools"]
+            .as_array()
+            .map(|t| {
+                t.iter()
+                    .filter_map(|t| t["function"]["name"].as_str().map(str::to_owned))
+                    .collect()
+            })
+            .unwrap_or_default();
+        assert_eq!(tools, termos_ai::tools::READ_ONLY_TOOLS, "offered tools");
+    }
+    // Saved and audited like any session.
+    assert!(
+        history::dir(&state)
+            .join(format!("{}.json", answer.session))
+            .exists()
+    );
+    let log = audit::dir(&state).join(format!("{}.jsonl", answer.session));
+    let text = std::fs::read_to_string(&log).expect("audit log");
+    assert!(
+        text.contains("write_file") && text.contains("denied"),
+        "{text}"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_headless_ask_says_what_it_would_have_asked() {
+    let server = MockServer::start(headless_script).await;
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::create_dir_all(dir.path().join("project")).expect("ws");
+    // No model: the provider's are listed.
+    let launch = headless_launch(dir.path(), &server.base, None, None);
+    let err = agent::ask(launch, "hi".into(), |_| {})
+        .await
+        .expect_err("no model");
+    assert!(
+        err.contains("--model") && err.contains("fixture-coder"),
+        "{err}"
+    );
+    // A locked secrets file cannot be unlocked here.
+    let launch = headless_launch(dir.path(), &server.base, Some("keyring:lab"), Some("m"));
+    let err = agent::ask(launch, "hi".into(), |_| {})
+        .await
+        .expect_err("locked");
+    assert!(err.contains("passphrase"), "{err}");
+    // Several providers and none chosen.
+    let mut launch = headless_launch(dir.path(), &server.base, None, Some("m"));
+    let other = launch.agents.providers["lab"].clone();
+    launch.agents.providers.insert("other".into(), other);
+    let err = agent::ask(launch, "hi".into(), |_| {})
+        .await
+        .expect_err("which provider");
+    assert!(
+        err.contains("--provider") && err.contains("lab, other"),
+        "{err}"
+    );
 }

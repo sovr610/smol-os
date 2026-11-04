@@ -58,6 +58,9 @@ enum TosCmd {
     Split {
         #[arg(value_enum, default_value = "auto")]
         side: Side,
+        /// Print the new pane's id (for `tos read`).
+        #[arg(short = 'p', long)]
+        print_id: bool,
         #[arg(last = true, value_name = "COMMAND")]
         command: Vec<String>,
     },
@@ -65,14 +68,32 @@ enum TosCmd {
     Run {
         #[arg(long)]
         float: bool,
+        /// Print the new pane's id (for `tos read`).
+        #[arg(short = 'p', long)]
+        print_id: bool,
         #[arg(required = true, trailing_var_arg = true, value_name = "COMMAND")]
         command: Vec<String>,
     },
     /// Float this pane (or tile it again); with a command after `--`, open
     /// a floating window running it.
     Float {
+        /// Print the new pane's id (for `tos read`).
+        #[arg(short = 'p', long)]
+        print_id: bool,
         #[arg(last = true, value_name = "COMMAND")]
         command: Vec<String>,
+    },
+    /// The panes of this session: id, workspace, title, folder (`*`: this
+    /// one).
+    Panes,
+    /// Print the last lines of a pane's text: its scrollback and screen
+    /// (keys and passwords it shows are masked).
+    Read {
+        /// The pane's id (`tos panes`).
+        pane: u64,
+        /// How many lines, from the end.
+        #[arg(short = 'n', long, default_value_t = 100)]
+        lines: usize,
     },
     /// Zoom this pane, or unzoom.
     Zoom,
@@ -225,7 +246,7 @@ fn open_url(url: &str) -> anyhow::Result<()> {
 }
 
 /// Opens `argv` in a new pane: `where` is right, down, auto or float.
-fn open_program(t: &Target, place: &str, argv: &[String]) -> anyhow::Result<()> {
+fn open_program(t: &Target, place: &str, argv: &[String], print_id: bool) -> anyhow::Result<()> {
     let cwd = std::env::current_dir().ok();
     let mut params = json!({
         "session": t.session,
@@ -238,7 +259,10 @@ fn open_program(t: &Target, place: &str, argv: &[String]) -> anyhow::Result<()> 
     if let Some(c) = cwd {
         params["cwd"] = Value::from(c.display().to_string());
     }
-    crate::call(t, "pane.open", Some(params))?;
+    let opened = crate::call(t, "pane.open", Some(params))?;
+    if print_id && let Some(id) = opened.get("pane").and_then(Value::as_u64) {
+        println!("{id}");
+    }
     Ok(())
 }
 
@@ -270,7 +294,11 @@ fn run(tos: Tos) -> anyhow::Result<ExitCode> {
         // Handled above.
         TosCmd::Termos(_) => {}
         TosCmd::Menu => named("menu")?,
-        TosCmd::Split { side, command } => {
+        TosCmd::Split {
+            side,
+            print_id,
+            command,
+        } => {
             let place = match side {
                 Side::Auto => "auto",
                 Side::Right => "right",
@@ -279,17 +307,58 @@ fn run(tos: Tos) -> anyhow::Result<ExitCode> {
             if command.is_empty() {
                 named(&format!("pane.split-{place}"))?;
             } else {
-                open_program(&t, place, &command)?;
+                open_program(&t, place, &command, print_id)?;
             }
         }
-        TosCmd::Run { float, command } => {
-            open_program(&t, if float { "float" } else { "auto" }, &command)?;
+        TosCmd::Run {
+            float,
+            print_id,
+            command,
+        } => {
+            open_program(&t, if float { "float" } else { "auto" }, &command, print_id)?;
         }
-        TosCmd::Float { command } => {
+        TosCmd::Float { print_id, command } => {
             if command.is_empty() {
                 named("pane.float")?;
             } else {
-                open_program(&t, "float", &command)?;
+                open_program(&t, "float", &command, print_id)?;
+            }
+        }
+        TosCmd::Panes => {
+            let panes = crate::call(&t, "pane.list", Some(json!({ "session": t.session })))?;
+            let me = pane_id();
+            for p in panes.as_array().into_iter().flatten() {
+                let id = p.get("id").and_then(Value::as_u64).unwrap_or_default();
+                let text = |k: &str| p.get(k).and_then(Value::as_str).unwrap_or("").to_owned();
+                let workspace = p.get("workspace").and_then(Value::as_u64).unwrap_or(0) + 1;
+                let mark = if Some(id) == me { "*" } else { " " };
+                let title = Some(text("name"))
+                    .filter(|n| !n.is_empty())
+                    .unwrap_or_else(|| text("title"));
+                println!(
+                    "{mark}{id:<4} {workspace:<3} {:<9} {title:<30} {}",
+                    text("kind"),
+                    text("cwd")
+                );
+            }
+        }
+        TosCmd::Read { pane, lines } => {
+            let got = crate::call(
+                &t,
+                "pane.read",
+                Some(
+                    json!({ "session": t.session, "pane": pane, "lines": lines.clamp(1, 10_000) }),
+                ),
+            )?;
+            let text: Vec<&str> = got
+                .get("lines")
+                .and_then(Value::as_array)
+                .map(|l| l.iter().filter_map(Value::as_str).collect())
+                .unwrap_or_default();
+            // As for agents over MCP: keys a pane shows are masked.
+            let masked = termos_ai::redact::Redactor::new().text(&text.join("\n"));
+            if !masked.is_empty() {
+                println!("{masked}");
             }
         }
         TosCmd::Zoom => named("pane.zoom")?,
@@ -527,11 +596,11 @@ mod tests {
             .expect("parses");
         assert!(matches!(
             t.cmd,
-            Some(TosCmd::Split { side: Side::Right, ref command }) if command == &["htop", "-d", "5"]
+            Some(TosCmd::Split { side: Side::Right, ref command, .. }) if command == &["htop", "-d", "5"]
         ));
         let t = Tos::try_parse_from(["tos", "run", "lazygit", "--version"]).expect("parses");
         assert!(
-            matches!(t.cmd, Some(TosCmd::Run { float: false, ref command }) if command.len() == 2)
+            matches!(t.cmd, Some(TosCmd::Run { float: false, ref command, .. }) if command.len() == 2)
         );
         // Anything else is a termos subcommand.
         let t = Tos::try_parse_from(["tos", "lang", "install", "go"]).expect("parses");
