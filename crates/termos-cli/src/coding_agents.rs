@@ -95,7 +95,18 @@ fn env(k: &str) -> Option<String> {
 /// The program to register with: this one, by its real path.
 fn termos_exe() -> anyhow::Result<PathBuf> {
     let exe = std::env::current_exe().context("cannot find the termos program")?;
-    Ok(exe.canonicalize().unwrap_or(exe))
+    let real = exe.canonicalize().unwrap_or(exe);
+    Ok(if cfg!(windows) { plain(real) } else { real })
+}
+
+/// Windows' canonical paths are verbatim (`\\?\D:\…`); the plain form
+/// works the same and reads better in the CLIs' settings.
+fn plain(p: PathBuf) -> PathBuf {
+    let text = p.to_string_lossy();
+    match text.strip_prefix(r"\\?\") {
+        Some(rest) if rest.as_bytes().get(1) == Some(&b':') => PathBuf::from(rest),
+        _ => p,
+    }
 }
 
 /// Registers `termos mcp serve` with `tool` (run as `program`).
@@ -445,6 +456,21 @@ pub(crate) fn pane_env(data_dir: &Path) -> Vec<(String, String)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn verbatim_paths_are_made_plain() {
+        assert_eq!(
+            plain(PathBuf::from(r"\\?\D:\a\termos.exe")),
+            PathBuf::from(r"D:\a\termos.exe")
+        );
+        // A network path keeps its verbatim form.
+        let unc = PathBuf::from(r"\\?\UNC\host\share\termos.exe");
+        assert_eq!(plain(unc.clone()), unc);
+        assert_eq!(
+            plain(PathBuf::from("/usr/bin/termos")),
+            PathBuf::from("/usr/bin/termos")
+        );
+    }
 
     #[test]
     fn specs_parse() {
