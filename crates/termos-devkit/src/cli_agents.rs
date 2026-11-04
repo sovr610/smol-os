@@ -177,6 +177,9 @@ pub struct Release {
     /// Lowercase hex.
     pub sha256: String,
     pub packing: Packing,
+    /// For an archive: the program's name in it (an archive can hold
+    /// helper programs too).
+    pub inner: Option<String>,
 }
 
 /// Downloads (the system's `curl`; fixtures in tests).
@@ -286,6 +289,7 @@ pub fn claude_release(
         version,
         sha256,
         packing: Packing::Plain,
+        inner: None,
     })
 }
 
@@ -370,6 +374,10 @@ pub fn codex_release(
         url,
         sha256,
         packing,
+        inner: Some(format!(
+            "codex-{triple}{}",
+            if platform.os == "windows" { ".exe" } else { "" }
+        )),
     })
 }
 
@@ -485,16 +493,14 @@ pub fn install(
         Packing::TarGz | Packing::Zip => {
             unpack(&download, &work)?;
             let _ = std::fs::remove_file(&download);
-            // The archive holds one program, named after the platform.
-            let found = std::fs::read_dir(&work)?
-                .flatten()
-                .map(|e| e.path())
-                .find(|p| {
-                    p.is_file()
-                        && p.file_name()
-                            .is_some_and(|n| n.to_string_lossy().starts_with(tool.name()))
-                })
-                .ok_or_else(|| AgentError::Release("the archive holds no program".into()))?;
+            // The program by its exact name; helpers beside it stay.
+            let inner = release.inner.as_deref().unwrap_or(tool.name());
+            let Some(found) = find_file(&work, inner, 3) else {
+                let _ = std::fs::remove_dir_all(&work);
+                return Err(AgentError::Release(format!(
+                    "the archive has no {inner}; nothing was installed"
+                )));
+            };
             if found != program {
                 std::fs::rename(&found, &program)?;
             }
@@ -525,6 +531,29 @@ pub fn install(
         version: release.version.clone(),
         path,
     })
+}
+
+/// The file named `name` under `dir`, at most `depth` folders down.
+fn find_file(dir: &Path, name: &str, depth: u32) -> Option<PathBuf> {
+    let entries: Vec<PathBuf> = std::fs::read_dir(dir)
+        .ok()?
+        .flatten()
+        .map(|e| e.path())
+        .collect();
+    entries
+        .iter()
+        .find(|p| p.is_file() && p.file_name().is_some_and(|n| n == name))
+        .cloned()
+        .or_else(|| {
+            (depth > 0)
+                .then(|| {
+                    entries
+                        .iter()
+                        .filter(|p| p.is_dir())
+                        .find_map(|d| find_file(d, name, depth - 1))
+                })
+                .flatten()
+        })
 }
 
 fn unpack(archive: &Path, into: &Path) -> Result<(), AgentError> {
@@ -947,6 +976,8 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let src = dir.path().join("src");
         std::fs::create_dir_all(&src).expect("mkdir");
+        // A helper program that sorts first must not be taken for it.
+        std::fs::write(src.join("codex-a-helper"), b"#!/bin/sh\necho helper\n").expect("write");
         std::fs::write(
             src.join("codex-x86_64-unknown-linux-musl"),
             b"#!/bin/sh\necho codex-cli 0.166.0\n",
@@ -958,7 +989,7 @@ mod tests {
             .arg(&archive)
             .arg("-C")
             .arg(&src)
-            .arg("codex-x86_64-unknown-linux-musl")
+            .args(["codex-a-helper", "codex-x86_64-unknown-linux-musl"])
             .status()
             .expect("tar");
         assert!(ok.success());
