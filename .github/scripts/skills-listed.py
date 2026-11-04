@@ -5,12 +5,15 @@ start of the `termos` skill's description, as the CLI passes them to the
 model.
 
 Usage: skills-listed.py REQUESTS.jsonl PATH-PREFIX
+
+The prefix has no leading slash (`v1/messages`): Git Bash on Windows
+would turn `/v1/...` into a Windows path.
 """
 
 import json
 import sys
 
-log, prefix = sys.argv[1], sys.argv[2]
+log, prefix = sys.argv[1], sys.argv[2].lstrip("/")
 NEEDLES = ["termos-dev", "termos-agents", "Use the TermOS terminal desktop you are running in"]
 
 try:
@@ -18,7 +21,7 @@ try:
         requests = [json.loads(line) for line in f if line.strip()]
 except FileNotFoundError:
     requests = []
-to_model = [r for r in requests if r["path"].startswith(prefix)]
+to_model = [r for r in requests if r["path"].lstrip("/").startswith(prefix)]
 print(f"{len(requests)} requests reached the stand-in, {len(to_model)} to {prefix}")
 for r in to_model:
     if all(n in r["body"] for n in NEEDLES):

@@ -130,7 +130,7 @@ jobs:
           cd "$GITHUB_WORKSPACE"
           bash .github/scripts/mcp-audited.sh codex
           # Its request to the model lists TermOS's skills (~/.agents/skills).
-          "$py" .github/scripts/skills-listed.py "$RUNNER_TEMP/codex-requests.jsonl" /v1/
+          "$py" .github/scripts/skills-listed.py "$RUNNER_TEMP/codex-requests.jsonl" v1/
       - name: A second account of each, separate and registered
         env:
           DISABLE_AUTOUPDATER: "1"

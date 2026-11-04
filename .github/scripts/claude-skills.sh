@@ -20,4 +20,4 @@ pid=$!
 for _ in $(seq 1 120); do kill -0 $pid 2>/dev/null || break; sleep 1; done
 kill $pid 2>/dev/null || true
 cat "$RUNNER_TEMP/claude-$port.txt"
-"$py" .github/scripts/skills-listed.py "$log" /v1/messages
+"$py" .github/scripts/skills-listed.py "$log" v1/messages
