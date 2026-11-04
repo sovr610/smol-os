@@ -42,6 +42,10 @@ The first tab has the most important things on one screen:
   the cache.
 - **MCP servers** from your config, and **CLI agents** (Claude Code, Codex
   and the rest), with how many windows run each; a click opens one.
+- **Claude Code and Codex CLI** usage is counted too, from their own logs
+  (numbers only): their models appear as `claude-code/<model>` and
+  `codex/<model>`, and their calls to TermOS's MCP server among the tool
+  calls ([agents](agents.md#claude-code-and-codex-cli)).
 
 Costs come from the prices your providers list or that you set
 (`[agents.providers.<name>.prices]`); without a price, tokens are shown and
@@ -88,8 +92,11 @@ secret.
 
 ```toml
 [center]
-keep-days = 7   # 1 to 365
-sample = "1m"   # "1m", "5m", or "off" to not record the machine
+keep-days = 7      # 1 to 365
+sample = "1m"      # "1m", "5m", or "off" to not record the machine
+cli-usage = true   # Claude Code's and Codex's tokens, read from their logs
 ```
 
-Both are in Settings too, under Command center.
+All three are in Settings too, under Command center. Claude Code's and
+Codex's numbers are read from their own logs each time, not copied into
+this history.

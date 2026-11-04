@@ -12,7 +12,9 @@ TermOS's own [model router](models.md) for models on your machine). Models are n
 window lists what your provider offers.
 
 You can also open Claude Code, Codex CLI and other command-line agents in
-TermOS windows ([external agents](#external-agents)).
+TermOS windows ([external agents](#external-agents)). TermOS installs
+[Claude Code and Codex CLI](#claude-code-and-codex-cli) for you, gives them
+tools to work with its windows, and shows their usage in the command center.
 
 ## Quick start
 
@@ -276,6 +278,102 @@ mcp-servers = ["files", "tracker"]
 Only servers the profile lists start, when a session starts, and they stop
 with it. Local servers run in the sandbox, like commands. Their tools appear
 to the model as `mcp__<server>__<tool>` and follow the `mcp` rule.
+
+## Claude Code and Codex CLI
+
+TermOS installs both, runs them in its windows, lets them work with its
+windows through its own MCP server, and shows their token use in the
+[command center](center.md).
+
+### Install
+
+```bash
+termos agent install claude
+```
+
+```bash
+termos agent install codex
+```
+
+Or open **◆ Menu → AI agents → Claude Code** (or Codex CLI): when it is not
+installed, its window offers to install it.
+
+- **What you get:** each vendor's own program. Claude Code comes from
+  Anthropic's release site, Codex CLI from OpenAI's GitHub releases. No
+  Node.js and no install script.
+- **Checked first:** the download must match the SHA-256 its vendor
+  publishes (Claude Code's release manifest; GitHub's digest for the Codex
+  file). A mismatch installs nothing.
+- **Where:** `~/.local/share/termos/agents/` (Windows:
+  `%LOCALAPPDATA%\termos\data\agents`), with `claude` and `codex` in
+  TermOS's own `bin` folder, which comes first on `PATH` in every TermOS
+  window.
+- **A given version:** `termos agent install claude@2.1.90`.
+- **Needs `curl`** (and `tar` for Codex), which Linux, macOS and Windows 10
+  and later have. TermOS's bare-metal images do not have curl yet.
+
+```bash
+termos agent status          # versions, and whether the MCP server is registered
+termos agent update          # both, or `termos agent update codex`
+termos agent remove codex    # your sign-in and settings stay in ~/.codex
+```
+
+**◆ Menu → AI agents → Update Claude Code and Codex** does the same as
+`termos agent update`. Claude Code's own updater is off for TermOS's copy, so
+its updates go through the same check. (Windows opened before you first
+installed it get that setting the next time TermOS starts.)
+
+### Sign in
+
+The first start asks you to sign in: Claude Code with your Claude account or
+an API key, Codex with ChatGPT or an API key. That happens in their own
+program; TermOS never sees or keeps their credentials.
+
+### TermOS's MCP server
+
+Installing registers TermOS's MCP server (`termos mcp serve`) with each one,
+so they can work with your desktop:
+
+| Tool | What it does |
+| --- | --- |
+| `list_panes` | Every window: id, title, folder, size, which is focused, which is the agent's own |
+| `read_pane` | The last lines of a terminal window (a build's or a server's output); keys it shows are masked |
+| `send_to_pane` | Types into another terminal window, optionally pressing Enter |
+| `open_pane` | Runs a program in a new window beside the agent's (a dev server, a watcher) |
+| `open_file` | Shows a file in TermOS's viewer (images, Markdown, text) |
+| `run_command` | Runs a TermOS command, as from the palette (`layout.select tiled`, `monitor.open`) |
+| `notify` | Posts a notification on the desktop |
+| `copy_to_clipboard` | Puts text on the clipboard |
+
+- **Who decides:** Claude Code and Codex ask you before each call, as they do
+  for their own tools.
+- **TermOS's own rules,** on top:
+
+  ```toml
+  [agents.termos-mcp]
+  register = true        # termos agent install registers it
+  deny = []              # tools they may not use, e.g. ["read_pane", "send_to_pane"]
+  deny-commands = ["session.quit", "client.detach", "workspace.kill", "pane.kill"]
+  ```
+
+  A denied tool is not offered at all; `deny-commands` takes names, and
+  `name.*` covers a group.
+- **Recorded:** every call goes to an audit log like the agent windows'
+  (`termos audit list` shows `mcp-…` logs, with arguments redacted), and to
+  the command center's history (tool names and decisions only).
+- **Installed them yourself?** `termos mcp register` (or `register claude`)
+  adds the server to the ones on your `PATH`; `termos mcp unregister` takes
+  it out.
+
+### Their usage
+
+The command center counts their tokens next to TermOS's own agents: usage
+by model (shown as `claude-code/<model>` and `codex/<model>`) and tokens over
+time. It reads them from the session logs they keep (`~/.claude/projects`,
+`~/.codex/sessions`), taking only the numbers, the model names and the
+times; the text in those files is skipped, never kept or shown. Costs are
+not computed for them (on a subscription there are none per token). Turn it
+off with `[center] cli-usage = false`, or in Settings.
 
 ## External agents
 

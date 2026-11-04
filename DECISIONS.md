@@ -923,6 +923,21 @@ rewrite history.
 
 ---
 
+## D-095: Claude Code and Codex CLI in TermOS: installer, MCP server, usage
+- **Status:** Accepted · 2026-11-04
+- **Decision:**
+  - **Installer:** the system's `curl` (as for mise, D-053), into `<data>/agents/<name>/<version>/` with a link in `<data>/bin`; older versions are removed. Downloads go through a `Fetch` trait so tests use recorded release data. Codex's Linux builds are the static musl ones, which also run on glibc. `NAME@VERSION` pins a release. Claude Code's manifest signature (GPG) is not checked: the manifest comes over HTTPS from Anthropic's site, as its own installer trusts it.
+  - **MCP server written by hand:** MCP over stdio is a few JSON-RPC methods (`initialize`, `ping`, `tools/list`, `tools/call`); rmcp's server side would add schemars and its macros. Protocol compatibility is tested with rmcp's client against the real binary. It handles requests one at a time.
+  - **Tools:** eight, chosen to work with TermOS rather than duplicate the CLIs' own file and shell tools. Pane text returned to the agent goes through the redactor. `send_to_pane` refuses the agent's own pane. `run_command` refuses quitting, detaching and closing by default (`deny-commands`).
+  - **Decisions recorded:** the CLI's prompt is the user's approval (D-094), so calls TermOS lets through are `allowed`, and calls its rules stop are `denied`.
+  - **Registration:** on the first install, if `[agents.termos-mcp] register` (default on); `termos mcp register|unregister` for CLIs installed otherwise. Claude Code through its own `mcp add --scope user`; Codex by editing `config.toml` (toml_edit keeps the rest of the file).
+  - **Claude Code's updater** is turned off for TermOS's copy (in its window and in panes started after the install), so updates go through the checked path.
+  - **Their usage:** their logs are internal formats, not interfaces: the reader takes only the fields it needs (message ids for de-duplication, model, usage numbers, timestamps), skips what it does not understand, and reads each file from where it stopped. Their costs are not computed (subscriptions have none per token); tokens are shown.
+  - **CI** installs both for real on every platform (`agents.yml`) and checks each MCP handshake in TermOS's audit log; Codex connects through `codex exec` against a stand-in model server that refuses every request.
+- **Alternatives:** rmcp's server side; a wrapper script for each CLI (to set its environment); asking the vendors' CLIs for usage (they have no such command for both).
+
+---
+
 ## Open questions (the owner will be asked before the milestone that needs each one)
 
 | ID | Question | Needed by | Current lean |

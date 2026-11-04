@@ -29,7 +29,7 @@ questions (DECISIONS.md, "Open questions").
 | M10a | Mouse-first desktop: menus, context menus, hover and double-click; the `tos` command in every pane (D-084, D-085) | 🔍 |
 | M10b | Graphics: richer chrome, icons, wallpaper, pixel charts where the terminal can show them (D-084, D-087 to D-090) | 🔍 |
 | M10c | The command center: live views and history of the AI and the OS, with actions (D-084, D-092, D-093) | 🔍 |
-| M10d | Claude Code and Codex CLI: installed by TermOS, with a TermOS MCP server (D-084, D-094) | 🚧 |
+| M10d | Claude Code and Codex CLI: installed by TermOS, with a TermOS MCP server (D-084, D-094, D-095) | 🔍 |
 | M9b | Platform gaps: the Windows agent sandbox and input, snapshots and sensors on macOS and Windows, Kitty keyboard flags, app windows in sessions, the KMS console's clipboard, bell and images (D-077) | ⏳ |
 
 Unfinished work in code is always a `TODO(M<n>)` marker (D-018). The
@@ -886,14 +886,33 @@ Not shown live: agent sessions (no provider keys here; the registry, its Approve
 ---
 
 ## M10d — Claude Code and Codex CLI
-**Status:** 🚧 · Owner answers: installed by TermOS, with a TermOS MCP server, not shipped in images (D-084); verified native binaries, the CLI asks for each tool call (TermOS rules and audit on top), their usage read as numbers only (D-094).
+**Status:** 🔍 done, awaiting review · Owner answers: installed by TermOS, with a TermOS MCP server, not shipped in images (D-084); verified native binaries, the CLI asks for each tool call (TermOS rules and audit on top), their usage read as numbers only (D-094). Design: D-095, ARCHITECTURE.md §11, §14 and §17; user guide [agents.md](docs/agents.md#claude-code-and-codex-cli).
 
 **Deliverables**
-- `termos agent install claude|codex` (and from the menu) from their official sources on Linux, macOS, Windows and bare metal; updates; their sign-in in a TermOS window.
-- A TermOS MCP server they are configured with: open windows and files, read and write panes, notify, run tasks, each under TermOS's permission rules.
-- Their sessions and usage in the command center.
+- **Install** (`termos agent install|update|remove|status claude|codex`, D-094, D-095):
+  - [x] Claude Code from Anthropic's release site (the `stable` version, its `manifest.json`, the platform's SHA-256); Codex CLI from OpenAI's GitHub releases (the asset's SHA-256 digest; none: refused); a mismatch installs nothing
+  - [x] Linux x86_64 and aarch64 (glibc and musl), macOS, Windows; into `<data>/agents`, linked in `<data>/bin` (first on every pane's `PATH`); `NAME@VERSION` pins
+  - [x] From the menu: **AI agents → Claude Code / Codex CLI** offers to install when missing; **Update Claude Code and Codex**; palette `agent.install NAME`, `agent.update`
+  - [x] Sign-in is theirs, in their own window on first start; Claude Code's own updater off for TermOS's copy
+- **TermOS's MCP server** (`termos mcp serve`):
+  - [x] `list_panes`, `read_pane` (keys masked), `send_to_pane` (never its own pane), `open_pane`, `open_file`, `run_command`, `notify`, `copy_to_clipboard`, acting as the agent's own pane; the control API gains `pane.read`
+  - [x] Their CLI asks for each call; `[agents.termos-mcp]` denies tools and commands on top (quitting, detaching and closing by default); every call audited (`mcp-…` logs) and in the history
+  - [x] Registered on install (`claude mcp add --scope user`; `[mcp_servers.termos]` in Codex's `config.toml`); `termos mcp register|unregister` for CLIs installed otherwise
+- **The command center:** [x] their token counts, models and times from their session logs, never their text (`[center] cli-usage`, in Settings), next to TermOS's own agents; their MCP calls among the tool calls
+- **Bare metal:** [ ] not yet: the installer runs the system's `curl`, and the images have none (BusyBox, CA certificates). Adding it means choosing its TLS library for the image (asked at review); the CLIs' musl builds are already the ones picked there.
 
 **Acceptance:** CI installs both on every platform and completes an MCP handshake with each (no live API keys: their own `mcp` commands and recorded fixtures).
+
+**What the tests cover**
+- **Installer, against recorded release data:** each vendor's platform names; Claude Code installed from its manifest and linked, then removed; a bad checksum, a release that is not JSON and a version that is not a plain name install nothing; a pinned version skips the channel; Codex from its GitHub release with its digest, refused without one, unpacked from a real archive that also holds a helper program; registration commands and Codex's `config.toml` edited and restored with the rest kept.
+- **MCP server, on a recorded TermOS:** the handshake and version negotiation, notifications, unknown methods, bad JSON, batches; every tool (the agent's own pane marked and refused, pane text masked, commands denied by default never reach TermOS); denied tools hidden and refused; the audit log verifies and the history holds names and decisions, not what was typed. Fuzzed: `mcp_message`.
+- **End to end, real binary:** rmcp's MCP client starts `termos mcp serve` against a real server, lists the tools, types a command into another pane and reads its output back, is refused its own pane and `session.quit`, posts a notification; `termos audit verify` passes and the history has the calls. `termos mcp register` with stand-in `claude` and `codex` programs, `termos agent status`, `unregister`.
+- **Their usage:** Claude Code and Codex logs (rebuilt from their formats, with marker text that must never come out): numbers only, a message written in several lines counted once, Codex's running totals turned into turns, appended lines read once and half lines left for later; the command center's data source shows a Claude Code log's tokens next to a real server.
+- **CI, for real** (`agents.yml`): both installed by `termos agent install` on Linux x86_64 and aarch64, macOS and Windows; both run; Claude Code's `mcp list` connects; Codex connects through `codex exec` against a stand-in model server that refuses at once; both connections found in TermOS's audit log (`claude-code`, `codex-mcp-client`); update, remove and unregister.
+
+**Found and fixed on the way**
+- Reading `config.toml` (from `termos mcp serve`, `termos agent external`, `termos config check`) made the server reload it every 150 ms for as long as it ran: inotify reports opens, and the server's own reload is one. Only a real change counts now (regression test).
+- On Windows, Codex's archive holds helper programs beside it; the installer now takes the program by its exact name (caught by CI).
 
 ---
 
@@ -923,4 +942,5 @@ Generated from the `TODO(M<n>)` markers in the code. Don't edit by hand; run `ca
 | M9b | `crates/termos-term/src/intercept.rs` | images from programs in panes on Windows, where ConPTY can filter APC and DCS sequences out. |
 | M9b | `crates/termos-term/src/pty.rs` | foreground program name, directory and command line on macOS (libproc) and Windows (process snapshot APIs), so snapshots there name and restore programs too. |
 | M9b | `crates/termos-term/src/vt.rs` | Kitty keyboard release events (flag 2) and alternate keys (flag 4) for programs in panes. |
+| M10d | `crates/termos-devkit/src/cli_agents.rs` | curl on the bare-metal images (the owner picks its TLS library), for `termos agent install` there. |
 <!-- open-work:end -->
