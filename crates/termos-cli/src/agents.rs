@@ -70,6 +70,29 @@ pub(crate) enum AgentCmd {
 }
 
 #[derive(Debug, Subcommand)]
+pub(crate) enum McpCmd {
+    /// TermOS's MCP server on stdin and stdout (what Claude Code and Codex
+    /// CLI start).
+    Serve,
+    /// Register it with Claude Code and Codex CLI (or the one named).
+    Register { name: Option<String> },
+    /// Take it out of their settings.
+    Unregister { name: Option<String> },
+}
+
+pub(crate) fn mcp_command(
+    action: &McpCmd,
+    paths: &Paths,
+    config_path: &Path,
+) -> anyhow::Result<ExitCode> {
+    match action {
+        McpCmd::Serve => crate::coding_agents::serve(paths, config_path),
+        McpCmd::Register { name } => crate::coding_agents::register(paths, name.as_deref()),
+        McpCmd::Unregister { name } => crate::coding_agents::unregister(paths, name.as_deref()),
+    }
+}
+
+#[derive(Debug, Subcommand)]
 pub(crate) enum AuditCmd {
     /// Every agent session's audit log, checked.
     #[command(alias = "ls")]
@@ -367,10 +390,13 @@ pub(crate) fn agent_command(
             }
         }
         AgentCmd::Install { name, wait } => {
-            return pause(*wait, crate::coding_agents::install(paths, name));
+            return pause(*wait, crate::coding_agents::install(paths, &config, name));
         }
         AgentCmd::Update { name, wait } => {
-            return pause(*wait, crate::coding_agents::update(paths, name.as_deref()));
+            return pause(
+                *wait,
+                crate::coding_agents::update(paths, &config, name.as_deref()),
+            );
         }
         AgentCmd::Remove { name } => return crate::coding_agents::remove(paths, name),
         AgentCmd::Status => return crate::coding_agents::status(paths),
@@ -413,7 +439,7 @@ fn external_command(
     let mut preset = preset.clone();
     let mut env = Vec::new();
     if let Some(program) = preset.command.first()
-        && let Some((path, e)) = crate::coding_agents::resolve_external(paths, program)
+        && let Some((path, e)) = crate::coding_agents::resolve_external(paths, config, program)
     {
         preset.command[0] = path.display().to_string();
         env = e;

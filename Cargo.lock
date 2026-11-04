@@ -5453,6 +5453,7 @@ dependencies = [
  "libseat",
  "portable-pty",
  "proptest",
+ "rmcp",
  "rustix",
  "secrecy",
  "serde_json",

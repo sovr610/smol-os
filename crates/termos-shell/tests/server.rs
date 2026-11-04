@@ -365,6 +365,25 @@ async fn control_api_drives_sessions_and_panes() {
     .await;
     s.until("text sent through the API", |t| in_a_pane(t, "via-api"))
         .await;
+    // And read back (TermOS's MCP server reads panes this way).
+    let read = call(
+        &srv.socket,
+        "pane.read",
+        json!({"pane": target, "lines": 50}),
+    )
+    .await;
+    let lines = read["lines"].as_array().expect("lines");
+    assert!(
+        lines.iter().any(|l| l.as_str() == Some("via-api")),
+        "{read}"
+    );
+    let few = call(
+        &srv.socket,
+        "pane.read",
+        json!({"pane": target, "lines": 1}),
+    )
+    .await;
+    assert_eq!(few["lines"].as_array().map(Vec::len), Some(1), "{few}");
     call(
         &srv.socket,
         "pane.send-keys",

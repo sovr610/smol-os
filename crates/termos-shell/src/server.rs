@@ -2177,6 +2177,28 @@ impl Server {
                 }
                 Ok(json!({ "sessions": keys.len() }))
             }
+            // A pane's text, for TermOS's MCP server (D-094).
+            "pane.read" => {
+                #[derive(Deserialize)]
+                struct P {
+                    pane: u64,
+                    #[serde(default)]
+                    lines: Option<usize>,
+                    #[serde(default)]
+                    session: Option<String>,
+                }
+                let p: P = req.params_as()?;
+                let key = self.session_with(p.session.as_deref(), Some(p.pane))?;
+                let e = self
+                    .sessions
+                    .get(&key)
+                    .ok_or_else(|| RpcError::not_found("no such session"))?;
+                let lines = e
+                    .desktop
+                    .read_pane(Some(PaneId(p.pane)), p.lines.unwrap_or(200).clamp(1, 10_000))
+                    .map_err(RpcError::not_found)?;
+                Ok(json!({ "pane": p.pane, "lines": lines }))
+            }
             // The command center's Go (D-093): show a pane, switching to
             // its workspace.
             "pane.focus" => {

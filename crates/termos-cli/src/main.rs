@@ -175,6 +175,11 @@ enum Cmd {
         #[command(subcommand)]
         action: agents::AgentCmd,
     },
+    /// TermOS's MCP server, for Claude Code and Codex CLI.
+    Mcp {
+        #[command(subcommand)]
+        action: agents::McpCmd,
+    },
     /// The agents' tamper-evident audit logs.
     Audit {
         #[command(subcommand)]
@@ -392,6 +397,7 @@ fn run_cli(args: impl IntoIterator<Item = String>) -> anyhow::Result<ExitCode> {
         Some(Cmd::Git) => git_command(&paths),
         Some(Cmd::Secret { action }) => agents::secret_command(action, &paths, &config_path),
         Some(Cmd::Agent { action }) => agents::agent_command(action, &paths, &config_path),
+        Some(Cmd::Mcp { action }) => agents::mcp_command(action, &paths, &config_path),
         Some(Cmd::Audit { action }) => agents::audit_command(action, &paths),
         Some(Cmd::Sandbox { action }) => agents::sandbox_command(action, &paths),
         Some(Cmd::Model { action }) => models::model_command(action, &paths, &config_path),
@@ -529,6 +535,7 @@ fn run(cli: &Cli, paths: &Paths, config_path: &Path, t: &Target) -> anyhow::Resu
             | Cmd::Git
             | Cmd::Secret { .. }
             | Cmd::Agent { .. }
+            | Cmd::Mcp { .. }
             | Cmd::Audit { .. }
             | Cmd::Sandbox { .. }
             | Cmd::Model { .. }

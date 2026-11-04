@@ -25,6 +25,7 @@ pub mod audit;
 pub mod external;
 pub mod history;
 pub mod mcp;
+pub mod mcp_server;
 pub mod policy;
 pub mod provider;
 pub mod redact;

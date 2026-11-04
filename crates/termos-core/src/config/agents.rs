@@ -29,6 +29,8 @@ pub struct AgentsConfig {
     /// External CLI agents (Claude Code, Codex CLI, …) by name, added to
     /// or replacing the built-in presets.
     pub external: BTreeMap<String, ExternalAgentConfig>,
+    /// TermOS's own MCP server, for Claude Code and Codex CLI (D-094).
+    pub termos_mcp: TermosMcpConfig,
 }
 
 impl Default for AgentsConfig {
@@ -40,8 +42,81 @@ impl Default for AgentsConfig {
             profiles: BTreeMap::new(),
             mcp: BTreeMap::new(),
             external: BTreeMap::new(),
+            termos_mcp: TermosMcpConfig::default(),
         }
     }
+}
+
+/// The tools of TermOS's MCP server (`termos mcp serve`).
+pub const TERMOS_MCP_TOOLS: &[&str] = &[
+    "list_panes",
+    "read_pane",
+    "send_to_pane",
+    "open_pane",
+    "open_file",
+    "run_command",
+    "notify",
+    "copy_to_clipboard",
+];
+
+/// `[agents.termos-mcp]`: TermOS's MCP server, which `termos agent
+/// install` registers with Claude Code and Codex CLI (D-094). Their CLI
+/// asks you before each call; these rules are TermOS's own, on top.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(default, deny_unknown_fields, rename_all = "kebab-case")]
+pub struct TermosMcpConfig {
+    /// `termos agent install` registers the server with the agent.
+    pub register: bool,
+    /// Tools agents may not use (names from [`TERMOS_MCP_TOOLS`]).
+    #[serde(deserialize_with = "termos_mcp_tools")]
+    pub deny: Vec<String>,
+    /// TermOS commands `run_command` refuses; `name.*` covers a group.
+    pub deny_commands: Vec<String>,
+}
+
+impl Default for TermosMcpConfig {
+    fn default() -> Self {
+        Self {
+            register: true,
+            deny: Vec::new(),
+            deny_commands: [
+                "session.quit",
+                "client.detach",
+                "workspace.kill",
+                "pane.kill",
+            ]
+            .map(String::from)
+            .to_vec(),
+        }
+    }
+}
+
+impl TermosMcpConfig {
+    /// Whether `run_command` may run `command` (its name, before any
+    /// argument).
+    pub fn command_allowed(&self, command: &str) -> bool {
+        let name = command.split_whitespace().next().unwrap_or("");
+        !self
+            .deny_commands
+            .iter()
+            .any(|d| match d.strip_suffix('*') {
+                Some(prefix) => name.starts_with(prefix),
+                None => name == d,
+            })
+    }
+}
+
+fn termos_mcp_tools<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<String>, D::Error> {
+    let names = Vec::<String>::deserialize(d)?;
+    for n in &names {
+        if !TERMOS_MCP_TOOLS.contains(&n.as_str()) {
+            return Err(serde::de::Error::custom(format!(
+                "no tool `{n}` (there are {})",
+                TERMOS_MCP_TOOLS.join(", ")
+            )));
+        }
+    }
+    Ok(names)
 }
 
 /// Which API a provider speaks.
@@ -346,5 +421,25 @@ mod tests {
         assert!(!err.contains("abcdefghijklmnop"), "{err}");
         assert!(SecretRef::parse("keyring:").is_err());
         assert!(SecretRef::parse("keyring:a/b").is_err());
+    }
+
+    #[test]
+    fn termos_mcp_rules() {
+        let c: AgentsConfig = toml::from_str(
+            "[termos-mcp]\ndeny = [\"read_pane\"]\ndeny-commands = [\"session.*\", \"pane.kill\"]\n",
+        )
+        .expect("parses");
+        assert_eq!(c.termos_mcp.deny, ["read_pane"]);
+        assert!(c.termos_mcp.register);
+        assert!(!c.termos_mcp.command_allowed("session.new"));
+        assert!(!c.termos_mcp.command_allowed("pane.kill"));
+        assert!(c.termos_mcp.command_allowed("pane.split-right"));
+        assert!(c.termos_mcp.command_allowed("layout.select tiled"));
+        let d = TermosMcpConfig::default();
+        assert!(!d.command_allowed("session.quit"));
+        assert!(d.command_allowed("monitor.open"));
+        let err = toml::from_str::<AgentsConfig>("[termos-mcp]\ndeny = [\"rm_rf\"]\n")
+            .expect_err("unknown tool");
+        assert!(err.to_string().contains("no tool `rm_rf`"), "{err}");
     }
 }

@@ -119,15 +119,21 @@ impl Env {
 
     /// Runs `termos ARGS` in `dir`, without a terminal.
     pub fn run_in(&self, dir: &Path, args: &[&str]) -> Output {
+        self.command_in(dir, args).output().expect("spawn termos")
+    }
+
+    /// `termos ARGS` in `dir` in this environment, to start.
+    pub fn command_in(&self, dir: &Path, args: &[&str]) -> Command {
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_termos"));
         cmd.args(args)
             .current_dir(dir)
             .env_remove("TERMOS")
+            .env_remove("TERMOS_PANE")
             .env_remove("TMUX");
         for (k, v) in self.vars() {
             cmd.env(k, v);
         }
-        cmd.output().expect("spawn termos")
+        cmd
     }
 }
 

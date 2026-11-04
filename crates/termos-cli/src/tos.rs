@@ -147,7 +147,7 @@ pub(crate) fn invoked_as_tos() -> bool {
 }
 
 /// The pane this runs in.
-fn pane_id() -> Option<u64> {
+pub(crate) fn pane_id() -> Option<u64> {
     std::env::var("TERMOS_PANE")
         .ok()?
         .trim_start_matches('%')

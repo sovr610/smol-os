@@ -656,6 +656,54 @@ pub fn codex_config(existing: &str, termos: &Path) -> Result<String, AgentError>
     Ok(doc.to_string())
 }
 
+/// Codex's settings folder: `$CODEX_HOME`, else `~/.codex`.
+pub fn codex_home(get: &dyn Fn(&str) -> Option<String>, home: Option<&Path>) -> Option<PathBuf> {
+    get("CODEX_HOME")
+        .filter(|h| !h.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| home.map(|h| h.join(".codex")))
+}
+
+/// Claude Code's settings file, which holds its user-scope MCP servers:
+/// `$CLAUDE_CONFIG_DIR/.claude.json`, else `~/.claude.json`.
+pub fn claude_settings(
+    get: &dyn Fn(&str) -> Option<String>,
+    home: Option<&Path>,
+) -> Option<PathBuf> {
+    get("CLAUDE_CONFIG_DIR")
+        .filter(|h| !h.is_empty())
+        .map(|d| PathBuf::from(d).join(".claude.json"))
+        .or_else(|| home.map(|h| h.join(".claude.json")))
+}
+
+/// Whether TermOS's MCP server is registered in `tool`'s settings (the
+/// file's text); only that one entry is looked at.
+pub fn registered(tool: Tool, settings: &str) -> bool {
+    match tool {
+        Tool::Claude => serde_json::from_str::<Value>(settings)
+            .ok()
+            .is_some_and(|v| v.pointer("/mcpServers/termos").is_some()),
+        Tool::Codex => settings
+            .parse::<toml_edit::DocumentMut>()
+            .ok()
+            .is_some_and(|d| d.get("mcp_servers").and_then(|s| s.get("termos")).is_some()),
+    }
+}
+
+/// Codex's `config.toml` without `[mcp_servers.termos]`.
+pub fn codex_config_without(existing: &str) -> Result<String, AgentError> {
+    let mut doc: toml_edit::DocumentMut = existing
+        .parse()
+        .map_err(|e| AgentError::Setup(format!("~/.codex/config.toml does not parse: {e}")))?;
+    if let Some(servers) = doc
+        .get_mut("mcp_servers")
+        .and_then(|s| s.as_table_like_mut())
+    {
+        servers.remove("termos");
+    }
+    Ok(doc.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -952,5 +1000,24 @@ mod tests {
         let again = codex_config(&after, termos).expect("edited");
         assert_eq!(again.matches("[mcp_servers.termos]").count(), 1);
         assert!(codex_config("not = [toml", termos).is_err());
+        assert!(registered(Tool::Codex, &after));
+        let removed = codex_config_without(&after).expect("removed");
+        assert!(!registered(Tool::Codex, &removed));
+        assert!(removed.contains("[mcp_servers.other]"), "{removed}");
+        assert!(registered(
+            Tool::Claude,
+            r#"{"numStartups": 3, "mcpServers": {"termos": {"type": "stdio", "command": "/t"}}}"#
+        ));
+        assert!(!registered(Tool::Claude, r#"{"mcpServers": {}}"#));
+        assert!(!registered(Tool::Claude, "not json"));
+        let env = |k: &str| (k == "CODEX_HOME").then(|| "/c".to_owned());
+        assert_eq!(
+            codex_home(&env, Some(Path::new("/h"))),
+            Some(PathBuf::from("/c"))
+        );
+        assert_eq!(
+            claude_settings(&env, Some(Path::new("/h"))),
+            Some(PathBuf::from("/h/.claude.json"))
+        );
     }
 }

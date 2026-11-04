@@ -703,6 +703,12 @@ history = true                # keep conversations (mode 0600) to resume them
 # command = ["claude"]
 # sandbox = true
 # write-paths = ["~/.claude", "~/.claude.json"]
+# TermOS's MCP server for Claude Code and Codex CLI (`termos agent install`
+# registers it; their CLI asks you before each call).
+# [agents.termos-mcp]
+# register = true
+# deny = []                   # e.g. ["read_pane", "send_to_pane"]
+# deny-commands = ["session.quit", "client.detach", "workspace.kill", "pane.kill"]
 
 [secrets]
 # Where API keys live: auto | keyring | file. auto uses the secrets file if

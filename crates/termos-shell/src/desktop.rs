@@ -1872,6 +1872,24 @@ impl Desktop {
         }
     }
 
+    /// The last `lines` lines of a terminal pane's text (history and
+    /// screen), without the empty lines below the last one written.
+    pub fn read_pane(&self, pane: Option<PaneId>, lines: usize) -> Result<Vec<String>, String> {
+        let id = self.target_pane(pane)?;
+        let Some(PaneKind::Term { vt, .. }) = self.panes.get(&id).map(|p| &p.kind) else {
+            return Err(format!("pane {id} is not a terminal"));
+        };
+        let first = -i32::try_from(vt.history_size()).unwrap_or(i32::MAX);
+        let mut out: Vec<String> = (first..i32::from(vt.size().1))
+            .map(|l| vt.line_text(l))
+            .collect();
+        while out.last().is_some_and(String::is_empty) {
+            out.pop();
+        }
+        let skip = out.len().saturating_sub(lines);
+        Ok(out.split_off(skip))
+    }
+
     /// Sends keys (tmux notation) to a pane, encoded for its program.
     pub fn send_keys(&mut self, pane: Option<PaneId>, keys: &[KeyEvent]) -> Result<(), String> {
         let id = self.target_pane(pane)?;
