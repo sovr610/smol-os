@@ -32,7 +32,7 @@ questions (DECISIONS.md, "Open questions").
 | M10d | Claude Code and Codex CLI: installed by TermOS, with a TermOS MCP server (D-084, D-094, D-095) | 🔍 |
 | M11a | AI accounts: several subscriptions per provider, switching with the conversation kept, the usage app (D-096, D-097) | 🔍 |
 | M11b | Skills that teach Claude Code, Codex and other CLIs to use TermOS, and `termos agent ask` (D-096, D-098) | 🔍 |
-| M11c | The harness: one coding tool over Claude Code, Codex and API models, routing each task to the model that suits it (D-096) | ⏳ |
+| M11c | The harness: one coding tool over Claude Code, Codex and API models, routing each task to the model that suits it (D-096, D-099, D-100) | 🔍 |
 | M9b | Platform gaps: the Windows agent sandbox and input, snapshots and sensors on macOS and Windows, Kitty keyboard flags, app windows in sessions, the KMS console's clipboard, bell and images (D-077) | ⏳ |
 
 Unfinished work in code is always a `TODO(M<n>)` marker (D-018). The
@@ -992,14 +992,18 @@ Nothing M11a adds runs while idle: the shims run only when `claude` or `codex` s
 ---
 
 ## M11c — The harness
-**Status:** ⏳ · Owner answers: CLIs and API models as backends, research into tiers that the user fills with models (D-096).
+**Status:** 🔍 · Owner answers: CLIs and API models as backends, research into tiers that the user fills with models (D-096); the model plans and the user approves, edits in turn and reads in parallel, edits plus allowed commands for headless CLIs, subscriptions first (D-099). Design: D-100.
 
 **Deliverables**
-- One TermOS coding window that plans, splits the work into tasks and hands each to Claude Code or Codex (headless, under the user's subscriptions) or to an API model (TermOS's own agent), by rules in settings; every hand-off visible and audited.
-- Settings: which models and accounts each backend uses, which task types go to which tier, budgets and fallbacks.
-- A researched guide to each provider's models' strengths and weaknesses, with sources, and tier defaults drawn from it.
+- [x] One TermOS coding window that plans, splits the work into tasks and hands each to Claude Code or Codex (headless, under the user's subscriptions) or to an API model (TermOS's own agent), by rules in settings; every hand-off visible and audited (`termos-harness`; `harness.open`, `tos harness`, `termos harness plan|run|status`).
+- [x] Settings: which models and accounts each backend uses, which task types go to which tier, budgets and fallbacks (`[harness]`, `[harness.backends.*]`, `[harness.routes]`; cross-provider review).
+- [x] A researched guide to each provider's models' strengths and weaknesses, with sources, and tier defaults drawn from it ([docs/model-guide.md](docs/model-guide.md), 63 sources).
 
-**Acceptance:** routing and hand-offs are tested against stand-in CLIs and a mock provider; CI runs a plan through real CLIs as far as is possible without keys.
+**Acceptance:** routing and hand-offs are tested against stand-in CLIs and a mock provider; CI runs a plan through real CLIs as far as is possible without keys. ✅ Unit tests (routes, plans, the CLIs' JSON lines, permissions), integration tests with stand-in Claude Code and Codex (a plan limit and the fallback, edits in turn and reads alongside, stopping, cross-review, the audit chain) and TermOS's agent against a mock provider (planning and an unattended edit, a refused command), the real binary end to end, and `agents.yml`: the real Claude Code and Codex on four platforms, against stand-in model servers (Claude Code plans and writes; Codex is refused for the review, which falls back to Claude Code).
+
+**Results**
+- Nothing runs while the harness is idle: its worker waits on a channel; the window ticks four times a second only while a plan is planned or run, for its spinner and clocks.
+- The research replaced the benchmarks the brief named: SWE-bench Verified is no longer reported by the vendors and Aider's board stopped in 2025, so the guide uses Terminal-Bench 4.0 (with an independent cross-vendor run), DeepSWE, FrontierCode and CursorBench. OpenAI and Google pages were read through search summaries only; the guide marks those sources.
 
 ---
 
@@ -1023,6 +1027,7 @@ Generated from the `TODO(M<n>)` markers in the code. Don't edit by hand; run `ca
 | M9b | `crates/termos-ai/src/sandbox.rs` | a Windows sandbox for agent commands (an AppContainer or a restricted token); until then every command asks. |
 | M9b | `crates/termos-cli/src/client.rs` | VT input mode on Windows, for bracketed paste and the Kitty keyboard protocol. |
 | M9b | `crates/termos-cli/src/kms/mod.rs` | the console's own clipboard and visual bell; images drawn as pixels rather than as blocks. |
+| M9b | `crates/termos-harness/src/backends.rs` | stop the CLI's whole process tree on Windows (a job |
 | M9b | `crates/termos-hw/src/lib.rs` | GPU temperature and power on macOS (SMC), and for non-NVIDIA GPUs on Windows. |
 | M9b | `crates/termos-shell/src/desktop.rs` | save and restore app windows (the folder, file or view an app shows) with the session. |
 | M9b | `crates/termos-shell/src/server.rs` | a hidden window for WM_ENDSESSION, so logoff and shutdown always save. |

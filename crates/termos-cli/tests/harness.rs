@@ -1,0 +1,187 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+//! `termos harness` through the real binary (M11c, D-100), with stand-ins
+//! for Claude Code and Codex on `PATH` that print their JSON lines: a goal
+//! planned and run, a plan saved and run again, and where each kind of
+//! task goes.
+
+#![cfg(unix)]
+
+mod common;
+
+use std::os::unix::fs::PermissionsExt as _;
+use std::path::Path;
+
+fn script(path: &Path, body: &str) {
+    std::fs::write(path, format!("#!/bin/sh\n{body}")).expect("write");
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+}
+
+const PLAN: &str = r#"{"summary": "Add a line", "tasks": [{"id": "t1", "kind": "coding", "title": "Write it", "prompt": "Add a line to notes.txt."}, {"id": "t2", "kind": "review", "title": "Check it", "prompt": "Check notes.txt.", "depends_on": ["t1"]}]}"#;
+
+#[test]
+fn a_goal_is_planned_run_and_audited() {
+    let bin = tempfile::tempdir().expect("tempdir");
+    let calls = bin.path().join("calls");
+    // Claude Code plans and writes; the review goes to Codex, another
+    // backend than the author (cross-review). (The scripts quote their
+    // lines in '…'.)
+    let result = |text: &str, error: bool| {
+        serde_json::json!({"type": "result", "subtype": "success", "is_error": error, "result": text,
+            "usage": {"input_tokens": 3, "output_tokens": 2}})
+        .to_string()
+    };
+    script(
+        &bin.path().join("claude"),
+        &format!(
+            r#"prompt="$(cat)"
+echo "claude $*" >> '{calls}'
+case "$prompt" in
+  *"Answer with only this JSON"*) printf '%s\n' '{plan}';;
+  *"task t2 "*) printf '%s\n' '{limit}'; exit 1;;
+  *) echo "a new line" >> notes.txt; printf '%s\n' '{wrote}';;
+esac
+"#,
+            calls = calls.display(),
+            plan = result(PLAN, false),
+            limit = result("You have hit your limit · resets 5pm", true),
+            wrote = result("Added the line.", false),
+        ),
+    );
+    script(
+        &bin.path().join("codex"),
+        &format!(
+            r#"cat > /dev/null
+echo "codex $*" >> '{calls}'
+printf '%s\n' '{msg}'
+"#,
+            calls = calls.display(),
+            msg = serde_json::json!({"type": "item.completed", "item": {"type": "agent_message", "text": "The line reads well."}}),
+        ),
+    );
+    let path = std::env::join_paths(std::iter::once(bin.path().to_owned()).chain(
+        std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
+    ))
+    .expect("PATH");
+    let env = common::Env::with_vars("", vec![("PATH", path.into())]);
+    let project = env.path().join("project");
+    std::fs::create_dir_all(&project).expect("project");
+    let p = project.display().to_string();
+
+    // Where things would go.
+    let out = env.run(&["harness", "status", "--project", &p]);
+    let status = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success(),
+        "{status}{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        status.contains("ready (") && status.contains("coding → balanced: Claude Code"),
+        "{status}"
+    );
+
+    // Planned and run.
+    let out = env.run(&[
+        "harness",
+        "run",
+        "--yes",
+        "--project",
+        &p,
+        "add",
+        "a",
+        "line",
+    ]);
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success(),
+        "{text}{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    for want in [
+        "Plan: Add a line",
+        "t1   coding",
+        "→ Claude Code (its default model), then Codex CLI (its default model)",
+        "[t1] done in",
+        "[t2] → Codex CLI",
+        "[t2] done in",
+        "2 of 2 tasks done",
+        "The line reads well.",
+    ] {
+        assert!(text.contains(want), "{want:?} in:\n{text}");
+    }
+    assert_eq!(
+        std::fs::read_to_string(project.join("notes.txt")).expect("notes"),
+        "a new line\n"
+    );
+    let id = text
+        .lines()
+        .find_map(|l| l.strip_prefix("Hand-offs: `termos audit show "))
+        .and_then(|l| l.strip_suffix('`'))
+        .expect("the log's name")
+        .to_owned();
+    let out = env.run(&["audit", "show", &id]);
+    let log = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        log.contains("handoff") || log.contains("Handoff") || log.contains("\"outcome\""),
+        "{log}"
+    );
+    let out = env.run(&["audit", "verify"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+
+    // A plan saved, then run as it is.
+    let out = env.run(&[
+        "harness",
+        "plan",
+        "--json",
+        "--project",
+        &p,
+        "add",
+        "a",
+        "line",
+    ]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let saved = env.path().join("plan.json");
+    std::fs::write(&saved, &out.stdout).expect("save");
+    let plan: serde_json::Value = serde_json::from_slice(&out.stdout).expect("json");
+    assert_eq!(plan["tasks"][1]["kind"], "review");
+    let out = env.run(&[
+        "harness",
+        "run",
+        "--yes",
+        "--project",
+        &p,
+        "--plan",
+        &saved.display().to_string(),
+    ]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+    // Without --yes and without a terminal, nothing runs.
+    let before = std::fs::read_to_string(project.join("notes.txt")).expect("notes");
+    let out = env.run(&[
+        "harness",
+        "run",
+        "--project",
+        &p,
+        "--plan",
+        &saved.display().to_string(),
+    ]);
+    assert!(String::from_utf8_lossy(&out.stdout).contains("Not run"));
+    assert_eq!(
+        std::fs::read_to_string(project.join("notes.txt")).expect("notes"),
+        before
+    );
+    let calls = std::fs::read_to_string(&calls).expect("calls");
+    assert!(calls.contains("--permission-mode acceptEdits"), "{calls}");
+    assert!(calls.contains("--sandbox read-only"), "{calls}");
+}

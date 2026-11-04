@@ -274,7 +274,7 @@ fn ask_command(
         registry: None,
         provider: ask.provider.clone(),
         model: ask.model.clone(),
-        headless: true,
+        headless: termos_ai::tools::Headless::ReadOnly,
     };
     let shown = std::sync::Mutex::new(std::collections::HashSet::<String>::new());
     let verbose = ask.verbose;

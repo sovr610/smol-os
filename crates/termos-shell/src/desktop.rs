@@ -2337,6 +2337,9 @@ impl Desktop {
             }
             Command::AccountUse(arg) => self.use_account(&arg),
             Command::UsageOpen => self.launch(termos_core::app::LaunchKind::Usage, ""),
+            Command::HarnessOpen(goal) => {
+                self.launch(termos_core::app::LaunchKind::Harness, &goal);
+            }
             Command::AccountTask(task) => {
                 let mut args = vec!["account", "--wait"];
                 args.extend(task.split_whitespace());

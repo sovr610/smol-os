@@ -377,6 +377,13 @@ CLIs what TermOS offers: panes for servers and watchers, reading them,
 opening files, notifications, its developer tools and `termos agent ask`.
 See [skills.md](skills.md).
 
+### The harness
+
+One goal, planned into tasks and spread over Claude Code, Codex and your
+API models, each task routed to the model that suits it:
+[harness.md](harness.md), with the research behind its defaults in
+[model-guide.md](model-guide.md).
+
 ### Several accounts
 
 Keep several accounts of each (three Claude subscriptions, say), switch

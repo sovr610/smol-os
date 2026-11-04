@@ -53,6 +53,35 @@ impl Launcher for Windows {
                     },
                 ))))
             }
+            LaunchKind::Harness => {
+                let (secrets, helper, config_file, home) = self.agents.shared(ctx);
+                let project = ctx
+                    .cwd
+                    .map(std::path::Path::to_owned)
+                    .or_else(|| home.clone())
+                    .unwrap_or_else(|| std::path::PathBuf::from("."));
+                let context = termos_harness::runner::Context {
+                    api: Some(termos_harness::backends::ApiContext {
+                        agents: ctx.config.agents.clone(),
+                        secrets,
+                        paths: ctx.paths.clone(),
+                        helper,
+                        config_file,
+                        home,
+                        journal: Some(Arc::clone(&self.journal)),
+                    }),
+                    config: ctx.config.clone(),
+                    programs: Arc::new(crate::harness_cmd::ShimPrograms {
+                        paths: ctx.paths.clone(),
+                    }),
+                    state_dir: ctx.paths.state_dir.clone(),
+                    journal: Some(Arc::clone(&self.journal)),
+                    project,
+                };
+                let h = termos_harness::runner::Harness::start(context)
+                    .map_err(|e| format!("cannot start the harness: {e}"))?;
+                Ok(Box::new(termos_harness::app::HarnessApp::open(h, arg)))
+            }
             _ => self.agents.open(kind, arg, ctx),
         }
     }

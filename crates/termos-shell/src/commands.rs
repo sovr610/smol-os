@@ -113,6 +113,8 @@ pub enum Command {
     AccountTask(String),
     /// The usage app (D-097).
     UsageOpen,
+    /// The coding harness, planning a goal if given (D-100).
+    HarnessOpen(String),
     /// Continue the focused agent window's conversation as another
     /// account (D-097).
     AgentSwap(String),
@@ -297,6 +299,15 @@ pub const COMMANDS: &[CommandInfo] = &[
         "usage.open",
         "Usage and accounts: every Claude Code and Codex account",
     ),
+    info(
+        "harness.open",
+        "Harness: plan a goal over Claude Code, Codex and API models",
+    ),
+    CommandInfo {
+        name: "harness.open",
+        description: "Harness: plan this goal",
+        arg: Some("add a --verbose flag"),
+    },
     CommandInfo {
         name: "account.add",
         description: "Add a Claude Code or Codex account",
@@ -420,6 +431,12 @@ impl FromStr for Command {
                     )),
                 });
             }
+        }
+        // A goal is the rest of the line too (D-100).
+        if let Some(rest) = s.trim_start().strip_prefix("harness.open")
+            && (rest.is_empty() || rest.starts_with(char::is_whitespace))
+        {
+            return Ok(Command::HarnessOpen(rest.trim().to_owned()));
         }
         // A path is the rest of the line, spaces and all.
         for (name, optional) in PATH_COMMANDS {
@@ -673,6 +690,8 @@ impl fmt::Display for Command {
             Command::AccountUse(a) => write!(f, "account.use {a}"),
             Command::AccountTask(t) => write!(f, "account.{t}"),
             Command::UsageOpen => f.write_str("usage.open"),
+            Command::HarnessOpen(g) if g.is_empty() => f.write_str("harness.open"),
+            Command::HarnessOpen(g) => write!(f, "harness.open {g}"),
             Command::AgentSwap(a) => write!(f, "agent.swap {a}"),
             Command::AuditOpen(id) if id.is_empty() => f.write_str("audit.open"),
             Command::AuditOpen(id) => write!(f, "audit.open {id}"),
@@ -717,6 +736,22 @@ mod tests {
             assert_eq!(again, cmd, "{text}");
             assert!(!cmd.description().is_empty(), "{text} has no description");
         }
+    }
+
+    #[test]
+    fn a_harness_goal_is_the_rest_of_the_line() {
+        assert_eq!(
+            "harness.open add a --verbose flag to `run`".parse::<Command>(),
+            Ok(Command::HarnessOpen("add a --verbose flag to `run`".into()))
+        );
+        assert_eq!(
+            "harness.open".parse::<Command>(),
+            Ok(Command::HarnessOpen(String::new()))
+        );
+        assert_eq!(
+            Command::HarnessOpen("fix it".into()).to_string(),
+            "harness.open fix it"
+        );
     }
 
     #[test]

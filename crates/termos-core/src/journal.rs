@@ -68,6 +68,17 @@ pub enum Event {
     },
     /// Something done from the command center.
     Action { what: String },
+    /// The harness handed a task to a backend (D-100): names and the
+    /// outcome only.
+    Handoff {
+        plan: String,
+        task: String,
+        /// The task's kind (`coding`).
+        task_kind: String,
+        backend: String,
+        model: String,
+        outcome: String,
+    },
 }
 
 /// The history files.

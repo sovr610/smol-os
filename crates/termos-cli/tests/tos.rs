@@ -155,6 +155,14 @@ fn tos_in_a_pane_acts_on_it() {
         })
     });
 
+    // The harness window, in this pane's folder (D-100).
+    type_line(&env, first, "tos harness");
+    wait("the harness window", || {
+        panes(&env)
+            .iter()
+            .any(|p| p["kind"] == "app" && p["name"] == "Harness")
+    });
+
     // Outside a pane it says what it needs.
     let out = std::process::Command::new(&link)
         .arg("notify")

@@ -63,6 +63,21 @@ pub enum Event {
     },
     /// Anything else worth keeping (the session ended, a key was missing).
     Note { text: String },
+    /// The harness handed a task to a backend, or heard back (D-100).
+    Handoff {
+        /// The task's id in its plan (`t2`) and its kind (`coding`).
+        task: String,
+        task_kind: String,
+        /// `claude`, `codex`, or an API backend's name; its model (empty:
+        /// the backend's default) and account.
+        backend: String,
+        model: String,
+        account: String,
+        /// `started`, `done`, `failed`, `fell-back`, `skipped`, `stopped`.
+        outcome: String,
+        /// Why, or a short redacted summary of the result.
+        detail: String,
+    },
 }
 
 /// Appends to a session's log.

@@ -5465,6 +5465,7 @@ dependencies = [
  "termos-center",
  "termos-core",
  "termos-devkit",
+ "termos-harness",
  "termos-hw",
  "termos-models",
  "termos-render",
@@ -5515,6 +5516,27 @@ dependencies = [
  "thiserror 2.0.21",
  "toml 1.1.8+spec-1.1.0",
  "toml_edit",
+]
+
+[[package]]
+name = "termos-harness"
+version = "0.0.0"
+dependencies = [
+ "insta",
+ "jiff",
+ "ratatui-core",
+ "rustix",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "termos-ai",
+ "termos-core",
+ "termos-devkit",
+ "termos-render",
+ "thiserror 2.0.21",
+ "tokio",
+ "tracing",
+ "unicode-width",
 ]
 
 [[package]]

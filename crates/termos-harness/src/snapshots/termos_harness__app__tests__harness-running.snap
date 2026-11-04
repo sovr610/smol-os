@@ -1,0 +1,28 @@
+---
+source: crates/termos-harness/src/app.rs
+expression: screen
+---
+ Goal › add retries to the client                                                          [Plan ⏎]
+ ◐ Running: 1 of 3 finished                                                 1.3k tokens · API $0.00
+────────────────────────────────────────────────────────────────────────────────────────────────────
+ ✓ t1  search      Find the HTTP calls  │ t2 · coding · Add retries
+ ◐ t2  coding      Add retries          │ after t1 · changes files
+ ○ t3  review      Review the change    │
+                                        │ Running on
+                                        │ Codex CLI (its default model)
+                                        │ ✗ Claude Code: usage limit reached
+                                        │
+                                        │ Prompt
+                                        │ Retry failed requests three times with backoff.
+                                        │
+                                        │
+                                        │
+                                        │
+                                        │
+                                        │
+                                        │
+                                        │
+                                        │
+                                        │
+                                        │
+ [Stop task s] [Stop all S]                                                    Tab: goal · q: close

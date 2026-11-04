@@ -16,10 +16,12 @@ use termos_render::theme::ThemeConfig;
 use crate::input::KeyEvent;
 
 pub mod agents;
+pub mod harness;
 pub mod kms;
 pub mod models;
 
 pub use agents::{AgentsConfig, SecretsConfig};
+pub use harness::HarnessConfig;
 pub use kms::KmsConfig;
 pub use models::ModelsConfig;
 
@@ -64,6 +66,8 @@ pub struct Config {
     pub kms: KmsConfig,
     /// The command center's history (M10c, D-092).
     pub center: CenterConfig,
+    /// The coding harness (M11c, D-099).
+    pub harness: HarnessConfig,
 }
 
 impl Default for Config {
@@ -92,6 +96,7 @@ impl Default for Config {
             models: ModelsConfig::default(),
             kms: KmsConfig::default(),
             center: CenterConfig::default(),
+            harness: HarnessConfig::default(),
         }
     }
 }
@@ -714,6 +719,21 @@ history = true                # keep conversations (mode 0600) to resume them
 # register = true
 # deny = []                   # e.g. ["read_pane", "send_to_pane"]
 # deny-commands = ["session.quit", "client.detach", "workspace.kill", "pane.kill"]
+
+# The harness (docs/harness.md): one goal planned into tasks over Claude
+# Code, Codex and API models. `termos harness status` shows the routes.
+# [harness]
+# order = ["claude", "codex"]   # then every API backend
+# fallback = true               # try the next backend when one fails
+# cross-review = true           # reviews go first to another backend
+# parallel = 3                  # read-only tasks at the same time
+# budget-usd = 0                # API spend per plan (0: no limit)
+# auto-run = 0                  # plans this small start without asking
+# allow-commands = []           # besides the project's build/test/lint tasks
+# [harness.backends.claude]
+# models = { frontier = "…", balanced = "…", fast = "…" }   # docs/model-guide.md
+# [harness.routes]
+# coding = "balanced"           # planning/review: frontier; search/small-edits/docs: fast
 
 # TermOS's skills, which teach Claude Code, Codex and the other coding CLIs
 # to use TermOS (`termos skills status`). TermOS installs and updates them.

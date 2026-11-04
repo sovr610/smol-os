@@ -112,6 +112,8 @@ enum TosCmd {
     Center,
     /// Usage and accounts: every Claude Code and Codex account.
     Usage,
+    /// The coding harness, in this folder; with a goal, it plans it.
+    Harness { goal: Vec<String> },
     /// Settings.
     Settings,
     /// The clipboard history.
@@ -385,6 +387,14 @@ fn run(tos: Tos) -> anyhow::Result<ExitCode> {
         TosCmd::Monitor => named("monitor.open")?,
         TosCmd::Center => named("center.open")?,
         TosCmd::Usage => named("usage.open")?,
+        TosCmd::Harness { goal } => {
+            let goal = goal.join(" ");
+            named(&if goal.trim().is_empty() {
+                "harness.open".to_owned()
+            } else {
+                format!("harness.open {goal}")
+            })?;
+        }
         TosCmd::Settings => named("settings.open")?,
         TosCmd::Clipboard => named("clipboard.open")?,
         TosCmd::Network => named("network.open")?,

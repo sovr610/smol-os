@@ -21,7 +21,7 @@ default = ["wasm-widgets", "tls", "candle"]
 wasm-widgets = ["termos-shell/wasm-widgets"]
 # HTTPS for agents' providers, fetch_url and MCP (D-058); left out only
 # where ring cannot be built (clippy for Windows from Linux).
-tls = ["termos-ai/tls", "termos-models/tls"]
+tls = ["termos-ai/tls", "termos-models/tls", "termos-harness/tls"]
 # Embedding models in-process (D-067). Like the others, left out by the
 # clippy check for Windows run from Linux, which builds no default features.
 candle = ["termos-models/candle"]
@@ -41,6 +41,7 @@ termos-ai.workspace = true
 termos-center.workspace = true
 termos-core.workspace = true
 termos-devkit.workspace = true
+termos-harness.workspace = true
 termos-hw.workspace = true
 termos-models.workspace = true
 termos-render.workspace = true

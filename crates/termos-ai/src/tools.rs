@@ -53,13 +53,40 @@ pub struct Toolbox {
     pub sandbox: SandboxSetup,
     pub redactor: Redactor,
     pub mcp: mcp::Hub,
-    /// Only reading, listing and searching files, and nothing that needs
-    /// the user's approval (`termos agent ask`, D-098).
-    pub read_only: bool,
+    /// No one there to approve: what the session may do by itself.
+    pub headless: Headless,
+}
+
+/// What a session with no one there to approve may do (D-098, D-100).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum Headless {
+    /// Someone is there: the profile's rules, asking when they say so.
+    #[default]
+    Off,
+    /// Only read, list and search files (`termos agent ask`).
+    ReadOnly,
+    /// Also change files in the workspace, and run commands that match
+    /// these patterns (and are not dangerous): a harness task.
+    Edits { commands: Vec<String> },
+}
+
+impl Headless {
+    pub fn is_on(&self) -> bool {
+        *self != Self::Off
+    }
 }
 
 /// The tools a read-only session is offered.
 pub const READ_ONLY_TOOLS: &[&str] = &["read_file", "list_dir", "search_code"];
+/// The tools an unattended session that may edit is offered.
+pub const EDIT_TOOLS: &[&str] = &[
+    "read_file",
+    "list_dir",
+    "search_code",
+    "write_file",
+    "edit_file",
+    "run_command",
+];
 
 impl std::fmt::Debug for Toolbox {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -260,9 +287,16 @@ impl Toolbox {
     /// Tools offered to the model: the built-in ones and the MCP servers'.
     pub fn specs(&self) -> Vec<ToolSpec> {
         let mut specs = builtin_specs();
-        if self.read_only {
-            specs.retain(|s| READ_ONLY_TOOLS.contains(&s.name.as_str()));
-            return specs;
+        match &self.headless {
+            Headless::Off => {}
+            Headless::ReadOnly => {
+                specs.retain(|s| READ_ONLY_TOOLS.contains(&s.name.as_str()));
+                return specs;
+            }
+            Headless::Edits { .. } => {
+                specs.retain(|s| EDIT_TOOLS.contains(&s.name.as_str()));
+                return specs;
+            }
         }
         specs.extend(self.mcp.specs());
         specs
@@ -466,15 +500,11 @@ impl Toolbox {
         let mut asks: Vec<(String, bool)> = Vec::new();
         let mut allowed = Vec::new();
         for a in &call.actions {
-            if self.read_only && !matches!(a, Action::Read(_)) {
-                return Decision::Deny(
-                    "this session only reads files (a headless ask, D-098)".into(),
-                );
-            }
-            match self.policy.decide(a, approvals) {
-                Decision::Ask { why, .. } if self.read_only => {
-                    return Decision::Deny(format!("{why}, and a headless ask has no one to ask"));
-                }
+            let decision = match self.unattended(a, approvals) {
+                Some(d) => d,
+                None => self.policy.decide(a, approvals),
+            };
+            match decision {
                 Decision::Deny(why) => return Decision::Deny(why),
                 Decision::Ask { why, remember } => asks.push((why, remember)),
                 Decision::Allow(why) => allowed.push(why),
@@ -491,6 +521,54 @@ impl Toolbox {
                 .join("; "),
             remember: asks.iter().all(|(_, r)| *r),
         }
+    }
+
+    /// What a session with no one there decides about `a`, in place of
+    /// the profile's questions: `None` when someone is there.
+    fn unattended(&self, a: &Action, approvals: &SessionApprovals) -> Option<Decision> {
+        let commands = match &self.headless {
+            Headless::Off => return None,
+            Headless::ReadOnly => None,
+            Headless::Edits { commands } => Some(commands),
+        };
+        let nobody = |why: String| Decision::Deny(format!("{why}, and no one is there to ask"));
+        let profile = self.policy.decide(a, approvals);
+        if matches!(profile, Decision::Deny(_)) {
+            return Some(profile);
+        }
+        Some(match (a, commands) {
+            (Action::Read(_), _) => match profile {
+                Decision::Ask { why, .. } => nobody(why),
+                d => d,
+            },
+            (Action::Write(path), Some(_)) if self.policy.in_workspace(path) => {
+                Decision::Allow("an unattended task may change files in its project".into())
+            }
+            (Action::Command { line, network }, Some(patterns)) => {
+                let shape = crate::policy::classify(line);
+                if *network {
+                    nobody("it asks for the network".into())
+                } else if let Some(why) = shape.dangerous.first() {
+                    nobody(why.clone())
+                } else if let Decision::Allow(why) = profile {
+                    Decision::Allow(why)
+                } else if !shape.substitution
+                    && !shape.segments.is_empty()
+                    && shape
+                        .segments
+                        .iter()
+                        .all(|seg| patterns.iter().any(|p| crate::policy::glob_match(p, seg)))
+                {
+                    Decision::Allow("an allowed command for unattended tasks".into())
+                } else {
+                    nobody("it is not one of the commands allowed for unattended tasks".into())
+                }
+            }
+            (_, Some(_)) => nobody("an unattended task may only work in its project".into()),
+            (_, None) => {
+                Decision::Deny("this session only reads files (a headless ask, D-098)".into())
+            }
+        })
     }
 
     /// Runs a prepared, permitted call. `on_output` sees a command's
@@ -1214,14 +1292,14 @@ mod tests {
             },
             redactor: Redactor::new(),
             mcp: mcp::Hub::default(),
-            read_only: false,
+            headless: Headless::Off,
         }
     }
 
     #[test]
     fn a_read_only_toolbox_only_reads_and_never_asks() {
         let (dir, mut tb) = ws();
-        tb.read_only = true;
+        tb.headless = Headless::ReadOnly;
         let names: Vec<String> = tb.specs().into_iter().map(|s| s.name).collect();
         assert_eq!(names, READ_ONLY_TOOLS);
         let approvals = SessionApprovals::default();
@@ -1244,8 +1322,63 @@ mod tests {
         // Reading outside the workspace would ask: refused instead.
         let outside = dir.path().parent().expect("parent").join("elsewhere.txt");
         match decide("read_file", json!({"path": outside.display().to_string()})) {
-            Decision::Deny(why) => assert!(why.contains("no one to ask"), "{why}"),
+            Decision::Deny(why) => assert!(why.contains("no one is there to ask"), "{why}"),
             other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn an_unattended_task_edits_its_project_and_runs_allowed_commands() {
+        let (dir, mut tb) = ws();
+        tb.headless = Headless::Edits {
+            commands: vec!["cargo test*".into(), "make".into()],
+        };
+        let names: Vec<String> = tb.specs().into_iter().map(|s| s.name).collect();
+        assert_eq!(names, EDIT_TOOLS);
+        let approvals = SessionApprovals::default();
+        let decide = |tool: &str, args: Value| {
+            let call = tb.prepare("id", tool, &args).expect("prepared");
+            tb.decide(&call, &approvals)
+        };
+        let allowed = |d: Decision| matches!(d, Decision::Allow(_));
+        assert!(allowed(decide(
+            "write_file",
+            json!({"path": "src/new.rs", "content": "x"})
+        )));
+        assert!(allowed(decide(
+            "edit_file",
+            json!({"path": "src/lib.rs", "old_text": "a - b", "new_text": "a + b"})
+        )));
+        assert!(allowed(decide(
+            "run_command",
+            json!({"command": "cargo test --all"})
+        )));
+        assert!(allowed(decide(
+            "run_command",
+            json!({"command": "make && cargo test"})
+        )));
+        let outside = dir.path().parent().expect("parent").join("elsewhere.txt");
+        for (tool, args) in [
+            (
+                "write_file",
+                json!({"path": outside.display().to_string(), "content": "x"}),
+            ),
+            (
+                "run_command",
+                json!({"command": "curl https://example.com"}),
+            ),
+            ("run_command", json!({"command": "cargo test; rm -rf ~"})),
+            (
+                "run_command",
+                json!({"command": "cargo test --all", "network": true}),
+            ),
+            ("run_command", json!({"command": "make $(cat x)"})),
+            ("fetch_url", json!({"url": "https://example.com/"})),
+        ] {
+            assert!(
+                matches!(decide(tool, args.clone()), Decision::Deny(_)),
+                "{tool} {args}"
+            );
         }
     }
 

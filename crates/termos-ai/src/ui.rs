@@ -68,6 +68,35 @@ impl AgentLauncher {
         self
     }
 
+    /// What TermOS's agent sessions share, for others that run them (the
+    /// harness, D-100): the secrets slot (unlocked once for every window),
+    /// the `termos` binary, the config file and the home folder.
+    pub fn shared(
+        &self,
+        ctx: &LaunchContext<'_>,
+    ) -> (
+        Arc<SecretSlot>,
+        Option<PathBuf>,
+        Option<PathBuf>,
+        Option<PathBuf>,
+    ) {
+        let secrets = self
+            .secrets
+            .get_or_init(|| {
+                Arc::new(SecretSlot::new(
+                    ctx.config.secrets.store,
+                    ctx.paths.data_dir.clone(),
+                ))
+            })
+            .clone();
+        (
+            secrets,
+            self.helper.clone(),
+            self.config_file.clone(),
+            self.home.clone(),
+        )
+    }
+
     fn launch(&self, ctx: &LaunchContext<'_>, profile: String, resume: Option<String>) -> Launch {
         let secrets = self
             .secrets
@@ -96,7 +125,7 @@ impl AgentLauncher {
             registry: self.registry.clone(),
             provider: None,
             model: None,
-            headless: false,
+            headless: crate::tools::Headless::Off,
         }
     }
 }
@@ -145,6 +174,7 @@ impl Launcher for AgentLauncher {
             // launcher has none.
             LaunchKind::Center => Err("the command center is not part of this build".into()),
             LaunchKind::Usage => Err("the usage app is not part of this build".into()),
+            LaunchKind::Harness => Err("the harness is not part of this build".into()),
         }
     }
 }
@@ -1410,6 +1440,30 @@ impl App for AuditViewer {
                     format!("note     {text}"),
                     style(theme, |t| t.overlay_muted),
                 ),
+                audit::Event::Handoff {
+                    task,
+                    task_kind,
+                    backend,
+                    model,
+                    account,
+                    outcome,
+                    detail,
+                } => {
+                    let to = [backend.as_str(), account.as_str(), model.as_str()]
+                        .iter()
+                        .filter(|s| !s.is_empty())
+                        .copied()
+                        .collect::<Vec<_>>()
+                        .join(" · ");
+                    let st = match outcome.as_str() {
+                        "failed" | "stopped" | "skipped" | "fell-back" => fg(theme, |c| c.warn),
+                        _ => fg(theme, |c| c.fg),
+                    };
+                    (
+                        format!("{outcome:<9} {task} {task_kind} → {to}  {detail}"),
+                        st,
+                    )
+                }
             };
             lines.extend(wrap(
                 &text,

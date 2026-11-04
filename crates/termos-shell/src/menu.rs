@@ -152,6 +152,7 @@ fn command_icon(c: &Command) -> Option<Icon> {
         | Command::AccountUse(_)
         | Command::AccountTask(_)
         | Command::UsageOpen
+        | Command::HarnessOpen(_)
         | Command::AgentSwap(_) => Icon::Agent,
         Command::AuditOpen(_) => Icon::Audit,
         Command::CenterOpen => Icon::Center,

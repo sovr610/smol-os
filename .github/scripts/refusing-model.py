@@ -5,8 +5,9 @@ account or a key.
 It refuses every request with an error, so a CLI stops at once (after
 starting its MCP servers, which is one thing CI looks at), except
 Anthropic's Messages API, which gets a short answer, so Claude Code
-finishes its turn cleanly. With a second argument, every request is
-appended to that file as a JSON line (method, path, body), so CI can
+finishes its turn cleanly; asked for a plan by TermOS's harness, it
+answers with a small plan (D-100). With a second argument, every request
+is appended to that file as a JSON line (method, path, body), so CI can
 check what a CLI sent: the skills it lists, for one (D-098).
 
 Usage: refusing-model.py PORT [REQUESTS.jsonl]
@@ -20,27 +21,38 @@ LOG = sys.argv[2] if len(sys.argv) > 2 else None
 
 ANSWER = "Hello from the stand-in."
 
-SSE = [
-    ("message_start", {"type": "message_start", "message": {
-        "id": "msg_fixture", "type": "message", "role": "assistant", "model": "fixture-model",
-        "content": [], "stop_reason": None, "stop_sequence": None,
-        "usage": {"input_tokens": 1, "output_tokens": 1}}}),
-    ("content_block_start", {"type": "content_block_start", "index": 0,
-                             "content_block": {"type": "text", "text": ""}}),
-    ("content_block_delta", {"type": "content_block_delta", "index": 0,
-                             "delta": {"type": "text_delta", "text": ANSWER}}),
-    ("content_block_stop", {"type": "content_block_stop", "index": 0}),
-    ("message_delta", {"type": "message_delta",
-                       "delta": {"stop_reason": "end_turn", "stop_sequence": None},
-                       "usage": {"output_tokens": 5}}),
-    ("message_stop", {"type": "message_stop"}),
-]
+# What the harness's planner gets (its prompt asks for JSON only).
+PLAN = json.dumps({"summary": "Write a note", "tasks": [
+    {"id": "t1", "kind": "coding", "title": "Write the note",
+     "prompt": "Create NOTE.md saying hello."},
+    {"id": "t2", "kind": "review", "title": "Check the note",
+     "prompt": "Check NOTE.md.", "depends_on": ["t1"]},
+]})
+
+
+def sse(text):
+    return [
+        ("message_start", {"type": "message_start", "message": {
+            "id": "msg_fixture", "type": "message", "role": "assistant", "model": "fixture-model",
+            "content": [], "stop_reason": None, "stop_sequence": None,
+            "usage": {"input_tokens": 1, "output_tokens": 1}}}),
+        ("content_block_start", {"type": "content_block_start", "index": 0,
+                                 "content_block": {"type": "text", "text": ""}}),
+        ("content_block_delta", {"type": "content_block_delta", "index": 0,
+                                 "delta": {"type": "text_delta", "text": text}}),
+        ("content_block_stop", {"type": "content_block_stop", "index": 0}),
+        ("message_delta", {"type": "message_delta",
+                           "delta": {"stop_reason": "end_turn", "stop_sequence": None},
+                           "usage": {"output_tokens": 5}}),
+        ("message_stop", {"type": "message_stop"}),
+    ]
 
 
 class Handler(http.server.BaseHTTPRequestHandler):
     def _body(self):
         n = int(self.headers.get("Content-Length") or 0)
         raw = self.rfile.read(n) if n else b""
+        self.raw = raw.decode("utf-8", "replace")
         if LOG:
             with open(LOG, "a", encoding="utf-8") as f:
                 f.write(json.dumps({
@@ -78,17 +90,19 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if path == "/v1/messages/count_tokens":
             self._json(200, {"input_tokens": 10})
         elif path == "/v1/messages" and req.get("stream"):
+            text = PLAN if "Answer with only this JSON" in self.raw else ANSWER
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
             self.end_headers()
-            for event, data in SSE:
+            for event, data in sse(text):
                 self.wfile.write(f"event: {event}\ndata: {json.dumps(data)}\n\n".encode())
                 self.wfile.flush()
             self.close_connection = True
         elif path == "/v1/messages":
+            text = PLAN if "Answer with only this JSON" in self.raw else ANSWER
             self._json(200, {
                 "id": "msg_fixture", "type": "message", "role": "assistant",
-                "model": "fixture-model", "content": [{"type": "text", "text": ANSWER}],
+                "model": "fixture-model", "content": [{"type": "text", "text": text}],
                 "stop_reason": "end_turn", "stop_sequence": None,
                 "usage": {"input_tokens": 1, "output_tokens": 5}})
         else:

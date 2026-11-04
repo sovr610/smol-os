@@ -36,7 +36,7 @@ use crate::redact::Redactor;
 use crate::registry::Registry;
 use crate::sandbox;
 use crate::secrets::{SecretError, SecretStore};
-use crate::tools::{Call, Output, Preview, SandboxSetup, Toolbox};
+use crate::tools::{Call, Headless, Output, Preview, SandboxSetup, Toolbox};
 
 /// Rounds of tool calls one message may lead to before the loop stops
 /// and asks the user to continue.
@@ -242,9 +242,10 @@ pub struct Launch {
     /// The provider and model, over the profile's.
     pub provider: Option<String>,
     pub model: Option<String>,
-    /// No one is there to answer (`termos agent ask`, D-098): the session
-    /// only reads, and what it would ask is an error instead.
-    pub headless: bool,
+    /// No one is there to answer (`termos agent ask`, D-098; harness
+    /// tasks, D-100): what the session may do by itself, and what it would
+    /// ask is an error or a refusal instead.
+    pub headless: crate::tools::Headless,
 }
 
 impl std::fmt::Debug for Launch {
@@ -364,6 +365,13 @@ const HEADLESS_NOTE: &str = "\n\nAnother program asked you this (`termos agent a
      commands or fetch anything, and a call that would need approval is refused. Answer directly \
      and completely in plain text: your reply is the whole result.";
 
+/// What a harness task's model is told, after the system prompt.
+const UNATTENDED_NOTE: &str = "\n\nThis is one task of a larger plan, run by TermOS's harness, and no one \
+     is there to answer your questions or approve anything. You can read and change files in the \
+     workspace and run the allowed commands; anything else is refused. Do the task completely, then \
+     end with a short summary of what you changed and anything left undone: it is passed to the \
+     tasks that follow.";
+
 /// A headless ask's result.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Answer {
@@ -382,14 +390,17 @@ pub struct Answer {
 }
 
 /// Runs one question with no one there to answer the session
-/// (`termos agent ask`, D-098): read-only, and every choice it would ask
-/// for is an error instead. `progress` sees the view after each change.
+/// (`termos agent ask`, D-098; a harness task, D-100): read-only unless
+/// `launch.headless` allows edits, and every choice it would ask for is an
+/// error instead. `progress` sees the view after each change.
 pub async fn ask(
     mut launch: Launch,
     prompt: String,
     progress: impl Fn(&View) + Send + Sync + 'static,
 ) -> Result<Answer, String> {
-    launch.headless = true;
+    if launch.headless == Headless::Off {
+        launch.headless = Headless::ReadOnly;
+    }
     let view = Arc::new(Mutex::new(View::new(
         &launch.profile,
         launch.workspace.clone(),
@@ -662,7 +673,7 @@ impl Session {
             }
             (None, None) => {
                 let names: Vec<String> = agents.providers.keys().cloned().collect();
-                if launch.headless {
+                if launch.headless.is_on() {
                     return Err(Some(format!(
                         "pick a provider with --provider ({}), or set `provider` in the profile",
                         names.join(", ")
@@ -696,7 +707,7 @@ impl Session {
         let mut redactor = Redactor::new();
         let key = match &pcfg.key {
             Some(r) => {
-                let k = read_secret(&store, r.name(), launch.headless, shared, rx).await?;
+                let k = read_secret(&store, r.name(), launch.headless.is_on(), shared, rx).await?;
                 redactor.add(&k);
                 Some(k)
             }
@@ -705,7 +716,7 @@ impl Session {
         let mut mcp_keys = BTreeMap::new();
         for name in &profile.mcp_servers {
             if let Some(r) = agents.mcp.get(name).and_then(|m| m.key.as_ref()) {
-                match read_secret(&store, r.name(), launch.headless, shared, rx).await {
+                match read_secret(&store, r.name(), launch.headless.is_on(), shared, rx).await {
                     Ok(k) => {
                         redactor.add(&k);
                         mcp_keys.insert(name.clone(), k);
@@ -741,7 +752,7 @@ impl Session {
         let (model, listed) = match (&resumed, chosen) {
             (Some(s), _) => (s.model.clone(), None),
             (None, Some(m)) => (m.to_owned(), None),
-            (None, None) if launch.headless => {
+            (None, None) if launch.headless.is_on() => {
                 let listed = match provider.list_models().await {
                     Ok(m) if !m.is_empty() => {
                         let ids: Vec<&str> = m.iter().take(12).map(|m| m.id.as_str()).collect();
@@ -807,7 +818,7 @@ impl Session {
             hidden,
         };
         let sandbox_line = caps.describe(profile.sandbox);
-        let hub = if profile.mcp_servers.is_empty() || launch.headless {
+        let hub = if profile.mcp_servers.is_empty() || launch.headless.is_on() {
             mcp::Hub::default()
         } else {
             shared.phase(Phase::Starting, "starting MCP servers…");
@@ -830,15 +841,26 @@ impl Session {
         }
         let workspace = policy.workspace.clone();
         let mut system = system_prompt(&workspace, &sandbox_line, &profile);
-        if launch.headless {
-            system.push_str(HEADLESS_NOTE);
+        match &launch.headless {
+            Headless::Off => {}
+            Headless::ReadOnly => system.push_str(HEADLESS_NOTE),
+            Headless::Edits { commands } => {
+                system.push_str(UNATTENDED_NOTE);
+                if commands.is_empty() {
+                    system.push_str(" You may run no commands.");
+                } else {
+                    system.push_str(" The commands you may run: ");
+                    system.push_str(&commands.join(", "));
+                    system.push('.');
+                }
+            }
         }
         let tools = Toolbox {
             policy,
             sandbox: setup,
             redactor,
             mcp: hub,
-            read_only: launch.headless,
+            headless: launch.headless.clone(),
         };
         // The session's identity, audit log and history.
         let (id, messages, usage, created) = match resumed {

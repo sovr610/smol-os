@@ -195,6 +195,9 @@ pub fn history(records: &[Record], range: Range, now: i64) -> History {
                 }
             }
             Event::Action { what } => h.actions.push((r.time, what.clone())),
+            // The harness window shows its hand-offs; their tokens reach
+            // the center through the CLIs' logs and the agents' usage.
+            Event::Handoff { .. } => {}
         }
     }
     let mean = |(sum, n): (f64, u32)| (n > 0).then(|| (sum / f64::from(n)) as f32);

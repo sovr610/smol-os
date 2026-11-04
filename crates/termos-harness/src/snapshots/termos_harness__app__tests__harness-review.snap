@@ -1,0 +1,28 @@
+---
+source: crates/termos-harness/src/app.rs
+expression: screen
+---
+ Goal › add retries to the client                                                          [Plan ⏎]
+ Plan: Retry failed requests · 3 tasks — change them if you like, then Run (r)
+────────────────────────────────────────────────────────────────────────────────────────────────────
+ ○ t1  search      Find the HTTP calls  │ t1 · search · Find the HTTP calls
+ ○ t2  coding      Add retries          │ read-only
+ ○ t3  review      Review the change    │
+                                        │ Goes to
+                                        │ search → fast: Claude Code · fixture-small; not Codex
+                                        │ CLI: not installed
+                                        │
+                                        │ Prompt
+                                        │ Find every place the client sends a request.
+                                        │
+                                        │
+                                        │
+                                        │
+                                        │
+                                        │
+                                        │
+                                        │
+                                        │
+                                        │
+                                        │
+ [Run r] [Edit e] [Kind t] [Backend b] [Drop d] [↑ K] [↓ J] [New n]            Tab: goal · q: close

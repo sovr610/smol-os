@@ -978,6 +978,34 @@ rewrite history.
 
 ---
 
+## D-099: M11c owner answers: the harness
+- **Status:** Accepted (owner) · 2026-11-04
+- **Context:** M11c builds the harness of D-096: one coding window over Claude Code, Codex CLI and API models. Four choices were left open; the owner chose (2026-11-04):
+- **Decision:**
+  - **Planning:** a planning model splits the goal into typed tasks (planning, coding, review, tests, search, small edits, docs); the user sees each task with the backend and model it will go to, can edit, reorder or drop tasks, and starts the run. A setting can let small plans start without approval.
+  - **Parallelism:** tasks that change files run one after another in the project folder; read-only tasks (review, search, planning, questions) run alongside them.
+  - **Permissions of headless CLIs:** they may edit files in the project and run only the commands the settings allow (by default the project's build, test and lint tasks). Codex runs in its own workspace-write sandbox; Claude Code with `acceptEdits` and that allowlist. Anything else is refused and reported.
+  - **Preference:** subscriptions first: Claude Code and Codex under the user's plans before API models, which are used when the rules say so, when no CLI is there, or as a fallback when a CLI fails or reaches its plan limit. Never another account of the same plan by itself (D-096).
+- **Alternatives:** plans that start at once, or tasks written by the user; parallel coding in git worktrees, or one task at a time; asking the user for each tool call, or full auto in a sandbox; cheapest-first or rules-only routing.
+
+---
+
+## D-100: The harness: plans, routes, backends, the run
+- **Status:** Accepted · 2026-11-04
+- **Decision:**
+  - **A crate of its own, `termos-harness`** (on ai, devkit, core, render, like termos-center). The binary hands it the CLIs through a `Programs` seam (the shims' logic: TermOS's install or `PATH`, as the account) and the shared agent pieces (the server's secrets slot, journal), and opens its window through the launcher (`LaunchKind::Harness`), so the shell still depends on neither.
+  - **Plans are JSON from the planner:** the planning route's backend, read-only, is asked for `{"summary", "tasks": [{"id", "kind", "title", "prompt", "depends_on"}]}`. The first JSON object of its answer is taken (models add prose and fences), and checked: known kinds, unique ids, dependencies on earlier tasks only (others dropped), at most `max-tasks`. Edited plans are checked the same way. The parser and the CLI event readers are fuzzed (`plan_parse`, `cli_events`).
+  - **Seven kinds, three tiers, no model names in code.** Defaults from the research ([docs/model-guide.md](docs/model-guide.md)): planning and review frontier; coding and tests balanced; search, small edits and docs fast. Backends fill tiers with the models the user sets; an unset tier is the CLI's own default model, or for an API backend the nearest tier that has one.
+  - **Backends and order:** `claude`, `codex` and one API backend per provider (more under `[harness.backends]`, e.g. another account), tried in `[harness] order`, by default subscriptions first (D-099); a route may list its own. The route is worked out when a task starts, passing over a backend that cannot run, an API backend once the plan's budget is spent, and every backend of a CLI that reached its plan limit in the run: never another account of it by itself (D-096). The research found that a plan's limit is shared by all its models, so the fallback is the next backend (an API one, or the other CLI), not another model on the same plan.
+  - **Reviews by another backend** (`cross-review`, on): a review tries first the backends that did not write the code it reviews. The evidence is indirect (models favour their own output; no code-review study was found), so the guide says so and the setting turns it off.
+  - **Permissions without anyone to ask (D-099):** Claude Code `-p --output-format stream-json`, with `--permission-mode acceptEdits` and `--allowedTools Bash(…)` rules for the allowed commands when the task changes files, or editing and shell tools disallowed; Codex `exec --json` in its `workspace-write` or `read-only` sandbox; TermOS's agent with `Headless::Edits` (writes in the workspace, commands matching the patterns and not dangerous or networked) or `ReadOnly`, every other question refused. The allowed commands are the project's build, test, lint, check and format tasks (`termos task`) and `[harness] allow-commands`. Prompts go on standard input.
+  - **The run:** a worker thread with a single-threaded runtime and a `LocalSet` (agent sessions are not `Send`). A task waits for its dependencies and every earlier task that changes files; writes one at a time, reads up to `parallel` alongside. A task's prompt carries its dependencies' answers (cut at 1,500 characters). The CLIs run in their own process group, stopped with what they started (Windows: the CLI only, `TODO(M9b)`), and after `task-minutes`.
+  - **Records:** a hash-chained audit log per plan (`harness-<id>`, new `audit::Event::Handoff`: task, kind, backend, model, account, outcome, a redacted detail) and `journal::Event::Handoff` (names and outcomes). Tokens are not journalled again: the CLIs' logs and the agent's usage already reach the command center. Claude Code's cost estimate is shown as an estimate, never counted against the budget.
+  - **CI** (`agents.yml`): a plan through the real CLIs on every platform, against stand-in model servers: Claude Code plans and writes, Codex is refused for the review, which falls back to Claude Code; the log verifies.
+- **Alternatives:** the harness inside termos-ai or termos-center; plans as free text the harness interprets; Claude Code's `--json-schema` or Codex's `--output-schema` for plans (each CLI differently, and API models neither); falling back to another account; a permission prompt through the harness window (`--permission-prompt-tool`), which Codex cannot do headless (D-099).
+
+---
+
 ## Open questions (the owner will be asked before the milestone that needs each one)
 
 | ID | Question | Needed by | Current lean |

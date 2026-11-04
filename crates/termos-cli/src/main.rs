@@ -13,6 +13,7 @@ mod accounts_cmd;
 mod agents;
 mod client;
 mod coding_agents;
+mod harness_cmd;
 mod images;
 mod install;
 #[cfg(all(target_os = "linux", feature = "kms"))]
@@ -190,6 +191,12 @@ enum Cmd {
     Mcp {
         #[command(subcommand)]
         action: agents::McpCmd,
+    },
+    /// The coding harness: one plan over Claude Code, Codex and API
+    /// models, each task routed to the model that suits it.
+    Harness {
+        #[command(subcommand)]
+        action: harness_cmd::HarnessCmd,
     },
     /// TermOS's skills, which teach Claude Code, Codex and the other
     /// coding CLIs to use TermOS.
@@ -420,6 +427,7 @@ fn run_cli(args: impl IntoIterator<Item = String>) -> anyhow::Result<ExitCode> {
         Some(Cmd::Agent { action }) => agents::agent_command(action, &paths, &config_path),
         Some(Cmd::Mcp { action }) => agents::mcp_command(action, &paths, &config_path),
         Some(Cmd::Skills { action }) => skills_cmd::skills_command(action, &paths, &config_path),
+        Some(Cmd::Harness { action }) => harness_cmd::harness_command(action, &paths, &config_path),
         Some(Cmd::Account { wait, action }) => agents::pause(
             *wait,
             accounts_cmd::account_command(action, &paths, &config_path),
@@ -563,6 +571,7 @@ fn run(cli: &Cli, paths: &Paths, config_path: &Path, t: &Target) -> anyhow::Resu
             | Cmd::Agent { .. }
             | Cmd::Mcp { .. }
             | Cmd::Skills { .. }
+            | Cmd::Harness { .. }
             | Cmd::Account { .. }
             | Cmd::Audit { .. }
             | Cmd::Sandbox { .. }

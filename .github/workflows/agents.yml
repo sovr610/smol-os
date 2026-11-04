@@ -12,7 +12,9 @@ name: Agent CLIs
 # starts its MCP servers first). TermOS's skills (M11b, D-098) are
 # installed with them, and each CLI lists them to the model: the
 # stand-in records what each sends (Claude Code gets a short answer, with
-# a fixture key, in each account).
+# a fixture key, in each account). The harness (M11c, D-100) runs a plan
+# through both: Claude Code plans and writes, Codex is tried for the
+# review and refused, and the review falls back to Claude Code.
 # No account and no API key: nothing here signs in. Runs when the
 # installer, the MCP server or the skills change, nightly (the vendors
 # release often) and on demand.
@@ -34,6 +36,8 @@ on:
       - ".github/scripts/refusing-model.py"
       - ".github/scripts/skills-listed.py"
       - ".github/scripts/claude-skills.sh"
+      - "crates/termos-harness/**"
+      - "crates/termos-cli/src/harness_cmd.rs"
       - ".github/workflows/agents.yml"
   workflow_dispatch:
 
@@ -165,6 +169,39 @@ jobs:
           $termos account statusline claude off
           $termos account remove claude second --yes
           $termos account remove codex second --yes
+      - name: The harness runs a plan through Claude Code and Codex
+        env:
+          DISABLE_AUTOUPDATER: "1"
+        run: |
+          termos=target/debug/termos
+          py=$(command -v python3 || command -v python)
+          # Claude Code talks to a stand-in that answers the planner with a
+          # small plan (a fixture key, no account); Codex to one that
+          # refuses (its settings from the step above). The review goes to
+          # Codex first (another backend than the author), fails, and falls
+          # back to Claude Code.
+          "$py" .github/scripts/refusing-model.py 8768 "$RUNNER_TEMP/harness-requests.jsonl" &
+          "$py" .github/scripts/refusing-model.py 8765 &
+          sleep 2
+          mkdir -p "$RUNNER_TEMP/project"
+          $termos harness status --project "$RUNNER_TEMP/project" | tee status.txt
+          grep -q "review → frontier: Claude Code" status.txt
+          ANTHROPIC_BASE_URL=http://127.0.0.1:8768 ANTHROPIC_API_KEY=fixture-key \
+            CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 \
+            $termos harness run --yes --project "$RUNNER_TEMP/project" "write a note" < /dev/null | tee harness.txt
+          grep -q "Plan: Write a note" harness.txt
+          grep '^\[t1\]' harness.txt | grep -q "done in"
+          grep '^\[t2\]' harness.txt | grep -q "Codex CLI: "
+          grep '^\[t2\]' harness.txt | grep -q "done in"
+          grep -q "2 of 2 tasks done" harness.txt
+          # Claude Code was given each task.
+          grep -q "This is task t1 (coding)" "$RUNNER_TEMP/harness-requests.jsonl"
+          grep -q "This is task t2 (review)" "$RUNNER_TEMP/harness-requests.jsonl"
+          # Every hand-off is in a log that verifies.
+          id=$(sed -n 's/^Hand-offs: `termos audit show \(.*\)`$/\1/p' harness.txt)
+          $termos audit show "$id" | tee handoffs.txt
+          grep -q "fell-back\|failed" handoffs.txt
+          $termos audit verify
       - name: Update and remove
         run: |
           termos=target/debug/termos

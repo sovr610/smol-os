@@ -175,7 +175,7 @@ fn a_session_fixes_a_bug_with_approvals() {
         registry: Some(Arc::clone(&registry)),
         provider: None,
         model: None,
-        headless: false,
+        headless: termos_ai::tools::Headless::Off,
     })
     .expect("start");
     let live = registry.list();
@@ -482,7 +482,7 @@ fn headless_launch(
         registry: None,
         provider: None,
         model: model.map(str::to_owned),
-        headless: false,
+        headless: termos_ai::tools::Headless::Off,
     }
 }
 

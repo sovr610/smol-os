@@ -80,6 +80,7 @@ Coding agents use these through TermOS's skills ([skills.md](skills.md)).
 | --- | --- |
 | `tos ai` | A new conversation with TermOS's agent |
 | `tos ai claude`, `tos ai codex`, … | Claude Code, Codex CLI and the other command-line agents of `termos agent presets`, in a window |
+| `tos harness [GOAL…]` | The harness in this pane's folder; with a goal, it plans it ([harness.md](harness.md)) |
 
 ## Everything else
 

@@ -213,6 +213,9 @@ pub enum LaunchKind {
     Center,
     /// The usage app: every agent CLI account (`usage.open`, D-097).
     Usage,
+    /// The coding harness, planning the argument as its goal
+    /// (`harness.open [goal]`, D-100).
+    Harness,
 }
 
 /// What the desktop knows when it opens a launched window.
