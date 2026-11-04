@@ -76,6 +76,17 @@ pub struct Pane {
     pub bell: bool,
     /// A name given with Rename or `tos title`, over the program's own.
     pub name: Option<String>,
+    /// An agent CLI's window: its preset and account (D-097).
+    pub agent: Option<AgentWindow>,
+}
+
+/// What runs in an agent CLI's window.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentWindow {
+    /// `claude`, `codex`, `gemini`, …
+    pub preset: String,
+    /// Its account, for CLIs that have them.
+    pub account: Option<String>,
 }
 
 impl Pane {
@@ -1012,6 +1023,7 @@ impl Desktop {
                 kind: PaneKind::Term { vt, pty },
                 title: String::new(),
                 name: None,
+                agent: None,
                 cwd: None,
                 size: (w, h),
                 bell: false,
@@ -1039,6 +1051,7 @@ impl Desktop {
                 kind: PaneKind::App(app),
                 title: String::new(),
                 name: None,
+                agent: None,
                 cwd: None,
                 size: (0, 0),
                 bell: false,
@@ -1148,23 +1161,165 @@ impl Desktop {
         }
     }
 
+    /// A launch context for the launcher's calls.
+    fn launch_context(
+        &self,
+    ) -> Option<(
+        std::sync::Arc<dyn termos_core::app::Launcher>,
+        Option<PathBuf>,
+    )> {
+        let launcher = self.opts.launcher.clone()?;
+        let cwd = self
+            .focused_cwd()
+            .or_else(|| self.opts.cwd.clone())
+            .or_else(|| std::env::current_dir().ok());
+        Some((launcher, cwd))
+    }
+
+    /// The agent CLIs' accounts (D-097).
+    pub(crate) fn agent_accounts(&self) -> Vec<termos_core::app::AccountInfo> {
+        let Some((launcher, cwd)) = self.launch_context() else {
+            return Vec::new();
+        };
+        let ctx = termos_core::app::LaunchContext {
+            config: &self.config,
+            paths: &self.opts.paths,
+            cwd: cwd.as_deref(),
+            socket: self.opts.server_socket.as_deref(),
+            session: &self.session.name,
+        };
+        launcher.accounts(&ctx)
+    }
+
+    /// `account.use CLI NAME`.
+    fn use_account(&mut self, arg: &str) {
+        let Some((cli, name)) = arg.split_once(' ') else {
+            self.notify(
+                Level::Error,
+                "`account.use` needs a CLI and an account: claude work",
+            );
+            return;
+        };
+        let Some((launcher, cwd)) = self.launch_context() else {
+            self.notify(Level::Error, "accounts are not part of this build");
+            return;
+        };
+        let ctx = termos_core::app::LaunchContext {
+            config: &self.config,
+            paths: &self.opts.paths,
+            cwd: cwd.as_deref(),
+            socket: self.opts.server_socket.as_deref(),
+            session: &self.session.name,
+        };
+        match launcher.use_account(cli.trim(), name.trim(), &ctx) {
+            Ok(said) => self.notify(Level::Info, said),
+            Err(e) => self.notify(Level::Error, e),
+        }
+    }
+
     /// An external CLI agent (`termos agent external NAME`) in a float.
     fn open_external_agent(&mut self, name: &str, area: Rect) {
-        self.open_termos_window(
-            &["agent", "external", name],
-            &format!("agent: {name}"),
+        let account = self
+            .agent_accounts()
+            .into_iter()
+            .find(|a| a.cli == name && a.active)
+            .map(|a| a.name);
+        let cwd = self.focused_cwd();
+        self.open_agent_window(name, account, None, area, cwd);
+    }
+
+    /// An agent window for `preset` as `account`, continuing `resume_from`'s
+    /// conversation in this folder when given.
+    fn open_agent_window(
+        &mut self,
+        preset: &str,
+        account: Option<String>,
+        resume_from: Option<&str>,
+        area: Rect,
+        cwd: Option<PathBuf>,
+    ) -> Option<PaneId> {
+        let mut args = vec!["agent", "external"];
+        if let Some(a) = &account {
+            args.extend(["--account", a]);
+        }
+        if let Some(from) = resume_from {
+            args.extend(["--resume-from", from]);
+        }
+        args.push(preset);
+        let title = match &account {
+            Some(a) if a != "default" => format!("agent: {preset} ({a})"),
+            _ => format!("agent: {preset}"),
+        };
+        let id = self.open_termos_window_in(&args, &title, area, cwd)?;
+        if let Some(p) = self.panes.get_mut(&id) {
+            p.agent = Some(AgentWindow {
+                preset: preset.to_owned(),
+                account,
+            });
+        }
+        Some(id)
+    }
+
+    /// `agent.swap ACCOUNT`: the focused agent window continues its
+    /// conversation as another account, in its place (D-097).
+    fn swap_agent(&mut self, account: &str, area: Rect) {
+        let Some(id) = self.focused() else {
+            return;
+        };
+        let Some(agent) = self.panes.get(&id).and_then(|p| p.agent.clone()) else {
+            self.notify(
+                Level::Error,
+                "`agent.swap` works in a Claude Code or Codex window",
+            );
+            return;
+        };
+        if !self
+            .agent_accounts()
+            .iter()
+            .any(|a| a.cli == agent.preset && a.name == account)
+        {
+            self.notify(
+                Level::Error,
+                format!("{} has no account named {account}", agent.preset),
+            );
+            return;
+        }
+        let from = agent.account.clone().unwrap_or_else(|| "default".into());
+        let rect = self.session.active().float_rect(id);
+        let cwd = self.focused_cwd();
+        // The old window ends first, so its conversation is complete.
+        self.kill_pane(id);
+        if let Some(new) = self.open_agent_window(
+            &agent.preset,
+            Some(account.to_owned()),
+            Some(&from),
             area,
-        );
+            cwd,
+        ) && let Some(r) = rect
+        {
+            self.session.active_mut().set_float_rect(new, r, area);
+        }
     }
 
     /// `termos ARGS` in a float titled `title`, in the focused pane's
     /// folder.
-    fn open_termos_window(&mut self, args: &[&str], title: &str, area: Rect) {
+    fn open_termos_window(&mut self, args: &[&str], title: &str, area: Rect) -> Option<PaneId> {
+        let cwd = self.focused_cwd();
+        self.open_termos_window_in(args, title, area, cwd)
+    }
+
+    /// `termos ARGS` in a float titled `title`, in `cwd`.
+    fn open_termos_window_in(
+        &mut self,
+        args: &[&str],
+        title: &str,
+        area: Rect,
+        cwd: Option<PathBuf>,
+    ) -> Option<PaneId> {
         let Some(exe) = self.termos_exe() else {
             self.notify(Level::Error, "cannot find the termos program");
-            return;
+            return None;
         };
-        let cwd = self.focused_cwd();
         let program = exe.display().to_string();
         let args = args.iter().map(|a| (*a).to_owned()).collect();
         match self.spawn_pane(
@@ -1178,8 +1333,12 @@ impl Desktop {
                 }
                 self.session.active_mut().add_float(id, area);
                 self.animate(anim::Kind::FloatOpen(id), Instant::now());
+                Some(id)
             }
-            Err(e) => self.notify(Level::Error, format!("cannot start {title}: {e}")),
+            Err(e) => {
+                self.notify(Level::Error, format!("cannot start {title}: {e}"));
+                None
+            }
         }
     }
 
@@ -2164,11 +2323,15 @@ impl Desktop {
             Command::AuditOpen(arg) => self.launch(termos_core::app::LaunchKind::Audit, &arg),
             Command::CenterOpen => self.launch(termos_core::app::LaunchKind::Center, ""),
             Command::AgentExternal(name) => self.open_external_agent(&name, area),
-            Command::AgentInstall(name) => self.open_termos_window(
-                &["agent", "install", &name, "--wait"],
-                &format!("install {name}"),
-                area,
-            ),
+            Command::AgentInstall(name) => {
+                self.open_termos_window(
+                    &["agent", "install", &name, "--wait"],
+                    &format!("install {name}"),
+                    area,
+                );
+            }
+            Command::AccountUse(arg) => self.use_account(&arg),
+            Command::AgentSwap(account) => self.swap_agent(&account, area),
             Command::AgentUpdate => {
                 self.open_termos_window(&["agent", "update", "--wait"], "agent updates", area);
             }

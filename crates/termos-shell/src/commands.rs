@@ -105,6 +105,11 @@ pub enum Command {
     AgentInstall(String),
     /// Update the CLI agents TermOS installed.
     AgentUpdate,
+    /// Make an account the one a CLI uses: "claude work" (D-097).
+    AccountUse(String),
+    /// Continue the focused agent window's conversation as another
+    /// account (D-097).
+    AgentSwap(String),
     /// The agents' audit logs (empty: the newest).
     AuditOpen(String),
     /// The command center (D-093).
@@ -277,6 +282,16 @@ pub const COMMANDS: &[CommandInfo] = &[
         arg: Some("claude"),
     },
     info("agent.update", "Update Claude Code and Codex CLI"),
+    CommandInfo {
+        name: "account.use",
+        description: "Use another Claude Code or Codex account",
+        arg: Some("claude work"),
+    },
+    CommandInfo {
+        name: "agent.swap",
+        description: "Continue this agent window as another account",
+        arg: Some("work"),
+    },
     info("audit.open", "AI agent audit logs"),
     info(
         "center.open",
@@ -351,6 +366,18 @@ impl FromStr for Command {
     type Err = CommandError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
+        // Two words: the CLI and the account (D-097).
+        if let Some(rest) = s.trim_start().strip_prefix("account.use")
+            && (rest.is_empty() || rest.starts_with(char::is_whitespace))
+        {
+            let words: Vec<&str> = rest.split_whitespace().collect();
+            return match words.as_slice() {
+                [cli, name] => Ok(Command::AccountUse(format!("{cli} {name}"))),
+                _ => Err(CommandError(
+                    "`account.use` needs a CLI and an account: claude work".into(),
+                )),
+            };
+        }
         // A path is the rest of the line, spaces and all.
         for (name, optional) in PATH_COMMANDS {
             if let Some(rest) = s.trim_start().strip_prefix(name)
@@ -484,6 +511,10 @@ impl FromStr for Command {
                 )),
             },
             "agent.update" => no_arg(Command::AgentUpdate),
+            "agent.swap" => match arg {
+                Some(a) => Ok(Command::AgentSwap(a.trim().to_owned())),
+                None => Err(CommandError("`agent.swap` needs an account name".into())),
+            },
             "audit.open" => Ok(Command::AuditOpen(arg.unwrap_or("").to_owned())),
             "center.open" => no_arg(Command::CenterOpen),
             "network.open" => no_arg(Command::NetworkOpen),
@@ -595,6 +626,8 @@ impl fmt::Display for Command {
             Command::AgentExternal(n) => write!(f, "agent.external {n}"),
             Command::AgentInstall(n) => write!(f, "agent.install {n}"),
             Command::AgentUpdate => f.write_str("agent.update"),
+            Command::AccountUse(a) => write!(f, "account.use {a}"),
+            Command::AgentSwap(a) => write!(f, "agent.swap {a}"),
             Command::AuditOpen(id) if id.is_empty() => f.write_str("audit.open"),
             Command::AuditOpen(id) => write!(f, "audit.open {id}"),
             Command::CenterOpen => f.write_str("center.open"),

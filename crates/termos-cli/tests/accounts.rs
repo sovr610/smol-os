@@ -241,3 +241,74 @@ fn the_shim_runs_the_cli_as_the_account() {
     assert_eq!(out.status.code(), Some(127));
     assert!(String::from_utf8_lossy(&out.stderr).contains("no Claude Code account named nope"));
 }
+
+/// Switching an agent window's account carries its conversation: the
+/// newest one for the folder is copied into the other account, and the
+/// CLI starts resuming it there.
+#[test]
+fn a_conversation_continues_under_another_account() {
+    let w = world();
+    let env = &w.env;
+    run(env, &["account", "add", "claude", "work", "--no-sign-in"]);
+    let here = env.path().canonicalize().expect("canonical");
+    let folder: String = here
+        .to_string_lossy()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect();
+    let mine = env.path().join(".claude/projects").join(&folder);
+    std::fs::create_dir_all(&mine).expect("mkdir");
+    std::fs::write(mine.join("conv-1.jsonl"), "{\"type\":\"user\"}\n").expect("write");
+
+    run(
+        env,
+        &[
+            "agent",
+            "external",
+            "--account",
+            "work",
+            "--resume-from",
+            "default",
+            "claude",
+        ],
+    );
+    let data = env.paths().data_dir;
+    let carried = data
+        .join("accounts/claude/work/projects")
+        .join(&folder)
+        .join("conv-1.jsonl");
+    assert!(carried.exists(), "copied into the other account");
+    assert!(mine.join("conv-1.jsonl").exists(), "and kept in the first");
+    let calls = std::fs::read_to_string(&w.calls).expect("calls");
+    let last = calls.lines().last().expect("ran");
+    assert_eq!(
+        last,
+        format!(
+            "claude {} --resume {}",
+            data.join("accounts/claude/work").display(),
+            carried.display()
+        )
+    );
+
+    // Nothing to continue in a folder without a conversation: a new one.
+    let other = tempfile::tempdir().expect("tempdir");
+    let out = env.run_in(
+        other.path(),
+        &[
+            "agent",
+            "external",
+            "--account",
+            "work",
+            "--resume-from",
+            "default",
+            "claude",
+        ],
+    );
+    assert!(out.status.success());
+    assert!(String::from_utf8_lossy(&out.stdout).contains("starting a new one"));
+    let calls = std::fs::read_to_string(&w.calls).expect("calls");
+    assert!(
+        calls.lines().last().expect("ran").ends_with("claude/work "),
+        "{calls}"
+    );
+}

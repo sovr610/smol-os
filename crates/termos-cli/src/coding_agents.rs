@@ -446,6 +446,54 @@ fn tool_supported(tool: Tool, p: Platform) -> bool {
     }
 }
 
+/// The arguments that continue `cwd`'s latest conversation of account
+/// `from` in `launch`'s account (copied there first), D-097; none when
+/// there is nothing to continue.
+pub(crate) fn continue_args(
+    paths: &Paths,
+    launch: &crate::shim::Launch,
+    from: &str,
+    cwd: &Path,
+) -> anyhow::Result<Vec<String>> {
+    use termos_devkit::conversations;
+    let Some(to) = &launch.account else {
+        return Ok(Vec::new());
+    };
+    let home = home();
+    let source = accounts(paths)?
+        .get(to.tool, from)
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    let (Some(from_home), Some(to_home)) = (
+        source.home(&env, home.as_deref()),
+        to.home(&env, home.as_deref()),
+    ) else {
+        return Ok(Vec::new());
+    };
+    let Some(c) = conversations::latest(to.tool, &from_home, cwd) else {
+        say(&format!(
+            "{} has no conversation in this folder to continue; starting a new one",
+            describe(&source)
+        ));
+        return Ok(Vec::new());
+    };
+    let c = if from_home == to_home {
+        c
+    } else {
+        if to.tool == Tool::Codex {
+            // Codex wants the folder to exist before it starts.
+            std::fs::create_dir_all(&to_home)?;
+        }
+        let carried = conversations::carry(&c, &from_home, &to_home)?;
+        say(&format!(
+            "continuing {}'s conversation as {}",
+            describe(&source),
+            describe(to)
+        ));
+        carried
+    };
+    Ok(conversations::resume_args(&c))
+}
+
 /// The program and environment for an external agent preset whose
 /// program is `program`: for Claude Code and Codex, the real program as
 /// `account` (else the pinned one, else the one in use, D-097); when it

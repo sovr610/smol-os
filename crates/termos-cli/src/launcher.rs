@@ -10,8 +10,10 @@ use termos_ai::registry::Registry;
 use termos_ai::ui::AgentLauncher;
 use termos_center::app::Agents;
 use termos_center::data::{Gather, Live};
-use termos_core::app::{App, LaunchContext, LaunchKind, Launcher};
+use termos_core::app::{AccountInfo, App, LaunchContext, LaunchKind, Launcher};
 use termos_core::journal::Journal;
+use termos_devkit::accounts::Accounts;
+use termos_devkit::cli_agents::Tool;
 
 /// Every launched window of the `termos` binary.
 pub(crate) struct Windows {
@@ -43,5 +45,40 @@ impl Launcher for Windows {
             }
             _ => self.agents.open(kind, arg, ctx),
         }
+    }
+
+    fn accounts(&self, ctx: &LaunchContext<'_>) -> Vec<AccountInfo> {
+        let Ok(all) = Accounts::load(&ctx.paths.data_dir) else {
+            return Vec::new();
+        };
+        Tool::ALL
+            .into_iter()
+            .flat_map(|tool| {
+                let active = all.active(tool).name;
+                all.list(tool).into_iter().map(move |a| AccountInfo {
+                    cli: tool.name().to_owned(),
+                    cli_title: tool.title().to_owned(),
+                    title: a.title(),
+                    active: a.name == active,
+                    name: a.name,
+                })
+            })
+            .collect()
+    }
+
+    fn use_account(
+        &self,
+        cli: &str,
+        name: &str,
+        ctx: &LaunchContext<'_>,
+    ) -> Result<String, String> {
+        let tool = Tool::from_name(cli).ok_or_else(|| format!("no accounts for {cli}"))?;
+        let mut all = Accounts::load(&ctx.paths.data_dir).map_err(|e| e.to_string())?;
+        let a = all.use_account(tool, name).map_err(|e| e.to_string())?;
+        Ok(format!(
+            "{}: {} is in use for new windows",
+            tool.title(),
+            a.title()
+        ))
     }
 }

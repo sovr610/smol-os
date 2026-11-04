@@ -148,7 +148,9 @@ fn command_icon(c: &Command) -> Option<Icon> {
         | Command::AgentResume(_)
         | Command::AgentExternal(_)
         | Command::AgentInstall(_)
-        | Command::AgentUpdate => Icon::Agent,
+        | Command::AgentUpdate
+        | Command::AccountUse(_)
+        | Command::AgentSwap(_) => Icon::Agent,
         Command::AuditOpen(_) => Icon::Audit,
         Command::CenterOpen => Icon::Center,
         _ => return None,

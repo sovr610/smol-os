@@ -15,6 +15,7 @@
 pub mod accounts;
 pub mod check;
 pub mod cli_agents;
+pub mod conversations;
 pub mod editor;
 pub mod lang;
 pub mod langs;

@@ -66,6 +66,10 @@ pub(crate) enum AgentCmd {
         /// use).
         #[arg(long)]
         account: Option<String>,
+        /// Continue this folder's latest conversation from that account
+        /// (switching accounts, D-097).
+        #[arg(long)]
+        resume_from: Option<String>,
         name: String,
         /// Arguments for the agent.
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
@@ -406,9 +410,19 @@ pub(crate) fn agent_command(
         AgentCmd::Status => return crate::coding_agents::status(paths),
         AgentCmd::External {
             account,
+            resume_from,
             name,
             args,
-        } => return external_command(&config, paths, name, account.as_deref(), args),
+        } => {
+            return external_command(
+                &config,
+                paths,
+                name,
+                account.as_deref(),
+                resume_from.as_deref(),
+                args,
+            );
+        }
     }
     Ok(ExitCode::SUCCESS)
 }
@@ -433,6 +447,7 @@ fn external_command(
     paths: &Paths,
     name: &str,
     account: Option<&str>,
+    resume_from: Option<&str>,
     args: &[String],
 ) -> anyhow::Result<ExitCode> {
     let presets = external::presets(&config.agents.external);
@@ -451,6 +466,12 @@ fn external_command(
         && let Some(launch) =
             crate::coding_agents::resolve_external(paths, config, program, account)?
     {
+        if let Some(from) = resume_from {
+            let here = std::env::current_dir()?;
+            preset.command.extend(crate::coding_agents::continue_args(
+                paths, &launch, from, &here,
+            )?);
+        }
         preset.command[0] = launch.program.display().to_string();
         env = launch.env;
     }

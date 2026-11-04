@@ -60,10 +60,33 @@ impl Desktop {
                 .iter()
                 .map(|(name, title)| Entry::item(*title, Command::AgentExternal((*name).into()))),
         );
-        agents.extend([
-            Entry::Separator,
-            Entry::item("Update Claude Code and Codex", Command::AgentUpdate),
-        ]);
+        // Accounts (D-097): switch which one new windows use.
+        let accounts = self.agent_accounts();
+        let mut switch: Vec<Entry> = Vec::new();
+        for cli in ["claude", "codex"] {
+            let mine: Vec<_> = accounts.iter().filter(|a| a.cli == cli).collect();
+            if mine.len() < 2 {
+                continue;
+            }
+            if !switch.is_empty() {
+                switch.push(Entry::Separator);
+            }
+            for a in mine {
+                let mark = if a.active { "●" } else { " " };
+                switch.push(Entry::item(
+                    format!("{mark} {}: {}", a.cli_title, a.title),
+                    Command::AccountUse(format!("{} {}", a.cli, a.name)),
+                ));
+            }
+        }
+        agents.push(Entry::Separator);
+        if !switch.is_empty() {
+            agents.push(Entry::submenu("Accounts", switch).icon(Icon::Agent));
+        }
+        agents.push(Entry::item(
+            "Update Claude Code and Codex",
+            Command::AgentUpdate,
+        ));
         let layouts = Preset::ALL
             .into_iter()
             .map(|p| Entry::item(capitalized(p.name()), Command::LayoutSelect(p)))
@@ -193,6 +216,25 @@ impl Desktop {
             v.push(Entry::item("Float", Command::ToggleFloat));
         }
         v.push(Entry::item("Rename", Command::PaneRename));
+        // An agent CLI's window: continue it as another account (D-097).
+        if let Some(agent) = self.panes.get(&pane).and_then(|p| p.agent.clone()) {
+            let current = agent.account.unwrap_or_else(|| "default".into());
+            let others: Vec<Entry> = self
+                .agent_accounts()
+                .into_iter()
+                .filter(|a| a.cli == agent.preset && a.name != current)
+                .map(|a| {
+                    Entry::item(
+                        format!("Continue as {}", a.title),
+                        Command::AgentSwap(a.name),
+                    )
+                })
+                .collect();
+            if !others.is_empty() {
+                v.push(Entry::Separator);
+                v.extend(others);
+            }
+        }
         if is_term {
             v.push(Entry::item(
                 "Browse this folder",

@@ -76,7 +76,7 @@ impl Harness {
             .expect("valid");
             std::fs::write(config.join("wall.png"), pic.to_png()).expect("write");
         }
-        Self::build_in(dir, "", false, animations, None, ui)
+        Self::build_in(dir, "", false, animations, None, ui, None)
     }
 
     fn build_ui(
@@ -87,7 +87,26 @@ impl Harness {
         ui: &str,
     ) -> Self {
         let dir = tempfile::tempdir().expect("tempdir");
-        Self::build_in(dir, extra, tutorial, animations, termos_exe, ui)
+        Self::build_in(dir, extra, tutorial, animations, termos_exe, ui, None)
+    }
+
+    /// A harness whose panes run `exe` for `termos` subcommands, with a
+    /// launcher (the `termos` binary's, faked).
+    #[cfg(unix)]
+    fn with_launcher(
+        exe: PathBuf,
+        launcher: std::sync::Arc<dyn termos_core::app::Launcher>,
+    ) -> Self {
+        let dir = tempfile::tempdir().expect("tempdir");
+        Self::build_in(
+            dir,
+            "",
+            false,
+            false,
+            Some(exe),
+            "splash = false",
+            Some(launcher),
+        )
     }
 
     fn build_in(
@@ -97,6 +116,7 @@ impl Harness {
         animations: bool,
         termos_exe: Option<PathBuf>,
         ui: &str,
+        launcher: Option<std::sync::Arc<dyn termos_core::app::Launcher>>,
     ) -> Self {
         let paths = Paths {
             config_dir: dir.path().join("config"),
@@ -131,7 +151,7 @@ impl Harness {
             pane_ids: termos_core::ids::PaneIds::new(),
             pane_env: common::pane_env(),
             cwd: None,
-            launcher: None,
+            launcher,
             server_socket: None,
         };
         let mut desktop = Desktop::new(opts, config, tx, COLS, ROWS).expect("desktop starts");
@@ -636,6 +656,93 @@ async fn task_panels_and_git_run_termos() {
     h.keys("C-b g");
     h.wait_text("stub-termos git").await;
     assert_eq!(h.panes().len(), 4);
+}
+
+/// Accounts of Claude Code, as the `termos` binary's launcher lists them
+/// (D-097).
+#[cfg(unix)]
+struct TwoAccounts(std::sync::Mutex<String>);
+
+#[cfg(unix)]
+impl termos_core::app::Launcher for TwoAccounts {
+    fn open(
+        &self,
+        _kind: termos_core::app::LaunchKind,
+        _arg: &str,
+        _ctx: &termos_core::app::LaunchContext<'_>,
+    ) -> Result<Box<dyn termos_core::app::App>, String> {
+        Err("no windows here".into())
+    }
+
+    fn accounts(
+        &self,
+        _ctx: &termos_core::app::LaunchContext<'_>,
+    ) -> Vec<termos_core::app::AccountInfo> {
+        let active = self.0.lock().expect("lock").clone();
+        ["default", "work"]
+            .iter()
+            .map(|n| termos_core::app::AccountInfo {
+                cli: "claude".into(),
+                cli_title: "Claude Code".into(),
+                name: (*n).into(),
+                title: if *n == "work" {
+                    "Work (Max)".into()
+                } else {
+                    (*n).into()
+                },
+                active: *n == active,
+            })
+            .collect()
+    }
+
+    fn use_account(
+        &self,
+        _cli: &str,
+        name: &str,
+        _ctx: &termos_core::app::LaunchContext<'_>,
+    ) -> Result<String, String> {
+        *self.0.lock().expect("lock") = name.to_owned();
+        Ok(format!("Claude Code: {name} is in use for new windows"))
+    }
+}
+
+/// An agent window runs as the account in use and continues as another
+/// in its place; the menu lists the accounts.
+#[cfg(unix)]
+#[tokio::test]
+async fn agent_windows_switch_accounts() {
+    use std::os::unix::fs::PermissionsExt;
+    use termos_shell::commands::Command;
+
+    let stub_dir = tempfile::tempdir().expect("tempdir");
+    let stub = stub_dir.path().join("termos");
+    std::fs::write(&stub, "#!/bin/sh\necho \"stub-termos $*\"\nsleep 30\n").expect("write");
+    std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+    let launcher = std::sync::Arc::new(TwoAccounts(std::sync::Mutex::new("default".into())));
+    let mut h = Harness::with_launcher(stub, launcher.clone());
+
+    h.desktop.run(Command::AgentExternal("claude".into()));
+    h.wait_text("stub-termos agent external --account default claude")
+        .await;
+    let before = h.panes().len();
+    h.desktop.run(Command::AgentSwap("work".into()));
+    h.wait_text("--account work --resume-from default").await;
+    assert_eq!(h.panes().len(), before, "in its place");
+    h.wait_text("agent: claude (work)").await;
+    h.desktop.run(Command::AgentSwap("nope".into()));
+    h.wait_text("claude has no account named nope").await;
+
+    h.desktop.run(Command::AccountUse("claude work".into()));
+    h.wait_text("work is in use").await;
+    assert_eq!(*launcher.0.lock().expect("lock"), "work");
+
+    // The menu: AI agents → Accounts, the one in use marked.
+    h.keys("C-b Enter");
+    h.wait_text("AI agents").await;
+    h.keys("Down Down Down Down Right");
+    h.wait_text("Update Claude Code and Codex").await;
+    let screen = h.screen();
+    assert!(screen.contains("Accounts"), "{screen}");
 }
 
 #[tokio::test]

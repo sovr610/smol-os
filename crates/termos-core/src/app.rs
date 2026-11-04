@@ -160,6 +160,37 @@ pub trait Launcher: Send + Sync {
         arg: &str,
         ctx: &LaunchContext<'_>,
     ) -> Result<Box<dyn App>, String>;
+
+    /// The agent CLIs' accounts, for the menus (D-097): each CLI's
+    /// `default` first.
+    fn accounts(&self, _ctx: &LaunchContext<'_>) -> Vec<AccountInfo> {
+        Vec::new()
+    }
+
+    /// Makes `name` the account `cli` uses from now on; what to tell the
+    /// user.
+    fn use_account(
+        &self,
+        cli: &str,
+        _name: &str,
+        _ctx: &LaunchContext<'_>,
+    ) -> Result<String, String> {
+        Err(format!("{cli} has no accounts here"))
+    }
+}
+
+/// An account of an agent CLI (Claude Code, Codex), for the menus.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AccountInfo {
+    /// `claude`, `codex`.
+    pub cli: String,
+    /// "Claude Code".
+    pub cli_title: String,
+    pub name: String,
+    /// Its label, else its name.
+    pub title: String,
+    /// The one in use.
+    pub active: bool,
 }
 
 impl std::fmt::Debug for dyn Launcher {
