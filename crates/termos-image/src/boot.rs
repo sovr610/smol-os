@@ -200,6 +200,8 @@ pub struct Report {
     pub slot: Option<serial::Slot>,
     /// curl's version line (D-109).
     pub curl: Option<String>,
+    /// Whether the desktop's user can make the dev rootfs (D-110).
+    pub devroot: Option<String>,
     /// The end of the serial log, shown when something failed.
     pub tail: String,
 }
@@ -448,6 +450,7 @@ pub fn boot(images: &Path, t: &Target, firmware: Firmware, dir: &Path) -> Result
         data_kb,
         slot: serial::slot(&log),
         curl: serial::curl(&log),
+        devroot: serial::devroot(&log),
         tail: serial::tail(&log, 40),
     })
 }
@@ -476,6 +479,12 @@ impl Report {
             Some(c) if c.starts_with("curl ") && c.contains("mbedTLS/") => {}
             Some(c) => p.push(format!("curl is not the image's mbedTLS build: {c}")),
             None => p.push("no TERMOS-CURL report".into()),
+        }
+        // The dev rootfs needs user namespaces with subordinate IDs.
+        match &self.devroot {
+            Some(d) if d == "bubblewrap: ready" => {}
+            Some(d) => p.push(format!("the dev rootfs cannot run: {d}")),
+            None => p.push("no TERMOS-DEVROOT report".into()),
         }
         match &self.slot {
             Some(s) if s.good => {}

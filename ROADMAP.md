@@ -1051,5 +1051,5 @@ Generated from the `TODO(M<n>)` markers in the code. Don't edit by hand; run `ca
 | Milestone | Where | What |
 | --- | --- | --- |
 | M5b | `crates/termos-apps/src/lib.rs` | package manager UI over mise, the dev rootfs and the host package manager. |
-| M5b | `crates/termos-devkit/src/lib.rs` | dev rootfs, Podman and the package manager UI. |
+| M5b | `crates/termos-devkit/src/lib.rs` | the package manager app over mise, the dev rootfs, the host and Podman. |
 <!-- open-work:end -->

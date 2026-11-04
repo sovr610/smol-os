@@ -75,13 +75,17 @@ jobs:
       # The bare-metal console (`kms` feature, D-073) links libinput,
       # libudev, libxkbcommon and libseat, and its tests compile real XKB
       # keymaps (xkb-data).
-      - name: Agent sandbox and console libraries (Linux)
+      # The dev rootfs (D-110) adds shadow's newuidmap (uidmap) and a range
+      # of subordinate IDs for the runner; its test then must run too.
+      - name: Agent sandbox, dev rootfs and console libraries (Linux)
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq bubblewrap libinput-dev libudev-dev libxkbcommon-dev libseat-dev xkb-data
+          sudo apt-get install -y -qq bubblewrap uidmap libinput-dev libudev-dev libxkbcommon-dev libseat-dev xkb-data
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          grep -q "^$(id -un):" /etc/subuid || sudo usermod --add-subuids 100000-165535 --add-subgids 100000-165535 "$(id -un)"
           echo "TERMOS_REQUIRE_SANDBOX=1" >> "$GITHUB_ENV"
+          echo "TERMOS_REQUIRE_DEVROOT=1" >> "$GITHUB_ENV"
       # Clippy runs on every platform so cfg-gated (Linux-only / macOS-only
       # / Windows-only) code is linted where it compiles.
       - name: clippy
@@ -345,6 +349,31 @@ jobs:
     with:
       languages: '["rust", "python", "go"]'
       runners: '["ubuntu-24.04"]'
+
+  # The dev rootfs for real (M5b, D-110): Debian 13's pinned layer,
+  # created, entered, a package installed with apt, upgraded and deleted,
+  # on both architectures.
+  devroot:
+    name: Dev rootfs (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-24.04-arm]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - name: bubblewrap, uidmap, subordinate IDs, user namespaces
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq bubblewrap uidmap
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          grep -q "^$(id -un):" /etc/subuid || sudo usermod --add-subuids 100000-165535 --add-subgids 100000-165535 "$(id -un)"
+      - name: Build
+        run: cargo build --locked -p termos-cli
+      - name: Dev rootfs end to end
+        run: ./.github/scripts/devroot-e2e.sh target/debug/termos
 
   widget-sample:
     name: WASM widget sample (built from source)

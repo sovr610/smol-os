@@ -18,6 +18,8 @@ cfg=/sys/firmware/qemu_fw_cfg/by_name/opt/termos
 	df -kP /data | awk 'NR == 2 { printf "TERMOS-DATA size_kb=%d\n", $2 }' >/dev/console
 	# The HTTPS client TermOS downloads with (D-109).
 	echo "TERMOS-CURL $(curl --version 2>&1 | head -n 1)" >/dev/console
+	# Whether the desktop's user can make the dev rootfs (D-110).
+	echo "TERMOS-DEVROOT $(su -s /bin/sh -c 'termos devroot status' termos 2>&1 | grep bubblewrap:)" >/dev/console
 	if [ -r "$cfg/boottest-update/raw" ]; then
 		url=$(cat "$cfg/boottest-update/raw")
 		# The bundle comes over the network: wait for DHCP's default

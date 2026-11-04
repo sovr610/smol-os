@@ -64,4 +64,13 @@ BR2_PACKAGE_UTIL_LINUX=y
 BR2_PACKAGE_UTIL_LINUX_BINARIES=y
 BR2_PACKAGE_UTIL_LINUX_PARTX=y
 BR2_PACKAGE_E2FSPROGS_RESIZE2FS=y
+
+# The dev rootfs (D-109, D-110): bubblewrap, util-linux's unshare, and
+# shadow's newuidmap and newgidmap, which map the user's subordinate IDs
+# (/etc/subuid, /etc/subgid). bubblewrap also gives agents' commands their
+# sandbox (D-061).
+BR2_PACKAGE_BUBBLEWRAP=y
+BR2_PACKAGE_UTIL_LINUX_UNSHARE=y
+BR2_PACKAGE_SHADOW=y
+BR2_PACKAGE_SHADOW_SUBORDINATE_IDS=y
 BR2_PACKAGE_ZSTD=y

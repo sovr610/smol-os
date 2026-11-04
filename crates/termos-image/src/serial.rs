@@ -5,7 +5,8 @@
 //! once the desktop has settled; `TERMOS-SLOT slot=… version=… good|bad`
 //! when the booted slot is marked; `TERMOS-UPDATE installed into slot …`
 //! after `termos update install`; `TERMOS-CURL` and curl's version line
-//! (D-109).
+//! (D-109); `TERMOS-DEVROOT` and whether the dev rootfs can be made
+//! (D-110).
 
 /// The console's first frame is up.
 pub const READY: &str = "TERMOS-READY";
@@ -53,10 +54,21 @@ pub fn data_kb(log: &str) -> Option<u64> {
 /// curl's version line after `READY` (`curl 8.… (…) libcurl/8.… mbedTLS/…`),
 /// or what the shell said instead.
 pub fn curl(log: &str) -> Option<String> {
+    report(log, "TERMOS-CURL ")
+}
+
+/// `termos devroot status`'s bubblewrap line after `READY`
+/// (`bubblewrap: ready`, or why not).
+pub fn devroot(log: &str) -> Option<String> {
+    report(log, "TERMOS-DEVROOT ")
+}
+
+/// The rest of the first `tag` line after `READY`.
+fn report(log: &str, tag: &str) -> Option<String> {
     let after = &log[ready(log)?..];
     after
         .lines()
-        .find_map(|l| l.split_once("TERMOS-CURL "))
+        .find_map(|l| l.split_once(tag))
         .map(|(_, v)| v.trim().to_owned())
 }
 
@@ -163,6 +175,8 @@ mod tests {
         let curl_log = "TERMOS-READY\nTERMOS-CURL curl 8.17.0 (aarch64-buildroot-linux-gnu) libcurl/8.17.0 mbedTLS/3.6.5\r\n";
         assert!(curl(curl_log).is_some_and(|c| c.contains("mbedTLS/")));
         assert_eq!(curl("TERMOS-CURL curl 8\n"), None, "only after READY");
+        let devroot_log = "TERMOS-READY\nTERMOS-DEVROOT   bubblewrap: ready\n";
+        assert_eq!(devroot(devroot_log).as_deref(), Some("bubblewrap: ready"));
     }
 
     #[test]

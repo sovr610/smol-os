@@ -43,6 +43,8 @@ alacritty_terminal = "=0.26.0"
 anyhow = "1.0.104"
 base64 = "0.23.1"
 flate2 = "1.1.10"
+# The dev rootfs: unpacking the image's layer (D-110).
+tar = { version = "0.4.46", default-features = false }
 bitflags = "2.13.2"
 clap = { version = "4.6.7", features = ["derive"] }
 compact_str = "0.10.0"
