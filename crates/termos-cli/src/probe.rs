@@ -20,59 +20,45 @@ pub(crate) fn timeout(remote: bool) -> Duration {
 /// Whether to probe at all: `TERMOS_PROBE=0` turns it off (for terminals
 /// that print queries they don't understand).
 pub(crate) fn enabled(get: impl Fn(&str) -> Option<String>) -> bool {
-    cfg!(unix) && get("TERMOS_PROBE").as_deref() != Some("0")
+    get("TERMOS_PROBE").as_deref() != Some("0")
 }
 
 /// Sends the queries and collects replies. The terminal must be in raw
-/// mode. Returns the raw bytes too, for `termos debug caps --raw`.
-#[cfg(unix)]
+/// mode (and, on Windows, VT input mode). Returns the raw bytes too, for
+/// `termos debug caps --raw`.
 pub(crate) fn run(out: &mut impl Write, timeout: Duration) -> io::Result<(Replies, Vec<u8>)> {
-    use std::os::fd::AsFd as _;
     use std::time::Instant;
 
-    use rustix::event::{PollFd, PollFlags, Timespec, poll};
     use termos_render::probe::{QUERIES, parse_replies};
 
+    use crate::term_input::{Piece, Source as _, Wait};
+
+    let (mut source, _stop) = crate::term_input::open()?;
     out.write_all(QUERIES.as_bytes())?;
     out.flush()?;
-    let stdin = io::stdin();
-    let fd = stdin.as_fd();
     let deadline = Instant::now() + timeout;
     let mut raw = Vec::new();
-    let mut chunk = [0u8; 4096];
+    let mut pieces = Vec::new();
     loop {
         let left = deadline.saturating_duration_since(Instant::now());
         if left.is_zero() {
             break;
         }
-        let wait = Timespec::try_from(left).map_err(io::Error::other)?;
-        let mut fds = [PollFd::new(&fd, PollFlags::IN)];
-        match poll(&mut fds, Some(&wait)) {
-            Ok(0) => break,
-            Ok(_) => {}
-            Err(rustix::io::Errno::INTR) => continue,
-            Err(e) => return Err(e.into()),
+        match source.wait(Some(left))? {
+            Wait::Ready => {}
+            Wait::Timeout | Wait::Stopped => break,
         }
-        match rustix::io::read(fd, &mut chunk) {
-            Ok(0) => break,
-            Ok(n) => {
-                raw.extend_from_slice(&chunk[..n]);
-                if parse_replies(&raw).complete() {
-                    break;
-                }
+        let open = source.read(&mut pieces)?;
+        for piece in pieces.drain(..) {
+            if let Piece::Bytes(b) = piece {
+                raw.extend_from_slice(&b);
             }
-            Err(rustix::io::Errno::INTR | rustix::io::Errno::AGAIN) => {}
-            Err(e) => return Err(e.into()),
+        }
+        if !open || parse_replies(&raw).complete() {
+            break;
         }
     }
     Ok((parse_replies(&raw), raw))
-}
-
-#[cfg(not(unix))]
-pub(crate) fn run(_out: &mut impl Write, _timeout: Duration) -> io::Result<(Replies, Vec<u8>)> {
-    // Windows consoles deliver input as key events, not bytes: detection
-    // there is from the environment (and TERMOS_GRAPHICS) only.
-    Ok((Replies::default(), Vec::new()))
 }
 
 /// Keys typed while the probe ran, as key messages. Plain characters,
@@ -137,6 +123,6 @@ mod tests {
     fn switches() {
         assert!(timeout(true) > timeout(false));
         assert!(!enabled(|k| (k == "TERMOS_PROBE").then(|| "0".to_owned())));
-        assert_eq!(enabled(|_| None), cfg!(unix));
+        assert!(enabled(|_| None));
     }
 }

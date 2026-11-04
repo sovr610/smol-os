@@ -6,6 +6,8 @@
 //! `BSpace`, `PPage`/`PageUp`, `NPage`/`PageDown`, `Home`, `End`, `IC`
 //! (Insert), `DC` (Delete), `F1`–`F12`, and any single character (`%`, `"`).
 
+pub mod decode;
+
 use std::fmt;
 use std::str::FromStr;
 

@@ -25,6 +25,7 @@ mod probe;
 mod shadow;
 mod shim;
 mod skills_cmd;
+mod term_input;
 mod tos;
 mod tryboot;
 mod update;
@@ -594,7 +595,9 @@ fn debug_caps(raw: bool) -> anyhow::Result<ExitCode> {
     let mut stdout = std::io::stdout();
     crossterm::terminal::enable_raw_mode().context("cannot set up the terminal")?;
     // A generous timeout: this is for finding out, not for speed.
-    let probed = probe::run(&mut stdout, Duration::from_secs(2));
+    let probed = term_input::enable_vt_input()
+        .and_then(|()| probe::run(&mut stdout, Duration::from_secs(2)));
+    term_input::restore_console();
     let _ = crossterm::terminal::disable_raw_mode();
     let (replies, bytes) = probed.context("probing the terminal failed")?;
     caps.apply_replies(&replies);
@@ -602,7 +605,7 @@ fn debug_caps(raw: bool) -> anyhow::Result<ExitCode> {
         caps.derive_cell_px(cols, rows);
     }
     if !probe::enabled(env) {
-        println!("note: the probe is off here (TERMOS_PROBE=0, or Windows); environment only");
+        println!("note: the probe is off here (TERMOS_PROBE=0); environment only");
     } else if !replies.complete() {
         println!("note: no DA1 reply within 2 s; the replies below may be incomplete");
     }
@@ -1014,15 +1017,13 @@ fn debug_connect(addr: &str) -> anyhow::Result<ExitCode> {
     }
 }
 
-/// `termos debug keys`: the key events the client gets, in the same
-/// terminal modes and through the same event stream as when attached, so
-/// a key the terminal loses or repeats shows here.
+/// `termos debug keys`: the bytes the terminal sends and what the client
+/// decodes them into, in the same terminal modes and through the same
+/// reader as when attached, so a key the terminal loses or repeats shows
+/// here.
 fn debug_keys() -> anyhow::Result<ExitCode> {
-    use crossterm::event::{
-        DisableFocusChange, DisableMouseCapture, EnableFocusChange, EnableMouseCapture, Event,
-        EventStream, KeyCode, KeyModifiers,
-    };
-    use futures_util::StreamExt;
+    use term_input::Incoming;
+    use termos_core::input::decode::Input;
 
     if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
         bail!("stdin and stdout must be a terminal");
@@ -1030,42 +1031,61 @@ fn debug_keys() -> anyhow::Result<ExitCode> {
     println!("Type; each key event is printed as it arrives. Ctrl+C ends.");
     crossterm::terminal::enable_raw_mode().context("cannot set up the terminal")?;
     let mut stdout = std::io::stdout();
-    let _ = crossterm::execute!(stdout, EnableMouseCapture, EnableFocusChange);
-    let result = runtime().and_then(|rt| {
-        rt.block_on(async {
-            let mut events = EventStream::new();
-            // Wakes the loop the way frames do when attached, so the event
-            // stream is polled, dropped and polled again as there.
-            let mut tick = tokio::time::interval(Duration::from_millis(16));
-            let mut n = 0u64;
-            loop {
-                tokio::select! {
-                    ev = events.next() => {
-                        let Some(ev) = ev else { return Ok(()) };
-                        let ev = ev.context("reading the terminal")?;
-                        if let Event::Key(k) = &ev
-                            && k.code == KeyCode::Char('c')
-                            && k.modifiers.contains(KeyModifiers::CONTROL)
-                        {
-                            return Ok(());
-                        }
-                        if matches!(&ev, Event::Mouse(m) if m.kind == crossterm::event::MouseEventKind::Moved) {
-                            continue;
-                        }
-                        n += 1;
-                        let sent = match client::convert(ev.clone()) {
-                            Some(msg) => format!("{msg:?}"),
-                            None => "(ignored)".to_owned(),
-                        };
-                        print!("{n:>4}  {ev:?}\r\n      sent: {sent}\r\n");
-                        let _ = stdout.flush();
-                    }
-                    _ = tick.tick() => {}
-                }
-            }
+    let result = term_input::enable_vt_input()
+        .context("cannot set up the terminal")
+        .and_then(|()| {
+            // Buttons and drags but not every motion, which would flood
+            // the screen; bracketed paste and focus reports.
+            let _ = stdout.write_all(b"\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?2004h\x1b[?1004h");
+            let _ = stdout.flush();
+            runtime()
         })
-    });
-    let _ = crossterm::execute!(stdout, DisableMouseCapture, DisableFocusChange);
+        .and_then(|rt| {
+            rt.block_on(async {
+                let mut reader = term_input::Reader::start(true)?;
+                let mut n = 0u64;
+                while let Some(incoming) = reader.next().await {
+                    match incoming {
+                        Incoming::Raw(bytes) => {
+                            // Long pastes are cut short here.
+                            let shown = &bytes[..bytes.len().min(160)];
+                            let more = bytes.len() - shown.len();
+                            let more = if more > 0 {
+                                format!(" … ({more} more bytes)")
+                            } else {
+                                String::new()
+                            };
+                            print!("      bytes: {}{more}\r\n", shown.escape_ascii());
+                        }
+                        Incoming::Input(input) => {
+                            if let Input::Key { key, .. } = &input
+                                && *key == termos_core::input::KeyEvent::ctrl('c')
+                            {
+                                return Ok(());
+                            }
+                            n += 1;
+                            let sent = if term_input::to_msg(input.clone()).is_some() {
+                                ""
+                            } else {
+                                "  (not sent)"
+                            };
+                            print!("{n:>4}  {}{sent}\r\n", term_input::describe(&input));
+                        }
+                        Incoming::Resized => {
+                            let size = crossterm::terminal::size()?;
+                            print!("      resized: {size:?}\r\n");
+                        }
+                        Incoming::Closed => return Ok(()),
+                        Incoming::Failed(e) => return Err(e).context("reading the terminal"),
+                    }
+                    let _ = std::io::stdout().flush();
+                }
+                Ok(())
+            })
+        });
+    let _ = stdout.write_all(b"\x1b[?1004l\x1b[?2004l\x1b[?1006l\x1b[?1002l\x1b[?1000l");
+    let _ = stdout.flush();
+    term_input::restore_console();
     let _ = crossterm::terminal::disable_raw_mode();
     result?;
     Ok(ExitCode::SUCCESS)

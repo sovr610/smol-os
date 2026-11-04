@@ -1006,6 +1006,43 @@ rewrite history.
 
 ---
 
+## D-101: M9b owner answers: the Windows sandbox, images on Windows, GPU sources, delivery
+- **Status:** Accepted (owner) · 2026-11-04
+- **Context:** M9b closes the platform gaps of D-077. Four choices were open; the owner chose (2026-11-04):
+- **Decision:**
+  - **Windows sandbox for agents' commands: an AppContainer** (closing D-077's "an AppContainer or a restricted token"). The project is writable, the rest of the profile is out of reach, and there is no network unless granted; TermOS grants the container the project (and, read-only, the toolchains a command needs) and takes the grants back.
+  - **Images from programs in panes on Windows:** Microsoft's newer ConPTY (`conpty.dll` and `OpenConsole.exe`, MIT, from the `Microsoft.Windows.Console.ConPTY` package) ships in the Windows zip beside `termos.exe`, pinned and checksummed, with its licence. Without it TermOS uses the system's ConPTY, which drops the images, and says so.
+  - **GPU readings:** the operating systems' own sources only. Windows: utilisation and video memory of every GPU from its performance counters; macOS: GPU temperature from the SMC and utilisation from IOKit. No vendor libraries, so no temperature or power for AMD and Intel GPUs on Windows.
+  - **Delivery:** one milestone, committed in parts as each passes CI, with one review at the end.
+- **Alternatives:** a restricted low-integrity token, or a job object only; downloading the ConPTY on first use, or no images on Windows; AMD's ADLX and Intel's IGCL as well; M9b split into Windows work and the rest.
+
+## D-102: Terminal input: our own decoder on every platform; VT input on Windows
+- **Status:** Accepted (lead; supersedes D-043's "Windows consoles are detected from the environment only") · 2026-11-04
+- **Context:** On Windows, crossterm reads console key records, so pastes arrive as typed keys and the Kitty keyboard protocol is out of reach (D-077). Kitty release events and alternate keys (flags 2 and 4, also M9b) need more than crossterm's key events carry, such as the base-layout key.
+- **Decision:**
+  - **One decoder** (`termos_core::input::decode`) turns terminal bytes into keys, mouse reports, focus reports and bracketed pastes:
+    - **keys:** legacy bytes, xterm's modifier forms, SS3, the Kitty protocol with event types and alternate keys, and xterm's `modifyOtherKeys`;
+    - **mouse:** SGR, urxvt and X10 reports.
+  - **Late replies are dropped:** DA1, `CSI ? u`, DECRQM, OSC, DCS and APC strings never become typed keys.
+  - **Timeouts settle what is cut short:**
+    - a lone ESC waits 50 ms and is then the Escape key;
+    - a reply string that has content waits 500 ms and is then dropped;
+    - a paste that goes quiet for 1 s is delivered as it is, so a lost end marker cannot capture the keyboard;
+    - long pastes come in parts of at most 4 MiB.
+  - **Tests:** a fuzz target (`input_decode`) and property tests check that splitting the input anywhere gives the same events.
+  - **One reader on every platform:** a thread blocks until input arrives or it is told to stop, so idle costs nothing.
+    - **Unix:** it reads stdin bytes. SIGWINCH reports resizes.
+    - **Windows:** the console runs in VT input mode (`ENABLE_VIRTUAL_TERMINAL_INPUT`, plus window and mouse input, without QuickEdit). The characters of its key records are those same bytes. Resize and mouse records (from consoles that send records rather than VT reports) are read alongside. The console's mode is put back on exit.
+    - **What Windows now has:** bracketed paste, Kitty keyboard detection, and the capability probe (`TERMOS_PROBE=0` still turns it off). AltGr characters arrive as text, so the old Ctrl+Alt guess is gone.
+  - **crossterm keeps** raw mode, the alternate screen and the terminal size. The client writes the mouse, paste, focus and Kitty mode sequences itself, the same on every platform.
+  - **`termos debug keys`** prints the bytes as they come and the events they decode to, through the same reader.
+- **Alternatives:**
+  - crossterm's event stream on Unix with our decoder on Windows only: two paths, and the one Windows needs would not get the Linux end-to-end tests;
+  - reading Windows input with `ReadFile`, which skips resize records;
+  - keeping key records and guessing pastes from timing.
+
+---
+
 ## Open questions (the owner will be asked before the milestone that needs each one)
 
 | ID | Question | Needed by | Current lean |

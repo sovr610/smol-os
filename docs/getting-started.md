@@ -319,9 +319,10 @@ known gaps listed below).
 
   The running server keeps its version until `termos kill-server` (sessions
   are saved and restored).
+- **Input on Windows** goes through the console's VT input mode, as on
+  other systems: pastes arrive as one block, and Windows Terminal versions
+  that speak the Kitty keyboard protocol get it.
 - **Not there yet on Windows** (planned for M9b):
-  - bracketed paste: a pasted block arrives as typed keys;
-  - the Kitty keyboard protocol from the outer terminal;
   - saving at logoff or shutdown is best effort: `termos kill-server` first
     if you want to be sure;
   - snapshots don't record which program ran in a pane, so restore starts
@@ -344,8 +345,8 @@ known gaps listed below).
   24-bit colour. Otherwise force a colour depth with `TERMOS_COLOR=256` or
   `TERMOS_COLOR=16`.
 - **Keys repeat or go missing:** run `termos debug keys` in the same terminal
-  (outside TermOS) and type. It prints every key event as TermOS receives it
-  and what it sends on. If a key is missing or doubled there, the terminal
+  (outside TermOS) and type. It prints the bytes the terminal sends, the
+  events TermOS decodes from them and what it sends on. If a key is missing or doubled there, the terminal
   delivered it that way; if it is right there but wrong in a pane, it is
   TermOS's side. Either way, send the output along with a bug report.
 - **Ctrl+B is taken by tmux** when you run TermOS inside tmux: set another

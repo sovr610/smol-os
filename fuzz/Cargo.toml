@@ -48,6 +48,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "input_decode"
+path = "fuzz_targets/input_decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "proto_decode"
 path = "fuzz_targets/proto_decode.rs"
 test = false

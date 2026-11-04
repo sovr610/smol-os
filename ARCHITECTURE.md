@@ -189,13 +189,14 @@ Rendering is event-driven, with no fixed tick.
 - Animations (M4) will register short-lived tickers that stop when they finish, and a reduced-motion setting will disable them.
 
 ### 5.6 Terminal encoder
-- crossterm handles raw mode, the alternate screen, mouse and keyboard modes, and bracketed paste.
+- crossterm handles raw mode, the alternate screen and the terminal size. The client writes the mouse, bracketed-paste, focus and Kitty keyboard modes itself.
+- **Input (D-102):** one decoder (`termos_core::input::decode`) handles keys, mouse and focus reports and pastes on every platform. It drops late query replies, and timeouts settle a lone ESC or a cut-off sequence. A reader thread blocks on stdin (Unix) or on the console in VT input mode (Windows); it costs nothing while idle.
 - Each frame is one buffered write wrapped in synchronized-update brackets (DEC mode 2026) when the terminal supports them.
 - Colours are downsampled truecolor → 256 → 16 according to the client's capabilities.
 
 ### 5.7 Capability detection (D-043)
 1. **Environment heuristics:** `COLORTERM`, `TERM`, `TERM_PROGRAM`, `KITTY_WINDOW_ID`, `WT_SESSION`, `COLORFGBG`, `SSH_CONNECTION`, and whether we're inside tmux or screen. `TERMOS_COLOR`, `TERMOS_SYNC`, `TERMOS_GRAPHICS` and `TERMOS_REDUCED_MOTION` override.
-2. **Active queries** (`termos_render::probe`), sent at attach as one batch terminated by DA1: terminals answer in order, so the DA1 reply marks the end. The client reads stdin directly for up to 200 ms (800 ms over SSH); keys typed meanwhile are passed on. `TERMOS_PROBE=0` skips it, and Windows consoles use the environment only. The batch:
+2. **Active queries** (`termos_render::probe`), sent at attach as one batch terminated by DA1: terminals answer in order, so the DA1 reply marks the end. The client reads stdin directly for up to 200 ms (800 ms over SSH); keys typed meanwhile are passed on. On Windows it reads the console in VT input mode (D-102). `TERMOS_PROBE=0` skips it. The batch:
    - XTVERSION (`CSI > q`);
    - the Kitty graphics query (`APC G a=q`);
    - DECRQM `?2026`;
@@ -530,7 +531,7 @@ termos-ai holds all of it; the CLI hands the server a launcher for its windows (
 - **Property tests** (`proptest`) for layout invariants (no overlaps or gaps, sizes sum to the parent), rectangle subtraction and the block raster.
 - **Golden bytes** for the Kitty, Sixel and iTerm2 encoders and the Kitty keyboard protocol table, and a Sixel round trip.
 - **Fuzzing** with `cargo-fuzz` (on a nightly toolchain, separate from the pinned one):
-  - VT input (M1);
+  - VT input (M1), and terminal input decoding (`input_decode`: the same events however the bytes are split);
   - config parsing (M2);
   - protocol decoding (`proto_decode`: frames and JSON-RPC);
   - capability replies (`caps_reply`), Sixel decoding (`sixel_decode`) and the image interceptor (`apc_dcs_intercept`);

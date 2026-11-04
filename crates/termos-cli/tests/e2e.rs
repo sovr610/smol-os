@@ -162,6 +162,54 @@ fn detach_ls_attach_msg_and_kill_server() {
     assert!(stdout(&t.run(&["ls"])).starts_with("work: 1 workspaces, 2 panes"));
 }
 
+/// A bracketed paste reaches the pane as text: a pasted `C-b %` is
+/// typed into the shell instead of splitting the window. Keys in the Kitty
+/// keyboard protocol work once the client has turned it on.
+#[test]
+fn pastes_are_text_and_kitty_keys_work() {
+    let mut t = Termos::start("");
+    t.wait_ready();
+    t.send(b"\x1b[200~echo pasted-\x02%-ok\r\x1b[201~");
+    let screen = t.wait_for("the pasted command's output", T, |s| {
+        s.lines().any(|l| {
+            let l = l.trim();
+            l.starts_with("pasted-") && l.ends_with("%-ok")
+        })
+    });
+    assert!(
+        !screen.contains('│'),
+        "the paste split the window:\n{screen}"
+    );
+
+    // The harness answers the probe like kitty, so the client asked for
+    // disambiguated keys (and the same flags come off at exit).
+    if cfg!(unix) {
+        assert!(
+            t.raw_output().contains("\x1b[>1u"),
+            "Kitty keyboard not enabled"
+        );
+        t.send(b"\x1b[98;5u%");
+        t.wait_for("a split from C-b % as Kitty keys", T, |s| s.contains('│'));
+        t.send(b"\x1b[32;5u");
+        t.wait_for("the palette", T, |s| s.contains("Command palette"));
+        // Escape as `CSI 27 u` needs no wait to tell it from a sequence.
+        t.send(b"\x1b[27u");
+        t.wait_for("the palette to close", T, |s| {
+            !s.contains("Command palette")
+        });
+    }
+    t.send(b"\x02d");
+    t.wait_exit(T);
+    let out = t.wait_output(T, "[detached (from session main)]");
+    if cfg!(unix) {
+        assert!(out.contains("\x1b[<1u"), "Kitty keyboard not restored");
+        assert!(
+            out.contains("\x1b[?2004l"),
+            "bracketed paste not turned off"
+        );
+    }
+}
+
 /// The terminal says it speaks Kitty graphics (the harness answers the
 /// probe like kitty): an image opened in the viewer is uploaded and
 /// placed; the palette over it changes the placements; detaching frees

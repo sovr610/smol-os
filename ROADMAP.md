@@ -33,7 +33,7 @@ questions (DECISIONS.md, "Open questions").
 | M11a | AI accounts: several subscriptions per provider, switching with the conversation kept, the usage app (D-096, D-097) | 🔍 |
 | M11b | Skills that teach Claude Code, Codex and other CLIs to use TermOS, and `termos agent ask` (D-096, D-098) | 🔍 |
 | M11c | The harness: one coding tool over Claude Code, Codex and API models, routing each task to the model that suits it (D-096, D-099, D-100) | 🔍 |
-| M9b | Platform gaps: the Windows agent sandbox and input, snapshots and sensors on macOS and Windows, Kitty keyboard flags, app windows in sessions, the KMS console's clipboard, bell and images (D-077) | ⏳ |
+| M9b | Platform gaps: the Windows agent sandbox and input, snapshots and sensors on macOS and Windows, Kitty keyboard flags, app windows in sessions, the KMS console's clipboard, bell and images (D-077, D-101) | 🚧 |
 
 Unfinished work in code is always a `TODO(M<n>)` marker (D-018). The
 generated table at the end of this file lists every open marker.
@@ -722,13 +722,22 @@ What was shown, and where (Linux, in an isolated `tmux -L termos-m7` with its ow
 ---
 
 ## M9b — Platform gaps
-**Status:** ⏳ · Owner answers: split from M9 (D-077).
+**Status:** 🚧 · Owner answers: split from M9 (D-077); an AppContainer, the ConPTY in the Windows zip, the OS's own GPU sources, one review (D-101).
 
 **Deliverables** (the `TODO(M9b)` markers)
 - **Windows:** a sandbox for agents' commands (an AppContainer or a restricted token); VT input mode (bracketed paste, the Kitty keyboard protocol); images from programs in panes; saving at logoff and shutdown (a hidden window for `WM_ENDSESSION`).
 - **macOS and Windows:** the foreground program's name, folder and command line, so snapshots restore programs; GPU temperature and power on macOS, and for non-NVIDIA GPUs on Windows.
 - **Everywhere:** Kitty keyboard release events and alternate keys (flags 2 and 4); app windows saved and restored with the session.
 - **The KMS console:** its own clipboard, a visual bell, images drawn as pixels.
+
+**Progress**
+- [x] Terminal input through one decoder on every platform, and VT input mode on Windows: bracketed paste, the Kitty keyboard protocol and the capability probe there; a fuzz target and an end-to-end paste and Kitty-keys test (D-102)
+- [ ] Kitty keyboard release events and alternate keys (flags 2 and 4)
+- [ ] App windows saved and restored with the session
+- [ ] The KMS console's clipboard, visual bell and pixel images
+- [ ] Foreground programs on macOS and Windows; GPU readings from the OS
+- [ ] Windows: job objects, saving at logoff, the bundled ConPTY and images in panes
+- [ ] Windows: the AppContainer sandbox
 
 **Acceptance:** each gap is closed with tests on its platform's CI runner, and the open-work table has no M9b rows.
 
@@ -1025,7 +1034,6 @@ Generated from the `TODO(M<n>)` markers in the code. Don't edit by hand; run `ca
 | M5b | `crates/termos-apps/src/lib.rs` | package manager UI over mise, the dev rootfs and the host package manager. |
 | M5b | `crates/termos-devkit/src/lib.rs` | dev rootfs, Podman and the package manager UI. |
 | M9b | `crates/termos-ai/src/sandbox.rs` | a Windows sandbox for agent commands (an AppContainer or a restricted token); until then every command asks. |
-| M9b | `crates/termos-cli/src/client.rs` | VT input mode on Windows, for bracketed paste and the Kitty keyboard protocol. |
 | M9b | `crates/termos-cli/src/kms/mod.rs` | the console's own clipboard and visual bell; images drawn as pixels rather than as blocks. |
 | M9b | `crates/termos-harness/src/backends.rs` | stop the CLI's whole process tree on Windows (a job |
 | M9b | `crates/termos-hw/src/lib.rs` | GPU temperature and power on macOS (SMC), and for non-NVIDIA GPUs on Windows. |

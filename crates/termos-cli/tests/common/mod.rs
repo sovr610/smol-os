@@ -229,11 +229,15 @@ impl Termos {
                 // attributes (crossterm's keyboard-protocol probe), and the
                 // cursor position (ConPTY asks when it starts and holds
                 // back all output until it gets the answer).
-                // Like kitty: graphics and a 10×20 cell, in the order the
-                // capability probe asks, DA1 last.
+                // Like kitty: graphics, its keyboard protocol and a 10×20
+                // cell, in the order the capability probe asks, DA1 last.
                 let mut answer = Vec::new();
                 if chunk.windows(7).any(|w| w == b"\x1b_Gi=31") {
                     answer.extend_from_slice(b"\x1b_Gi=31;OK\x1b\\");
+                }
+                // Kitty keyboard protocol: no flags set yet.
+                if chunk.windows(4).any(|w| w == b"\x1b[?u") {
+                    answer.extend_from_slice(b"\x1b[?0u");
                 }
                 if chunk.windows(5).any(|w| w == b"\x1b[16t") {
                     answer.extend_from_slice(b"\x1b[6;20;10t");
