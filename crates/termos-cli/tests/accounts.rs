@@ -312,3 +312,86 @@ fn a_conversation_continues_under_another_account() {
         "{calls}"
     );
 }
+
+/// Claude Code's plan limits reach TermOS through its status line: TermOS's
+/// command keeps them per account and still shows the user's own line.
+#[test]
+fn the_status_line_keeps_claude_codes_limits() {
+    use std::io::Write as _;
+    let w = world();
+    let env = &w.env;
+    let settings = env.path().join(".claude/settings.json");
+    std::fs::write(
+        &settings,
+        r#"{"model":"fixture-model","statusLine":{"type":"command","command":"echo mine"}}"#,
+    )
+    .expect("write");
+    run(env, &["account", "add", "claude", "work", "--no-sign-in"]);
+    let said = run(env, &["account", "statusline", "claude", "on"]);
+    // One file: the new account's settings are a link to it.
+    assert_eq!(
+        said.matches("put TermOS's status line").count(),
+        1,
+        "{said}"
+    );
+    let v: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&settings).expect("read")).expect("json");
+    assert!(
+        v["statusLine"]["command"]
+            .as_str()
+            .is_some_and(|c| c.ends_with("termos agent statusline")),
+        "{v}"
+    );
+    assert_eq!(v["model"], "fixture-model");
+
+    let data = env.paths().data_dir;
+    let work = data.join("accounts/claude/work");
+    let input = r#"{"model":{"display_name":"Fixture"},"rate_limits":{"five_hour":{"used_percentage":42.5,"resets_at":1800000000},"seven_day":{"used_percentage":10}}}"#;
+    let status = |dir: Option<&std::path::Path>| {
+        let mut cmd = env.command_in(env.path(), &["agent", "statusline"]);
+        cmd.env_remove("CLAUDE_CONFIG_DIR");
+        if let Some(d) = dir {
+            cmd.env("CLAUDE_CONFIG_DIR", d);
+        }
+        let mut child = cmd
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .expect("spawn");
+        child
+            .stdin
+            .take()
+            .expect("stdin")
+            .write_all(input.as_bytes())
+            .expect("write");
+        let out = child.wait_with_output().expect("ran");
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
+    // The user's own line still shows; the limits are kept for the account.
+    assert_eq!(status(Some(&work)).trim(), "mine");
+    let state = env.paths().state_dir;
+    let kept =
+        std::fs::read_to_string(state.join("accounts/limits/claude-work.json")).expect("kept");
+    assert!(kept.contains("42.5"), "{kept}");
+    status(None);
+    assert!(state.join("accounts/limits/claude-default.json").exists());
+
+    // Off: their line is back as it was.
+    run(env, &["account", "statusline", "claude", "off"]);
+    let v: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&settings).expect("read")).expect("json");
+    assert_eq!(v["statusLine"]["command"], "echo mine");
+    // Without a line of their own, TermOS prints a short one.
+    std::fs::write(&settings, "{}").expect("write");
+    run(env, &["account", "statusline", "claude", "on"]);
+    let line = status(Some(&work));
+    assert!(
+        line.contains("Fixture") && line.contains("5 h 42%") && line.contains("week 10%"),
+        "{line}"
+    );
+    assert!(
+        !env.run(&["account", "statusline", "codex", "on"])
+            .status
+            .success()
+    );
+}

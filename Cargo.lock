@@ -5431,6 +5431,7 @@ dependencies = [
  "tempfile",
  "termos-ai",
  "termos-core",
+ "termos-devkit",
  "termos-hw",
  "termos-models",
  "termos-render",

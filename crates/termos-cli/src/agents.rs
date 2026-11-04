@@ -60,6 +60,9 @@ pub(crate) enum AgentCmd {
     Remove { name: String },
     /// Which Claude Code and Codex CLI TermOS installed.
     Status,
+    /// Claude Code's status line command: keeps the plan limits it passes
+    /// (for the usage app), then shows your own status line or a short one.
+    Statusline,
     /// Run an external agent preset here (what `agent.external` opens).
     External {
         /// For Claude Code and Codex: the account (default: the one in
@@ -408,6 +411,7 @@ pub(crate) fn agent_command(
         }
         AgentCmd::Remove { name } => return crate::coding_agents::remove(paths, name),
         AgentCmd::Status => return crate::coding_agents::status(paths),
+        AgentCmd::Statusline => return crate::coding_agents::statusline(paths),
         AgentCmd::External {
             account,
             resume_from,

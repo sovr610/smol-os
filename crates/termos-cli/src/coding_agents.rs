@@ -446,6 +446,181 @@ fn tool_supported(tool: Tool, p: Platform) -> bool {
     }
 }
 
+/// Where TermOS keeps the status line commands it chains (the user's own,
+/// by the settings file they were in).
+fn chain_file(paths: &Paths) -> PathBuf {
+    paths.state_dir.join("accounts").join("statusline.json")
+}
+
+fn load_chain(paths: &Paths) -> std::collections::BTreeMap<String, String> {
+    std::fs::read_to_string(chain_file(paths))
+        .ok()
+        .and_then(|t| serde_json::from_str(&t).ok())
+        .unwrap_or_default()
+}
+
+fn save_chain(
+    paths: &Paths,
+    chain: &std::collections::BTreeMap<String, String>,
+) -> anyhow::Result<()> {
+    let file = chain_file(paths);
+    if let Some(d) = file.parent() {
+        std::fs::create_dir_all(d)?;
+    }
+    std::fs::write(&file, serde_json::to_vec_pretty(chain)?)?;
+    Ok(())
+}
+
+/// An account's Claude Code settings file, as the link (if any) resolves.
+fn claude_settings_file(a: &Account) -> Option<PathBuf> {
+    let file = a.home(&env, home().as_deref())?.join("settings.json");
+    Some(file.canonicalize().unwrap_or(file))
+}
+
+/// `termos agent statusline`: what Claude Code runs for its status line.
+/// It keeps the plan limits Claude Code passes (D-096, D-097), then runs
+/// the user's own status line if they had one, else prints a short one.
+pub(crate) fn statusline(paths: &Paths) -> anyhow::Result<ExitCode> {
+    use std::io::Read as _;
+    use termos_devkit::accounts::{DEFAULT, claude_status_limits, save_limits};
+    let mut input = String::new();
+    std::io::stdin().read_to_string(&mut input)?;
+    let v: serde_json::Value = serde_json::from_str(&input).unwrap_or_default();
+    let all = accounts(paths)?;
+    let account = match env("CLAUDE_CONFIG_DIR").filter(|d| !d.is_empty()) {
+        None => all.get(Tool::Claude, DEFAULT).ok(),
+        Some(dir) => {
+            let dir = PathBuf::from(dir);
+            let dir = dir.canonicalize().unwrap_or(dir);
+            all.list(Tool::Claude).into_iter().find(|a| {
+                a.dir
+                    .as_ref()
+                    .is_some_and(|d| d.canonicalize().unwrap_or_else(|_| d.clone()) == dir)
+            })
+        }
+    };
+    if let (Some(a), Some(l)) = (
+        &account,
+        claude_status_limits(&v, termos_core::journal::now()),
+    ) {
+        let _ = save_limits(&paths.state_dir, Tool::Claude, &a.name, &l);
+    }
+    let chained = account
+        .as_ref()
+        .and_then(claude_settings_file)
+        .and_then(|f| load_chain(paths).get(&f.display().to_string()).cloned());
+    if let Some(cmd) = chained {
+        let mut child = if cfg!(windows) {
+            let mut c = std::process::Command::new("cmd");
+            c.args(["/C", &cmd]);
+            c
+        } else {
+            let mut c = std::process::Command::new("sh");
+            c.args(["-c", &cmd]);
+            c
+        }
+        .stdin(std::process::Stdio::piped())
+        .spawn()?;
+        if let Some(mut stdin) = child.stdin.take() {
+            let _ = stdin.write_all(input.as_bytes());
+        }
+        let status = child.wait()?;
+        return Ok(if status.success() {
+            ExitCode::SUCCESS
+        } else {
+            ExitCode::FAILURE
+        });
+    }
+    let mut parts: Vec<String> = Vec::new();
+    if let Some(m) = v.pointer("/model/display_name").and_then(|m| m.as_str()) {
+        parts.push(m.to_owned());
+    }
+    if let Some(a) = account.as_ref().filter(|a| !a.is_default()) {
+        parts.push(a.title());
+    }
+    if let Some(p) = v
+        .pointer("/context_window/used_percentage")
+        .and_then(serde_json::Value::as_f64)
+    {
+        parts.push(format!("context {p:.0}%"));
+    }
+    for (key, label) in [("five_hour", "5 h"), ("seven_day", "week")] {
+        if let Some(p) = v
+            .pointer(&format!("/rate_limits/{key}/used_percentage"))
+            .and_then(serde_json::Value::as_f64)
+        {
+            parts.push(format!("{label} {p:.0}%"));
+        }
+    }
+    println!("{}", parts.join(" · "));
+    Ok(ExitCode::SUCCESS)
+}
+
+/// `termos account statusline claude on|off`: TermOS's status line in
+/// every Claude Code account's settings (keeping the user's own, which
+/// runs after TermOS's), or taken out again.
+pub(crate) fn set_statusline(paths: &Paths, on: bool) -> anyhow::Result<ExitCode> {
+    use termos_devkit::accounts::{with_statusline, without_statusline};
+    let termos = termos_exe()?.display().to_string();
+    let quoted = if termos.contains(char::is_whitespace) {
+        if cfg!(windows) {
+            format!("\"{termos}\"")
+        } else {
+            format!("'{termos}'")
+        }
+    } else {
+        termos
+    };
+    let mut chain = load_chain(paths);
+    let mut done = std::collections::BTreeSet::new();
+    for a in accounts(paths)?.list(Tool::Claude) {
+        let Some(file) = claude_settings_file(&a) else {
+            continue;
+        };
+        if !done.insert(file.clone()) {
+            continue;
+        }
+        let key = file.display().to_string();
+        let mut v: serde_json::Value = match std::fs::read_to_string(&file) {
+            Ok(t) => serde_json::from_str(&t)
+                .with_context(|| format!("{} is not valid JSON", file.display()))?,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => serde_json::json!({}),
+            Err(e) => return Err(e).with_context(|| format!("cannot read {}", file.display())),
+        };
+        let changed = if on {
+            if let Some(old) =
+                with_statusline(&mut v, &quoted).map_err(|e| anyhow::anyhow!("{e}"))?
+            {
+                chain.insert(key.clone(), old);
+            }
+            true
+        } else {
+            without_statusline(&mut v, chain.remove(&key).as_deref())
+        };
+        if changed {
+            if let Some(d) = file.parent() {
+                std::fs::create_dir_all(d)?;
+            }
+            let tmp = file.with_extension(format!("json.termos-{}", std::process::id()));
+            std::fs::write(&tmp, serde_json::to_string_pretty(&v)? + "\n")?;
+            std::fs::rename(&tmp, &file)?;
+            say(&format!(
+                "{} TermOS's status line in {} ({})",
+                if on { "put" } else { "took out" },
+                file.display(),
+                describe(&a)
+            ));
+        }
+    }
+    save_chain(paths, &chain)?;
+    if on {
+        say(
+            "Claude Code now reports its plan limits to TermOS (subscriptions only); your own status line, if you had one, still shows",
+        );
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
 /// The arguments that continue `cwd`'s latest conversation of account
 /// `from` in `launch`'s account (copied there first), D-097; none when
 /// there is nothing to continue.

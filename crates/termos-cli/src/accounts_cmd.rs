@@ -55,6 +55,13 @@ pub(crate) enum AccountCmd {
         #[arg(long)]
         week: Option<String>,
     },
+    /// Claude Code's plan limits in the usage app: TermOS's status line in
+    /// every Claude Code account (yours, if any, still shows), or `off`.
+    Statusline {
+        cli: String,
+        #[arg(value_parser = ["on", "off"])]
+        state: String,
+    },
     /// Remove an account: its folder, with its login and conversations.
     #[command(alias = "rm")]
     Remove {
@@ -257,6 +264,12 @@ pub(crate) fn account_command(
             }
             all.set_meta(t, name, meta)
                 .map_err(|e| anyhow::anyhow!("{e}"))?;
+        }
+        AccountCmd::Statusline { cli, state } => {
+            if tool(cli)? != Tool::Claude {
+                bail!("Codex records its limits itself; only Claude Code needs the status line");
+            }
+            return crate::coding_agents::set_statusline(paths, state == "on");
         }
         AccountCmd::Remove { cli, name, yes } => {
             let t = tool(cli)?;

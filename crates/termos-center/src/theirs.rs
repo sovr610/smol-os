@@ -34,7 +34,7 @@ pub const CODEX: &str = "codex";
 /// over refreshes).
 const MAX_READ: u64 = 32 * 1024 * 1024;
 
-/// Where each CLI keeps its logs.
+/// Where each CLI keeps its logs (the CLIs' own folders, before accounts).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Dirs {
     pub claude: Vec<PathBuf>,
@@ -62,7 +62,52 @@ impl Dirs {
             .unwrap_or_default();
         Self { claude, codex }
     }
+
+    /// As the `default` account of each CLI.
+    pub fn sources(self) -> Vec<Source> {
+        vec![
+            Source {
+                cli: "claude",
+                account: "default".into(),
+                dirs: self.claude,
+            },
+            Source {
+                cli: "codex",
+                account: "default".into(),
+                dirs: self.codex,
+            },
+        ]
+    }
 }
+
+/// One account's logs (D-097).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Source {
+    /// `claude` or `codex`.
+    pub cli: &'static str,
+    pub account: String,
+    /// Claude Code's `projects/` folders, or Codex's `sessions/`.
+    pub dirs: Vec<PathBuf>,
+}
+
+impl Source {
+    /// An account's logs, from its folder (`CLAUDE_CONFIG_DIR` or
+    /// `CODEX_HOME`).
+    pub fn of(cli: &'static str, account: &str, home: &Path) -> Self {
+        let dir = if cli == "claude" {
+            "projects"
+        } else {
+            "sessions"
+        };
+        Self {
+            cli,
+            account: account.to_owned(),
+            dirs: vec![home.join(dir)],
+        }
+    }
+}
+
+pub use termos_devkit::accounts::{LimitWindow, Limits};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Kind {
@@ -90,32 +135,70 @@ struct Totals {
 /// Reads their logs, a little more each time.
 #[derive(Debug, Default)]
 pub struct Reader {
-    dirs: Dirs,
+    sources: Vec<Source>,
     files: BTreeMap<PathBuf, FileState>,
     /// Claude Code messages already counted (hashes of their ids).
     seen: HashSet<u64>,
-    records: Vec<Record>,
+    /// Each record with the source it came from.
+    records: Vec<(usize, Record)>,
+    /// The newest limits each source reported.
+    limits: BTreeMap<usize, Limits>,
 }
 
 impl Reader {
+    /// The CLIs' own folders (their `default` accounts).
     pub fn new(dirs: Dirs) -> Self {
+        Self::with_sources(dirs.sources())
+    }
+
+    /// Every account's logs.
+    pub fn with_sources(sources: Vec<Source>) -> Self {
         Self {
-            dirs,
+            sources,
             ..Self::default()
         }
+    }
+
+    /// Reads these accounts from now on (all is read again when they
+    /// changed).
+    pub fn set_sources(&mut self, sources: Vec<Source>) {
+        if sources != self.sources {
+            *self = Self::with_sources(sources);
+        }
+    }
+
+    pub fn sources(&self) -> &[Source] {
+        &self.sources
+    }
+
+    /// The newest limits source `i` reported.
+    pub fn limits(&self, i: usize) -> Option<&Limits> {
+        self.limits.get(&i)
     }
 
     /// Their usage from `since` (Unix seconds) on, oldest first. Files not
     /// changed since then are not opened.
     pub fn read(&mut self, since: i64) -> Vec<Record> {
+        self.read_by_source(since)
+            .into_iter()
+            .map(|(_, r)| r)
+            .collect()
+    }
+
+    /// Like [`Reader::read`], each record with the index of its source.
+    pub fn read_by_source(&mut self, since: i64) -> Vec<(usize, Record)> {
         let mut found = Vec::new();
-        for d in &self.dirs.claude {
-            walk(d, 3, &mut found, Kind::Claude);
+        for (i, src) in self.sources.iter().enumerate() {
+            let (kind, depth) = if src.cli == "claude" {
+                (Kind::Claude, 3)
+            } else {
+                (Kind::Codex, 4)
+            };
+            for d in &src.dirs {
+                walk(d, depth, &mut found, kind, i);
+            }
         }
-        for d in &self.dirs.codex {
-            walk(d, 4, &mut found, Kind::Codex);
-        }
-        for (path, kind) in found {
+        for (path, kind, source) in found {
             let Ok(meta) = std::fs::metadata(&path) else {
                 continue;
             };
@@ -153,26 +236,42 @@ impl Reader {
                 let Ok(line) = std::str::from_utf8(line) else {
                     continue;
                 };
-                let record = match kind {
-                    Kind::Claude => claude_line(line, &session, &mut self.seen),
-                    Kind::Codex => codex_line(line, &session, state),
-                };
-                self.records.extend(record);
+                match kind {
+                    Kind::Claude => {
+                        if let Some(r) = claude_line(line, &session, &mut self.seen) {
+                            self.records.push((source, r));
+                        }
+                    }
+                    Kind::Codex => {
+                        let (record, limits) = codex_line(line, &session, state);
+                        if let Some(r) = record {
+                            self.records.push((source, r));
+                        }
+                        if let Some(l) = limits
+                            && self
+                                .limits
+                                .get(&source)
+                                .is_none_or(|old| old.time <= l.time)
+                        {
+                            self.limits.insert(source, l);
+                        }
+                    }
+                }
             }
         }
-        self.records.sort_by_key(|r| r.time);
+        self.records.sort_by_key(|(_, r)| r.time);
         // Kept as long as the longest range shows.
         let oldest = since.min(termos_core::journal::now() - 8 * 86_400);
-        self.records.retain(|r| r.time >= oldest);
+        self.records.retain(|(_, r)| r.time >= oldest);
         self.records
             .iter()
-            .filter(|r| r.time >= since)
+            .filter(|(_, r)| r.time >= since)
             .cloned()
             .collect()
     }
 }
 
-fn walk(dir: &Path, depth: u32, out: &mut Vec<(PathBuf, Kind)>, kind: Kind) {
+fn walk(dir: &Path, depth: u32, out: &mut Vec<(PathBuf, Kind, usize)>, kind: Kind, source: usize) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };
@@ -180,9 +279,9 @@ fn walk(dir: &Path, depth: u32, out: &mut Vec<(PathBuf, Kind)>, kind: Kind) {
         let path = e.path();
         let Ok(t) = e.file_type() else { continue };
         if t.is_dir() && depth > 0 {
-            walk(&path, depth - 1, out, kind);
+            walk(&path, depth - 1, out, kind, source);
         } else if t.is_file() && path.extension().is_some_and(|x| x == "jsonl") {
-            out.push((path, kind));
+            out.push((path, kind, source));
         }
     }
 }
@@ -285,6 +384,41 @@ struct CodexPayload {
     kind: Option<String>,
     model: Option<String>,
     info: Option<CodexInfo>,
+    rate_limits: Option<CodexRateLimits>,
+}
+
+/// Codex's plan limits, as its logs record them (`primary` is the shorter
+/// window, `secondary` the longer).
+#[derive(Deserialize)]
+struct CodexRateLimits {
+    primary: Option<CodexWindow>,
+    secondary: Option<CodexWindow>,
+    plan_type: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct CodexWindow {
+    used_percent: Option<f64>,
+    window_minutes: Option<u64>,
+    /// Unix seconds (an RFC 3339 string in some versions).
+    resets_at: Option<serde_json::Value>,
+    /// Older versions: seconds from the line's time.
+    resets_in_seconds: Option<i64>,
+}
+
+impl CodexWindow {
+    fn window(&self, line_time: i64) -> Option<LimitWindow> {
+        let resets_at = match &self.resets_at {
+            Some(serde_json::Value::Number(n)) => n.as_i64(),
+            Some(serde_json::Value::String(s)) => time(Some(s)),
+            _ => self.resets_in_seconds.map(|s| line_time + s),
+        };
+        Some(LimitWindow {
+            minutes: self.window_minutes?,
+            used_percent: self.used_percent? as f32,
+            resets_at,
+        })
+    }
 }
 
 #[derive(Deserialize)]
@@ -313,20 +447,53 @@ impl From<CodexUsage> for Totals {
     }
 }
 
-fn codex_line(line: &str, session: &str, state: &mut FileState) -> Option<Record> {
+/// A Codex line's usage and the plan limits it reports.
+fn codex_line(
+    line: &str,
+    session: &str,
+    state: &mut FileState,
+) -> (Option<Record>, Option<Limits>) {
     if !line.contains("\"turn_context\"") && !line.contains("\"token_count\"") {
-        return None;
+        return (None, None);
     }
-    let l: CodexLine = serde_json::from_str(line).ok()?;
-    let p = l.payload?;
+    let Ok(l) = serde_json::from_str::<CodexLine>(line) else {
+        return (None, None);
+    };
+    let Some(p) = l.payload else {
+        return (None, None);
+    };
     if l.kind.as_deref() == Some("turn_context") {
         state.model = p.model.filter(|m| !m.is_empty());
-        return None;
+        return (None, None);
     }
     if p.kind.as_deref() != Some("token_count") {
-        return None;
+        return (None, None);
     }
-    let info = p.info?;
+    let Some(line_time) = time(l.timestamp.as_deref()) else {
+        return (None, None);
+    };
+    let limits = p.rate_limits.and_then(|r| {
+        let windows: Vec<LimitWindow> = [r.primary, r.secondary]
+            .iter()
+            .flatten()
+            .filter_map(|w| w.window(line_time))
+            .collect();
+        (!windows.is_empty()).then(|| Limits {
+            time: line_time,
+            plan: r.plan_type.filter(|p| !p.is_empty() && p != "unknown"),
+            windows,
+        })
+    });
+    (codex_usage(p.info, session, state, line_time), limits)
+}
+
+fn codex_usage(
+    info: Option<CodexInfo>,
+    session: &str,
+    state: &mut FileState,
+    line_time: i64,
+) -> Option<Record> {
+    let info = info?;
     let used: Totals = match (info.total_token_usage, state.totals) {
         (Some(total), Some(before)) => {
             let total = Totals::from(total);
@@ -354,7 +521,7 @@ fn codex_line(line: &str, session: &str, state: &mut FileState) -> Option<Record
         return None;
     }
     Some(Record {
-        time: time(l.timestamp.as_deref())?,
+        time: line_time,
         event: Event::Usage {
             session: session.to_owned(),
             provider: CODEX.into(),
@@ -504,5 +671,77 @@ mod tests {
         assert_eq!(d.codex, [PathBuf::from("/x/sessions")]);
         let d = Dirs::find(&|_| None, None);
         assert!(d.claude.is_empty() && d.codex.is_empty());
+    }
+
+    #[test]
+    fn each_account_is_read_on_its_own_with_codex_limits() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let work = dir.path().join("work");
+        let play = dir.path().join("play");
+        for (home, model) in [(&work, "fixture-a"), (&play, "fixture-b")] {
+            let p = home.join("projects/-w");
+            std::fs::create_dir_all(&p).expect("mkdir");
+            std::fs::write(
+                p.join("s.jsonl"),
+                format!(
+                    "{{\"type\":\"assistant\",\"timestamp\":\"2026-11-04T10:00:00Z\",\"requestId\":\"r\",\"message\":{{\"id\":\"m-{model}\",\"model\":\"{model}\",\"usage\":{{\"input_tokens\":5,\"output_tokens\":7}}}}}}\n"
+                ),
+            )
+            .expect("write");
+        }
+        let codex = dir.path().join("codex");
+        let day = codex.join("sessions/2026/11/04");
+        std::fs::create_dir_all(&day).expect("mkdir");
+        // The shape Codex's own tests record, then a newer reading, then
+        // an older version's shape (seconds until the reset).
+        let lines = concat!(
+            r#"{"timestamp":"2026-11-04T12:00:00.000Z","type":"event_msg","payload":{"type":"token_count","info":null,"rate_limits":{"limit_id":null,"limit_name":null,"primary":{"used_percent":0.0,"window_minutes":300,"resets_at":1800000000},"secondary":{"used_percent":12.5,"window_minutes":10080,"resets_at":1800100000},"credits":null,"individual_limit":null,"spend_control_reached":null,"plan_type":"pro","rate_limit_reached_type":null}}}"#,
+            "\n",
+            r#"{"timestamp":"2026-11-04T12:30:00.000Z","type":"event_msg","payload":{"type":"token_count","info":null,"rate_limits":{"primary":{"used_percent":40.5,"window_minutes":300,"resets_at":1800000000},"secondary":{"used_percent":20.0,"window_minutes":10080,"resets_at":1800100000},"plan_type":"pro"}}}"#,
+            "\n",
+        );
+        std::fs::write(day.join("rollout-a.jsonl"), lines).expect("write");
+        let old = r#"{"timestamp":"2026-11-04T11:00:00.000Z","type":"event_msg","payload":{"type":"token_count","info":null,"rate_limits":{"primary":{"used_percent":3.0,"window_minutes":300,"resets_in_seconds":60}}}}"#;
+        std::fs::write(day.join("rollout-b.jsonl"), format!("{old}\n")).expect("write");
+
+        let mut r = Reader::with_sources(vec![
+            Source::of("claude", "work", &work),
+            Source::of("claude", "play", &play),
+            Source::of("codex", "default", &codex),
+        ]);
+        let got = r.read_by_source(0);
+        let by: Vec<(usize, &str)> = got.iter().map(|(i, rec)| (*i, usage(rec).1)).collect();
+        assert!(
+            by.contains(&(0, "fixture-a")) && by.contains(&(1, "fixture-b")),
+            "{by:?}"
+        );
+        let l = r.limits(2).expect("codex limits");
+        assert_eq!(l.plan.as_deref(), Some("pro"));
+        assert_eq!(l.windows.len(), 2);
+        assert_eq!(
+            (l.windows[0].minutes, l.windows[0].used_percent),
+            (300, 40.5),
+            "the newest"
+        );
+        assert_eq!(l.windows[1].resets_at, Some(1_800_100_000));
+        assert!(r.limits(0).is_none());
+        // Accounts changed: read again for the new set.
+        r.set_sources(vec![Source::of("codex", "default", &codex)]);
+        assert!(r.read_by_source(0).is_empty());
+        let only_old =
+            Reader::with_sources(vec![Source::of("codex", "x", &dir.path().join("none"))]);
+        assert!(only_old.limits(0).is_none());
+    }
+
+    #[test]
+    fn older_codex_limits_count_from_the_line() {
+        let mut state = FileState::default();
+        let line = r#"{"timestamp":"2026-11-04T11:00:00Z","type":"event_msg","payload":{"type":"token_count","info":null,"rate_limits":{"primary":{"used_percent":3.0,"window_minutes":300,"resets_in_seconds":60}}}}"#;
+        let (rec, limits) = codex_line(line, "s", &mut state);
+        assert!(rec.is_none(), "no usage in it");
+        let l = limits.expect("limits");
+        let at = time(Some("2026-11-04T11:00:00Z")).expect("t");
+        assert_eq!(l.windows[0].resets_at, Some(at + 60));
+        assert_eq!(l.plan, None);
     }
 }

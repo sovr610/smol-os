@@ -462,6 +462,143 @@ fn copy_tree(src: &Path, dst: &Path) -> io::Result<()> {
     }
 }
 
+/// A plan's limits as the CLI reported them (D-097): Codex writes them
+/// into its logs; Claude Code gives them to its status line, and TermOS's
+/// status line command keeps them in `<state>/accounts/limits/`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Limits {
+    /// When they were reported (Unix seconds).
+    pub time: i64,
+    /// The plan, when the CLI names it ("plus", "pro").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan: Option<String>,
+    pub windows: Vec<LimitWindow>,
+}
+
+/// One limit window: how much of it is used, and when it resets.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LimitWindow {
+    /// Its length (300: 5 hours; 10080: a week).
+    pub minutes: u64,
+    /// 0 to 100.
+    pub used_percent: f32,
+    /// Unix seconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resets_at: Option<i64>,
+}
+
+/// Where an account's reported limits are kept.
+pub fn limits_file(state_dir: &Path, tool: Tool, account: &str) -> PathBuf {
+    state_dir
+        .join("accounts")
+        .join("limits")
+        .join(format!("{}-{account}.json", tool.name()))
+}
+
+/// Keeps limits an account's CLI reported.
+pub fn save_limits(state_dir: &Path, tool: Tool, account: &str, l: &Limits) -> io::Result<()> {
+    let file = limits_file(state_dir, tool, account);
+    if let Some(dir) = file.parent() {
+        create_private_dir(dir)?;
+    }
+    let tmp = file.with_extension(format!("json.{}", std::process::id()));
+    std::fs::write(&tmp, serde_json::to_vec(l).map_err(io::Error::other)?)?;
+    std::fs::rename(&tmp, &file)
+}
+
+/// The limits an account's CLI last reported.
+pub fn load_limits(state_dir: &Path, tool: Tool, account: &str) -> Option<Limits> {
+    let text = std::fs::read_to_string(limits_file(state_dir, tool, account)).ok()?;
+    serde_json::from_str(&text).ok()
+}
+
+/// The limits in Claude Code's status line input (`rate_limits.five_hour`
+/// and `seven_day`, each `used_percentage` and `resets_at`); only
+/// subscribers get them.
+pub fn claude_status_limits(input: &serde_json::Value, now: i64) -> Option<Limits> {
+    let r = input.get("rate_limits")?;
+    let windows: Vec<LimitWindow> = [("five_hour", 300), ("seven_day", 10_080)]
+        .iter()
+        .filter_map(|(key, minutes)| {
+            let w = r.get(*key)?;
+            Some(LimitWindow {
+                minutes: *minutes,
+                used_percent: w.get("used_percentage")?.as_f64()? as f32,
+                resets_at: w.get("resets_at").and_then(serde_json::Value::as_i64),
+            })
+        })
+        .collect();
+    (!windows.is_empty()).then_some(Limits {
+        time: now,
+        plan: None,
+        windows,
+    })
+}
+
+/// The command TermOS puts in Claude Code's `statusLine`.
+pub const STATUSLINE_ARGS: &str = "agent statusline";
+
+/// Claude Code's `settings.json` with TermOS's status line: `termos`
+/// (quoted as needed) `agent statusline`. The status line it had is
+/// returned, for TermOS's command to run after its own (`None`: none, or
+/// already TermOS's).
+pub fn with_statusline(
+    settings: &mut serde_json::Value,
+    termos: &str,
+) -> Result<Option<String>, AccountError> {
+    let obj = settings.as_object_mut().ok_or_else(|| {
+        AccountError::Invalid("Claude Code's settings are not a JSON object".into())
+    })?;
+    let ours = format!("{termos} {STATUSLINE_ARGS}");
+    let old = obj
+        .get("statusLine")
+        .and_then(|s| s.get("command"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_owned)
+        .filter(|c| !c.contains(STATUSLINE_ARGS));
+    let mut line = serde_json::Map::new();
+    line.insert("type".into(), "command".into());
+    line.insert("command".into(), ours.into());
+    // Keep its other settings (padding).
+    if let Some(serde_json::Value::Object(prev)) = obj.get("statusLine") {
+        for (k, v) in prev {
+            if k != "type" && k != "command" {
+                line.insert(k.clone(), v.clone());
+            }
+        }
+    }
+    obj.insert("statusLine".into(), serde_json::Value::Object(line));
+    Ok(old)
+}
+
+/// Claude Code's `settings.json` without TermOS's status line: the one it
+/// had before (`previous`) is put back, else none.
+pub fn without_statusline(settings: &mut serde_json::Value, previous: Option<&str>) -> bool {
+    let Some(obj) = settings.as_object_mut() else {
+        return false;
+    };
+    let ours = obj
+        .get("statusLine")
+        .and_then(|s| s.get("command"))
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|c| c.contains(STATUSLINE_ARGS));
+    if !ours {
+        return false;
+    }
+    match previous {
+        Some(cmd) => {
+            obj.insert(
+                "statusLine".into(),
+                serde_json::json!({ "type": "command", "command": cmd }),
+            );
+        }
+        None => {
+            obj.remove("statusLine");
+        }
+    }
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -595,6 +732,56 @@ mod tests {
             d.claude_settings(&no_env, Some(home)),
             Some(PathBuf::from("/h/.claude.json"))
         );
+    }
+
+    #[test]
+    fn limits_are_kept_and_the_status_line_chains_the_users_own() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let input = serde_json::json!({
+            "model": { "display_name": "Fixture" },
+            "rate_limits": {
+                "five_hour": { "used_percentage": 42.5, "resets_at": 1_800_000_000 },
+                "seven_day": { "used_percentage": 10 }
+            }
+        });
+        let l = claude_status_limits(&input, 7).expect("limits");
+        assert_eq!(
+            l.windows[0],
+            LimitWindow {
+                minutes: 300,
+                used_percent: 42.5,
+                resets_at: Some(1_800_000_000)
+            }
+        );
+        assert_eq!(l.windows[1].resets_at, None);
+        assert!(
+            claude_status_limits(&serde_json::json!({ "model": {} }), 7).is_none(),
+            "API users have none"
+        );
+        save_limits(dir.path(), Tool::Claude, "work", &l).expect("saved");
+        assert_eq!(load_limits(dir.path(), Tool::Claude, "work"), Some(l));
+        assert_eq!(load_limits(dir.path(), Tool::Claude, "play"), None);
+
+        // Their own status line is kept, to run after TermOS's.
+        let mut s = serde_json::json!({
+            "model": "fixture-model",
+            "statusLine": { "type": "command", "command": "~/bin/mine.sh", "padding": 0 }
+        });
+        let old = with_statusline(&mut s, "/opt/termos").expect("set");
+        assert_eq!(old.as_deref(), Some("~/bin/mine.sh"));
+        assert_eq!(s["statusLine"]["command"], "/opt/termos agent statusline");
+        assert_eq!(s["statusLine"]["padding"], 0);
+        assert_eq!(s["model"], "fixture-model");
+        // Again: no second wrapping.
+        assert_eq!(with_statusline(&mut s, "/opt/termos").expect("set"), None);
+        assert!(without_statusline(&mut s, old.as_deref()));
+        assert_eq!(s["statusLine"]["command"], "~/bin/mine.sh");
+        assert!(!without_statusline(&mut s, None), "not TermOS's");
+        let mut fresh = serde_json::json!({});
+        with_statusline(&mut fresh, "termos").expect("set");
+        assert!(without_statusline(&mut fresh, None));
+        assert!(fresh.get("statusLine").is_none());
+        assert!(with_statusline(&mut serde_json::json!([]), "t").is_err());
     }
 
     #[test]
