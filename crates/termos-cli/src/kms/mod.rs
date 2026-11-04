@@ -6,7 +6,13 @@
 //! keyboard and mouse through libinput and XKB. libseat gives it the
 //! devices without root. Everything waits on file descriptors: nothing
 //! runs while the screen and input are idle (a held key repeats on a
-//! timer only while it is held).
+//! timer only while it is held, and the visual bell has one only while
+//! it shows).
+//!
+//! With no terminal around it, the console does itself what a terminal
+//! would (D-105): it keeps the last copied text (Ctrl+Shift+V or
+//! Shift+Insert pastes it), flashes for the bell, and draws pictures as
+//! pixels.
 
 mod damage;
 mod display;
@@ -19,7 +25,7 @@ mod seat;
 use std::io::{self, Write as _};
 use std::os::fd::{AsRawFd, RawFd};
 use std::path::{Path, PathBuf};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context as _, bail};
 use input::event::keyboard::{KeyState, KeyboardEventTrait as _};
@@ -30,7 +36,7 @@ use libseat::SeatEvent;
 use termos_core::config::KmsConfig;
 use termos_core::proto::{ClientMsg, PROTOCOL_VERSION, ServerMsg};
 use termos_core::transport::ClientEnd;
-use termos_render::caps::{Caps, PxSize};
+use termos_render::caps::{Caps, Graphics, PxSize};
 use termos_render::color::{ColorDepth, Palette, Rgb, XTERM_ANSI};
 use termos_render::raster::{FontData, FontSet, Rasterizer};
 use tokio::io::unix::AsyncFd;
@@ -160,7 +166,15 @@ struct Console {
     repeat: Option<(Action, u32, Instant)>,
     /// Input→frame times, reported to the log (M9's Pi measurements).
     latency: latency::Latency,
+    /// The text last copied in TermOS: in memory only, never logged.
+    clipboard: Option<String>,
+    visual_bell: bool,
+    /// While the bell's frame shows: when it goes.
+    flash_until: Option<Instant>,
 }
+
+/// How long the bell's frame shows.
+const FLASH: Duration = Duration::from_millis(150);
 
 impl Console {
     fn send(&self, msg: ClientMsg) -> io::Result<()> {
@@ -205,6 +219,10 @@ impl Console {
                 }
                 Ok(())
             }
+            Action::Paste => match &self.clipboard {
+                Some(text) => self.send(ClientMsg::Paste(text.clone())),
+                None => Ok(()),
+            },
         }
     }
 
@@ -324,12 +342,26 @@ impl Console {
             }
             ServerMsg::Exit { reason } => return Ok(Some(Ended::Exited(reason))),
             ServerMsg::Detached { session } => return Ok(Some(Ended::Detached(session))),
-            // TODO(M9b): the console's own clipboard and visual bell; images drawn as pixels rather than as blocks.
-            ServerMsg::Clipboard(_)
-            | ServerMsg::Bell
-            | ServerMsg::Title(_)
-            | ServerMsg::ImageData { .. }
-            | ServerMsg::ImageFree { .. } => {}
+            ServerMsg::Clipboard(text) => self.clipboard = Some(text),
+            ServerMsg::Bell => {
+                // A bell while the frame shows (a loop of them) adds
+                // nothing.
+                if self.visual_bell && self.active && self.flash_until.is_none() {
+                    self.screen.flash(self.screen.raster.palette.ansi[11]);
+                    self.flash_until = Some(Instant::now() + FLASH);
+                    self.show()?;
+                }
+            }
+            ServerMsg::ImageData { id, chunk, last } => {
+                self.screen.image_data(id, &chunk, last);
+                self.show()?;
+            }
+            ServerMsg::ImageFree { id } => {
+                self.screen.image_free(id);
+                self.show()?;
+            }
+            // There is no window title on a console.
+            ServerMsg::Title(_) => {}
             // The console's keyboard reports neither repeats nor releases.
             ServerMsg::KeyboardFlags(_) => {}
         }
@@ -389,6 +421,12 @@ pub(crate) async fn run(end: ClientEnd, cfg: &KmsConfig) -> anyhow::Result<Ended
         color: ColorDepth::Truecolor,
         sync_output: false,
         kitty_keyboard: true,
+        // Placed like Kitty's (a crop per visible piece), drawn here as
+        // pixels.
+        graphics: Graphics {
+            kitty: true,
+            ..Graphics::default()
+        },
         term: "termos-kms".into(),
         cell_px: Some(PxSize {
             width: metrics.width,
@@ -415,6 +453,9 @@ pub(crate) async fn run(end: ClientEnd, cfg: &KmsConfig) -> anyhow::Result<Ended
         ready: false,
         repeat: None,
         latency: latency::Latency::default(),
+        clipboard: None,
+        visual_bell: cfg.visual_bell,
+        flash_until: None,
     };
     c.send(ClientMsg::Hello {
         version: PROTOCOL_VERSION,
@@ -431,6 +472,7 @@ pub(crate) async fn run(end: ClientEnd, cfg: &KmsConfig) -> anyhow::Result<Ended
             .repeat
             .as_ref()
             .map(|(_, _, at)| tokio::time::Instant::from_std(*at));
+        let flash_at = c.flash_until.map(tokio::time::Instant::from_std);
         tokio::select! {
             msg = c.end.rx.recv() => match msg {
                 Some(m) => if let Some(ended) = c.server(m)? {
@@ -461,6 +503,16 @@ pub(crate) async fn run(end: ClientEnd, cfg: &KmsConfig) -> anyhow::Result<Ended
                     c.repeat = Some((action.clone(), code, Instant::now() + c.keyboard.interval));
                     c.act(action)?;
                 }
+            }
+            () = async {
+                match flash_at {
+                    Some(at) => tokio::time::sleep_until(at).await,
+                    None => std::future::pending().await,
+                }
+            } => {
+                c.flash_until = None;
+                c.screen.repaint();
+                c.show()?;
             }
         }
     }

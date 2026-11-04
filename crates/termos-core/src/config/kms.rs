@@ -47,6 +47,9 @@ pub struct KmsConfig {
     pub repeat_delay: u32,
     /// Repeats per second while held.
     pub repeat_rate: u32,
+    /// The bell flashes a frame around the screen for a moment; `false`:
+    /// the bell does nothing.
+    pub visual_bell: bool,
 }
 
 impl Default for KmsConfig {
@@ -61,6 +64,7 @@ impl Default for KmsConfig {
             keyboard_options: String::new(),
             repeat_delay: 400,
             repeat_rate: 25,
+            visual_bell: true,
         }
     }
 }

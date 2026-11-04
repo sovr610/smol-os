@@ -222,10 +222,11 @@ text). For each client and image the desktop decides how to show it:
 - **Kitty** gets one placement per visible piece: the image minus the floats above it and the palette and which-key boxes, each a crop of a single upload.
 - **Sixel and iTerm2** can't be partly covered. They're used only for an image that is wholly visible, not on the last row, while nothing moves; otherwise the visible pieces are drawn as blocks. We choose correctness over fidelity.
 - The server uploads each image once per client and size; the client encodes and draws pixel images after the cells. A Sixel or iTerm2 image that moves is painted over by poisoning the client's previous grid, so the next diff redraws those cells.
-- The KMS backend draws images natively (M8).
+- The KMS console takes Kitty placements and draws them as pixels itself (D-105).
 
 ### 5.9 KMS console (M8, D-073)
 - **A client:** `termos --kms` (termos-cli's `kms` feature, Linux) attaches to the server like the terminal client and draws its frames itself. It consumes the same `Grid` spans and rasterizes the changed cells on the CPU (`termos_render::raster`) into a framebuffer; two DRM dumb buffers take turns, each copied only the rows it missed (as up to eight bands of rows, so a change at the top and one at the bottom do not copy the screen between them), and are shown with page flips. The console logs its input→frame times (D-019's measure: to asking for the flip) every 100 keys. No GPU code: any KMS driver works.
+- **A terminal's jobs (D-105):** pictures arrive as Kitty placements and are blended over the cells as pixels; the last copied text stays in memory for Ctrl+Shift+V / Shift+Insert; the bell flashes a frame round the screen for 150 ms (a timer only while it shows).
 - **Glyphs:** swash from the configured font (built in: DejaVu Sans Mono), a cache of cell-sized coverage masks, box drawing, blocks and braille drawn from geometry; the size is adjustable (Ctrl+= / Ctrl+-) and scaled for the screen's density.
 - **Devices:** libseat for the display and input devices (VT switches give them up and take them back), libinput and XKB for the keyboard and mouse; the hardware cursor for the pointer.
 - **Damage:** only changed cells are repainted, and only their rows are copied out.

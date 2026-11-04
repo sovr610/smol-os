@@ -18,6 +18,9 @@ pub(super) enum Action {
     FontReset,
     /// Ctrl+Alt+F<n>.
     SwitchVt(i32),
+    /// Ctrl+Shift+V or Shift+Insert: the console's clipboard into the
+    /// focused window (D-105).
+    Paste,
 }
 
 pub(super) struct Keyboard {
@@ -132,6 +135,7 @@ pub(super) fn action(sym: Keysym, utf32: u32, mods: Mods) -> Option<Action> {
         Keysym::End | Keysym::KP_End => KeyCode::End,
         Keysym::Prior | Keysym::KP_Prior => KeyCode::PageUp,
         Keysym::Next | Keysym::KP_Next => KeyCode::PageDown,
+        Keysym::Insert | Keysym::KP_Insert if mods == Mods::SHIFT => return Some(Action::Paste),
         Keysym::Insert | Keysym::KP_Insert => KeyCode::Insert,
         Keysym::Delete | Keysym::KP_Delete => KeyCode::Delete,
         _ if (Keysym::F1.raw()..=Keysym::F24.raw()).contains(&raw) => {
@@ -148,6 +152,12 @@ pub(super) fn action(sym: Keysym, utf32: u32, mods: Mods) -> Option<Action> {
                     '0' => return Some(Action::FontReset),
                     _ => {}
                 }
+            }
+            if mods & (Mods::CTRL | Mods::ALT | Mods::SUPER | Mods::SHIFT)
+                == Mods::CTRL | Mods::SHIFT
+                && c.eq_ignore_ascii_case(&'v')
+            {
+                return Some(Action::Paste);
             }
             KeyCode::Char(c)
         }
@@ -173,6 +183,8 @@ mod tests {
     const KEY_LEFTSHIFT: u32 = 42;
     const KEY_LEFTALT: u32 = 56;
     const KEY_F2: u32 = 60;
+    const KEY_V: u32 = 47;
+    const KEY_INSERT: u32 = 110;
     const KEY_UP: u32 = 103;
     const KEY_LEFTSHIFT_UP: u32 = KEY_LEFTSHIFT;
 
@@ -217,11 +229,23 @@ mod tests {
         assert_eq!(press(&mut k, KEY_EQUAL), Some(Action::FontBigger));
         assert_eq!(press(&mut k, KEY_MINUS), Some(Action::FontSmaller));
         assert_eq!(press(&mut k, KEY_1), Some(Action::Key(KeyEvent::ctrl('1'))));
+        // Ctrl+Shift+V pastes the console's clipboard.
+        k.key(KEY_LEFTSHIFT, true);
+        assert_eq!(press(&mut k, KEY_V), Some(Action::Paste));
+        k.key(KEY_LEFTSHIFT, false);
         // Ctrl+Alt+F2 switches to the second virtual terminal.
         k.key(KEY_LEFTALT, true);
         assert_eq!(press(&mut k, KEY_F2), Some(Action::SwitchVt(2)));
         k.key(KEY_LEFTALT, false);
         k.key(KEY_LEFTCTRL, false);
+        // Shift+Insert pastes too; Insert alone is a key.
+        k.key(KEY_LEFTSHIFT, true);
+        assert_eq!(press(&mut k, KEY_INSERT), Some(Action::Paste));
+        k.key(KEY_LEFTSHIFT, false);
+        assert_eq!(
+            press(&mut k, KEY_INSERT),
+            Some(Action::Key(KeyEvent::plain(KeyCode::Insert)))
+        );
         // Modifiers alone mean nothing; letters repeat, Shift does not.
         assert_eq!(k.key(KEY_LEFTSHIFT, true), None);
         k.key(KEY_LEFTSHIFT, false);

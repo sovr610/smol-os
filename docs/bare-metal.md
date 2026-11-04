@@ -147,6 +147,7 @@ Check `/dev/sdX` twice: everything on it is replaced.
 | --- | --- |
 | Ctrl+= / Ctrl+- | bigger / smaller text |
 | Ctrl+0 | the configured size again |
+| Ctrl+Shift+V / Shift+Insert | paste the text last copied in TermOS |
 | Ctrl+Alt+F1…F12 | another virtual terminal (TermOS is on tty1) |
 
 Everything else is the desktop's (`C-b` is the prefix, Ctrl+Space the
@@ -162,6 +163,7 @@ keyboard-variant = ""    # "dvorak", "nodeadkeys"…
 keyboard-options = ""    # "ctrl:nocaps,compose:ralt"…
 repeat-delay = 400       # ms before a held key repeats
 repeat-rate = 25         # repeats per second
+visual-bell = true       # the bell flashes a frame around the screen
 # font = "/data/fonts/MyFont.ttf"        # default: built-in DejaVu Sans Mono
 # bold-font = "/data/fonts/MyFont-Bold.ttf"
 # fallback-fonts = ["/data/fonts/NotoSansCJK-Regular.ttc"]
@@ -170,8 +172,15 @@ repeat-rate = 25         # repeats per second
 The console draws the desktop's cells into the display's memory on the
 CPU, so it works on any display the kernel drives (virtio-gpu, Intel,
 simple framebuffers from UEFI, the Raspberry Pi's VideoCore) without GPU
-drivers. Pictures are shown as blocks of colour for now; drawing them as
-pixels, a console clipboard and a visible bell come later.
+drivers.
+
+With no terminal around it, the console does a terminal's jobs itself:
+- **Pictures** (the image viewer, markdown, programs that print images)
+  are drawn as pixels, cut where windows cover them.
+- **Copying** in TermOS (copy mode, the mouse, programs' OSC 52) keeps the
+  text in the console's memory, never on disk. Ctrl+Shift+V or
+  Shift+Insert pastes it into the focused window.
+- **The bell** flashes a frame around the screen for a moment.
 
 `termos --kms` also works on a desktop Linux machine, from a virtual
 terminal (Ctrl+Alt+F3), when TermOS is built with the `kms` feature:

@@ -1071,6 +1071,15 @@ rewrite history.
   - **When it is saved:** the command is taken when the snapshot is written (after layout changes, and when the server stops). Browsing in a window without changing the layout is therefore saved at the next save.
 - **Alternatives:** serialising each app's state, which is more code per app for little gain; restoring agent windows with their conversation; saving app windows by kind only, so a file manager would come back in the home folder.
 
+## D-105: The KMS console does a terminal's jobs: clipboard, bell, pictures
+- **Status:** Accepted (lead; extends D-073) · 2026-11-04
+- **Context:** A terminal client hands the clipboard (OSC 52), the bell and pixel pictures to the terminal around it. The bare-metal console has no terminal around it, so it dropped all three and pictures showed as colour blocks.
+- **Decision:**
+  - **Pictures:** the console says it speaks Kitty graphics, so the server places pictures for it as for kitty: the PNG once per picture, then one placement per visible piece with the part of the picture it shows, windows on top already cut out. The console decodes each picture once, cuts and scales each placement to its cells (made once per placement), and blends it over the cells by its alpha. Cells painted over a picture bring it back on top. A new placement list repaints the cells where pictures were; a freed picture does the same. Picture data over 64 MiB is refused.
+  - **Clipboard:** the text of the last `ServerMsg::Clipboard` (TermOS copies: copy mode, the mouse, programs' OSC 52) stays in the console's memory, never on disk or in the log. Ctrl+Shift+V or Shift+Insert sends it as a paste.
+  - **Bell:** a frame in bright yellow around the screen's edge for 150 ms, then a repaint. A timer exists only while it shows; bells during the flash add nothing, so a loop of bells cannot strobe. `[kms] visual-bell = false` turns it off.
+- **Alternatives:** the system's clipboard (there is none without a window system); a full-screen inverse flash (harsher to look at); block pictures as before.
+
 ---
 
 ## Open questions (the owner will be asked before the milestone that needs each one)
