@@ -198,6 +198,8 @@ pub struct Report {
     pub data_kb: u64,
     /// How the booted slot was marked (D-078).
     pub slot: Option<serial::Slot>,
+    /// curl's version line (D-109).
+    pub curl: Option<String>,
     /// The end of the serial log, shown when something failed.
     pub tail: String,
 }
@@ -445,6 +447,7 @@ pub fn boot(images: &Path, t: &Target, firmware: Firmware, dir: &Path) -> Result
         memory,
         data_kb,
         slot: serial::slot(&log),
+        curl: serial::curl(&log),
         tail: serial::tail(&log, 40),
     })
 }
@@ -467,6 +470,12 @@ impl Report {
                 "the data partition did not grow: {} MiB on a disk {GROW_BY_MIB} MiB bigger than the image",
                 self.data_kb / 1024
             ));
+        }
+        // TermOS downloads with the system's curl, built on mbedTLS.
+        match &self.curl {
+            Some(c) if c.starts_with("curl ") && c.contains("mbedTLS/") => {}
+            Some(c) => p.push(format!("curl is not the image's mbedTLS build: {c}")),
+            None => p.push("no TERMOS-CURL report".into()),
         }
         match &self.slot {
             Some(s) if s.good => {}

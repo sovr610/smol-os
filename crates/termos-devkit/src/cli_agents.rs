@@ -220,11 +220,9 @@ impl Curl {
             })
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-        // TODO(M10d): curl on the bare-metal images (the owner picks its TLS library), for `termos agent install` there.
+        // The images ship curl with mbedTLS (D-109); hosts have their own.
         let mut child = cmd.spawn().map_err(|e| {
-            AgentError::Fetch(format!(
-                "cannot run curl ({e}); installing needs curl, which TermOS's bare-metal images do not have yet"
-            ))
+            AgentError::Fetch(format!("cannot run curl ({e}); installing needs curl"))
         })?;
         if let (Some(t), Some(mut stdin)) = (token, child.stdin.take()) {
             use std::io::Write as _;

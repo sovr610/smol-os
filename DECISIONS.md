@@ -1145,6 +1145,20 @@ rewrite history.
   - taking grants back when each agent session ends, or after each command (the rewrite every time);
   - a restricted low-integrity token, which cannot keep reads out of the profile.
 
+## D-109: Owner answers for M5b and the images' curl
+- **Status:** Accepted (owner, 2026-11-04) · 2026-11-04
+- **Context:** M10d left `termos agent install` without a downloader on the bare-metal images, pending the choice of curl's TLS library. M5b needs a dev rootfs, a way to be root inside it, and a place for Podman. The owner was asked all four.
+- **Decision:**
+  - **curl on the images:** curl and libcurl built with **mbedTLS** (small, Apache-2.0; OpenSSL is ruled out by D-003), trusting the image's CA certificates. Installs on the images use the same code path as everywhere else. The boot tests check that the image's curl is the mbedTLS build.
+  - **The dev rootfs:** **Debian 13 (trixie) from the official `debian` image**, pinned by digest per architecture and checked by SHA-256 before anything is unpacked. TermOS downloads the image's layer from the repository that builds the official image (the same bytes as the registry, which rate-limits anonymous pulls). `termos devroot update` runs apt's upgrade inside it; a newer pinned image comes with a TermOS release.
+  - **Root inside it:** **rootless, with subordinate IDs.** The rootfs is unpacked and entered in a user namespace that maps the user to root and the user's `/etc/subuid` and `/etc/subgid` ranges to the other IDs (shadow's `newuidmap`), so apt and dpkg work and files keep their owners. Nothing runs as the host's root. The images gain shadow's ID helpers and a range for the user `termos`.
+  - **Podman:** **the host's, hosted only.** Where the host has Podman, the package manager app lists its images and containers and `termos devroot` can run the rootfs in a Podman container instead of bubblewrap. The images carry no Podman.
+- **Alternatives:**
+  - curl with GnuTLS (larger, with nettle and GMP) or OpenSSL (D-003); a downloader inside TermOS (a TLS stack in the binary; D-054 chose the system's curl);
+  - Ubuntu or Alpine as the rootfs; debootstrap at create time (slower, needs a mirror and root);
+  - fakeroot-style root (no real owners; apt's sandbox user fails); a setuid helper;
+  - Podman on the images (its runtime, networking and storage drivers add tens of megabytes and a daemon-like service for one feature).
+
 ---
 
 ## Open questions (the owner will be asked before the milestone that needs each one)

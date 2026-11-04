@@ -21,7 +21,7 @@ questions (DECISIONS.md, "Open questions").
 | M4a | Graphics and themes: capability probe, images, themes, animations, Kitty keyboard (D-042 to D-049) | 🔍 |
 | M4b | Apps, `termos-hw`, WASM widgets (D-042, D-050 to D-052) | 🔍 |
 | M5a | Languages and editors: `termos lang` (mise), managed Neovim/Helix with LSP and DAP, templates, task panels, Git UI (D-053 to D-057) | 🔍 |
-| M5b | Dev rootfs, Podman, package manager app (D-053) | ⏳ |
+| M5b | Dev rootfs, Podman, package manager app (D-053, D-109) | 🚧 |
 | M6 | AI agents: providers, agent windows, permissions, sandbox, audit, MCP, external agents, secrets (D-058 to D-064) | 🔍 |
 | M7 | Local models: Hugging Face downloads, fit estimates, llama.cpp, candle embeddings, the router, agents' local provider (D-065 to D-068) | 🔍 |
 | M8 | Bare-metal images: the KMS console, Buildroot images for x86_64, aarch64 and the Pis, QEMU boot tests (D-072 to D-076) | 🔍 |
@@ -525,7 +525,7 @@ What was shown, and where:
 ---
 
 ## M5b — Dev rootfs and packages
-**Status:** ⏳ · Owner answers: split from M5 (D-053).
+**Status:** 🚧 in progress · Owner answers: split from M5 (D-053); Debian 13 from the official image, pinned by digest; rootless with subordinate IDs; the host's Podman, hosted only (D-109).
 
 **Deliverables**
 - **Dev rootfs:** `termos devroot create|enter|update`, used on bare metal and testable hosted on Linux.
@@ -930,7 +930,7 @@ Not shown live: agent sessions (no provider keys here; the registry, its Approve
   - [x] Their CLI asks for each call; `[agents.termos-mcp]` denies tools and commands on top (quitting, detaching and closing by default); every call audited (`mcp-…` logs) and in the history
   - [x] Registered on install (`claude mcp add --scope user`; `[mcp_servers.termos]` in Codex's `config.toml`); `termos mcp register|unregister` for CLIs installed otherwise
 - **The command center:** [x] their token counts, models and times from their session logs, never their text (`[center] cli-usage`, in Settings), next to TermOS's own agents; their MCP calls among the tool calls
-- **Bare metal:** [ ] not yet: the installer runs the system's `curl`, and the images have none (BusyBox, CA certificates). Adding it means choosing its TLS library for the image (asked at review); the CLIs' musl builds are already the ones picked there.
+- **Bare metal:** [x] the images ship curl with mbedTLS (D-109), which the installer runs as on every other platform; the CLIs' musl builds are the ones picked there. The QEMU boot tests check that the image's curl is the mbedTLS build (`TERMOS-CURL`).
 
 **Acceptance:** CI installs both on every platform and completes an MCP handshake with each (no live API keys: their own `mcp` commands and recorded fixtures).
 
@@ -1052,5 +1052,4 @@ Generated from the `TODO(M<n>)` markers in the code. Don't edit by hand; run `ca
 | --- | --- | --- |
 | M5b | `crates/termos-apps/src/lib.rs` | package manager UI over mise, the dev rootfs and the host package manager. |
 | M5b | `crates/termos-devkit/src/lib.rs` | dev rootfs, Podman and the package manager UI. |
-| M10d | `crates/termos-devkit/src/cli_agents.rs` | curl on the bare-metal images (the owner picks its TLS library), for `termos agent install` there. |
 <!-- open-work:end -->

@@ -26,6 +26,13 @@ BR2_PACKAGE_LIBXKBCOMMON=y
 BR2_PACKAGE_XKEYBOARD_CONFIG=y
 BR2_PACKAGE_CA_CERTIFICATES=y
 
+# HTTPS downloads (D-109): curl with mbedTLS, for `termos agent install`,
+# mise and the dev rootfs, as on every other platform.
+BR2_PACKAGE_MBEDTLS=y
+BR2_PACKAGE_LIBCURL=y
+BR2_PACKAGE_LIBCURL_CURL=y
+BR2_PACKAGE_LIBCURL_MBEDTLS=y
+
 # The network (D-072): iwd for Wi-Fi, dhcpcd for addresses.
 BR2_PACKAGE_DBUS=y
 BR2_PACKAGE_IWD=y

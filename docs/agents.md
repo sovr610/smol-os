@@ -332,8 +332,8 @@ installed, its window offers to install it.
   TermOS's own `bin` folder, which comes first on `PATH` in every TermOS
   window.
 - **A given version:** `termos agent install claude@2.1.90`.
-- **Needs `curl`** (and `tar` for Codex), which Linux, macOS and Windows 10
-  and later have. TermOS's bare-metal images do not have curl yet.
+- **Needs `curl`** (and `tar` for Codex), which Linux, macOS, Windows 10
+  and later, and TermOS's bare-metal images have.
 
 ```bash
 termos agent status          # versions, and whether the MCP server is registered

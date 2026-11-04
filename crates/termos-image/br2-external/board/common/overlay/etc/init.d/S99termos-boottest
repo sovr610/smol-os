@@ -16,6 +16,8 @@ cfg=/sys/firmware/qemu_fw_cfg/by_name/opt/termos
 		END { printf "TERMOS-MEM used_kb=%d total_kb=%d\n", t - a, t }' /proc/meminfo >/dev/console
 	# -P: one line per file system, however long its device's name.
 	df -kP /data | awk 'NR == 2 { printf "TERMOS-DATA size_kb=%d\n", $2 }' >/dev/console
+	# The HTTPS client TermOS downloads with (D-109).
+	echo "TERMOS-CURL $(curl --version 2>&1 | head -n 1)" >/dev/console
 	if [ -r "$cfg/boottest-update/raw" ]; then
 		url=$(cat "$cfg/boottest-update/raw")
 		# The bundle comes over the network: wait for DHCP's default

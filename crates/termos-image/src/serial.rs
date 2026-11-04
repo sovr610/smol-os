@@ -4,7 +4,8 @@
 //! screen; `TERMOS-MEM used_kb=… total_kb=…` and `TERMOS-DATA size_kb=…`
 //! once the desktop has settled; `TERMOS-SLOT slot=… version=… good|bad`
 //! when the booted slot is marked; `TERMOS-UPDATE installed into slot …`
-//! after `termos update install`.
+//! after `termos update install`; `TERMOS-CURL` and curl's version line
+//! (D-109).
 
 /// The console's first frame is up.
 pub const READY: &str = "TERMOS-READY";
@@ -47,6 +48,16 @@ pub fn data_kb(log: &str) -> Option<u64> {
         .lines()
         .find(|l| l.contains("TERMOS-DATA"))
         .and_then(|l| field(l, "size_kb="))
+}
+
+/// curl's version line after `READY` (`curl 8.… (…) libcurl/8.… mbedTLS/…`),
+/// or what the shell said instead.
+pub fn curl(log: &str) -> Option<String> {
+    let after = &log[ready(log)?..];
+    after
+        .lines()
+        .find_map(|l| l.split_once("TERMOS-CURL "))
+        .map(|(_, v)| v.trim().to_owned())
 }
 
 /// The booted slot's marking: its name, the system's version, and whether
@@ -149,6 +160,9 @@ mod tests {
         );
         assert_eq!(install_done("TERMOS-INSTALL failed\n"), Some(false));
         assert_eq!(install_done("TERMOS-READY\n"), None);
+        let curl_log = "TERMOS-READY\nTERMOS-CURL curl 8.17.0 (aarch64-buildroot-linux-gnu) libcurl/8.17.0 mbedTLS/3.6.5\r\n";
+        assert!(curl(curl_log).is_some_and(|c| c.contains("mbedTLS/")));
+        assert_eq!(curl("TERMOS-CURL curl 8\n"), None, "only after READY");
     }
 
     #[test]

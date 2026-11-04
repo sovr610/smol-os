@@ -110,8 +110,9 @@ cargo xtask image boot x86_64 --update --install
 
 That is the boot test CI runs: it waits for the console's first frame,
 takes a screenshot (`target/image/<target>-boot/screen-*.png`), and checks
-the memory in use once the desktop has settled (the budget is 150 MB) and
-that the data partition grew into a disk 1 GiB bigger than the image.
+the memory in use once the desktop has settled (the budget is 150 MB),
+that the data partition grew into a disk 1 GiB bigger than the image, and
+that the image's `curl` is the mbedTLS build TermOS downloads with.
 `--update` then puts a newer version on the same disk with `termos update`
 and starts it, then a broken one, which falls back; `--install` starts the
 live ISO with an empty disk, installs onto it with `termos install`, and
@@ -212,6 +213,8 @@ logind) to build and run.
   desktop.
 - Logs are in `~/.local/state/termos/log/` (on the data partition) and on
   the system console.
+- `curl`, built with mbedTLS and the image's CA certificates, is what
+  `termos agent install` and mise download with (D-109).
 
 ## Limits
 
