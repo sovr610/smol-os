@@ -951,6 +951,20 @@ None of M10d runs while idle: the MCP server is a separate process the agent's C
 - **The usage app:** a snapshot of every account with limits and budgets; buttons and keys run the desktop commands; stale limits are not shown; 5-hour windows open on the hour and close; tokens by account, model, day and provider add up; the live source reads every account's logs.
 - **CI, for real** (`agents.yml`, every platform): a second account of each CLI has its own settings with TermOS's server, the shims follow `account use` (`mcp list` connects), the status line keeps Claude Code's limits; then removed.
 
+**Budgets** (`cargo xtask perf 60`, release build, Linux x86_64):
+
+| | M11a | Budget |
+| --- | --- | --- |
+| Keystroke→screen p50 / p99 | 0.67 / 1.58 ms | p99 < 16 ms |
+| Idle CPU, 60 s | 0.000% | < 1% |
+| Idle CPU with a 4K picture open, with a WASM widget | 0.033% / 0.000% | < 1% |
+| CPU with the system monitor open, 60 s | 0.60% | < 1% |
+| RSS, server + client | 26.8 MB | < 150 MB |
+| RSS with a 4K picture open | 81.1 MB | < 150 MB |
+| 300 000-line flood | 125 ms | no regression (179 ms in M10d) |
+
+Nothing M11a adds runs while idle: the shims run only when `claude` or `codex` starts, and the usage app reads the logs every 30 seconds only while it is on screen.
+
 **Found and fixed on the way**
 - Codex starts MCP servers with an emptied environment, so `termos mcp serve` under Codex could not find TermOS or its pane (M10d): its entry now forwards `TERMOS`, `TERMOS_PANE` and the XDG folders.
 - Registering TermOS's server waited for the CLI without limit; a CLI that stalls now gives up after a minute.
