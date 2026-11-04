@@ -33,7 +33,7 @@ questions (DECISIONS.md, "Open questions").
 | M11a | AI accounts: several subscriptions per provider, switching with the conversation kept, the usage app (D-096, D-097) | 🔍 |
 | M11b | Skills that teach Claude Code, Codex and other CLIs to use TermOS, and `termos agent ask` (D-096, D-098) | 🔍 |
 | M11c | The harness: one coding tool over Claude Code, Codex and API models, routing each task to the model that suits it (D-096, D-099, D-100) | 🔍 |
-| M9b | Platform gaps: the Windows agent sandbox and input, snapshots and sensors on macOS and Windows, Kitty keyboard flags, app windows in sessions, the KMS console's clipboard, bell and images (D-077, D-101) | 🚧 |
+| M9b | Platform gaps: the Windows agent sandbox and input, snapshots and sensors on macOS and Windows, Kitty keyboard flags, app windows in sessions, the KMS console's clipboard, bell and images (D-077, D-101–D-108) | 🔍 |
 
 Unfinished work in code is always a `TODO(M<n>)` marker (D-018). The
 generated table at the end of this file lists every open marker.
@@ -722,7 +722,7 @@ What was shown, and where (Linux, in an isolated `tmux -L termos-m7` with its ow
 ---
 
 ## M9b — Platform gaps
-**Status:** 🚧 · Owner answers: split from M9 (D-077); an AppContainer, the ConPTY in the Windows zip, the OS's own GPU sources, one review (D-101).
+**Status:** 🔍 · Owner answers: split from M9 (D-077); an AppContainer, the ConPTY in the Windows zip, the OS's own GPU sources, one review (D-101); AppContainer grants kept until `termos sandbox reset` (D-108). Design: D-102 to D-108.
 
 **Deliverables** (the `TODO(M9b)` markers)
 - **Windows:** a sandbox for agents' commands (an AppContainer or a restricted token); VT input mode (bracketed paste, the Kitty keyboard protocol); images from programs in panes; saving at logoff and shutdown (a hidden window for `WM_ENDSESSION`).
@@ -739,7 +739,26 @@ What was shown, and where (Linux, in an isolated `tmux -L termos-m7` with its ow
 - [x] Windows: job objects, saving at logoff, the bundled ConPTY and images in panes: harness CLIs in a job (started suspended); a hidden window holds logoff and shutdown until the snapshots are written; Microsoft's ConPTY 1.24 pinned in the zip, with a pass-through test (D-107)
 - [x] Windows: the AppContainer sandbox: workspace writable, toolchains readable, profile out of reach, no network unless asked; grants kept until `termos sandbox reset` (owner, D-108)
 
-**Acceptance:** each gap is closed with tests on its platform's CI runner, and the open-work table has no M9b rows.
+**Acceptance:** each gap is closed with tests on its platform's CI runner, and the open-work table has no M9b rows. ✅ No `TODO(M9b)` markers remain. CI (four platforms) covers:
+- **Windows:**
+  - Ctrl+Space, Escape and pastes through a ConPTY in the end-to-end tests;
+  - the newest program under `cmd.exe` named, its folder found;
+  - a job ending a CLI's background child;
+  - the logoff window waiting for the save;
+  - Sixel and Kitty pictures through the bundled ConPTY;
+  - the AppContainer, required on the runner: writes, reads, the network with and without `--net`, reset.
+- **macOS:** the foreground program and its folder.
+- **Everywhere:**
+  - the input decoder (property tests and the `input_decode` fuzz target);
+  - Kitty repeats, releases and alternate keys from the terminal to `cat -v`;
+  - app windows back in their places after a restore;
+  - the console's pictures, bell and paste keys (unit tests on the screen and keyboard).
+
+**Results**
+- The client reads its terminal on a thread that waits until input comes or it is told to stop, so an idle terminal still costs nothing; the performance budgets passed on every push. `termos debug keys` now prints the bytes and the keys decoded from them.
+- A Windows CI run found one thing the unit tests could not: a ConPTY leaves Ctrl+Space untranslated in VT input mode. That record is read as the NUL it stands for.
+- `cargo install` builds on Windows still use the system's ConPTY (no pictures from programs); the zip's `conpty.dll` and `OpenConsole.exe` beside `termos.exe` turn them on, and `termos debug caps` says which is in use.
+- Plugins still run without a sandbox on Windows: they need the session's named pipe (D-108).
 
 ---
 
