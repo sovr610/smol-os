@@ -75,7 +75,7 @@ jobs:
         run: |
           echo "XDG_DATA_HOME=$RUNNER_TEMP/data" >> "$GITHUB_ENV"
           echo "CODEX_HOME=$RUNNER_TEMP/codex" >> "$GITHUB_ENV"
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: actions-rust-lang/setup-rust-toolchain@v1
       - name: Build
         run: cargo build --locked -p termos-cli --no-default-features

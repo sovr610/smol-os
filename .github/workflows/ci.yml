@@ -23,7 +23,7 @@ jobs:
     # A hang must not hold a runner for the default six hours.
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       # Reads rust-toolchain.toml (pinned 1.97.0 + rustfmt/clippy), enables the
       # Swatinem cache and sets RUSTFLAGS=-D warnings.
       - uses: actions-rust-lang/setup-rust-toolchain@v1
@@ -67,7 +67,7 @@ jobs:
           - name: windows-x86_64
             os: windows-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: actions-rust-lang/setup-rust-toolchain@v1
       # The agent sandbox (D-061): bubblewrap, and user namespaces, which
       # Ubuntu 24.04 restricts through AppArmor by default. The sandbox
@@ -140,13 +140,13 @@ jobs:
           - aarch64-unknown-linux-musl
           - x86_64-unknown-linux-musl
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           target: ${{ matrix.target }}
       # cargo-zigbuild uses zig as the cross linker; `python3 -m ziglang` is
       # one of the locations it probes.
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - name: Install zig
@@ -176,7 +176,7 @@ jobs:
           ./.github/scripts/buildinfo.sh "${{ matrix.target }} ($needs)" > "dist/$name/BUILDINFO.txt"
           tar -C dist -czf "dist/$name.tar.gz" "$name"
           echo "name=$name" >> "$GITHUB_OUTPUT"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: ${{ steps.package.outputs.name }}
           path: dist/${{ steps.package.outputs.name }}.tar.gz
@@ -205,8 +205,8 @@ jobs:
           - arch: aarch64-musl
             os: ubuntu-24.04-arm
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
         with:
           pattern: termos-*-linux-${{ matrix.arch }}
           path: dist
@@ -227,7 +227,7 @@ jobs:
     # A hang must not hold a runner for the default six hours.
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: actions-rust-lang/setup-rust-toolchain@v1
       - name: Build termos
         run: cargo build --release --locked -p termos-cli
@@ -243,7 +243,7 @@ jobs:
           TERMOS_BIN="dist/$name/termos" ./.github/scripts/daemon-smoke.sh
           tar -C dist -czf "dist/$name.tar.gz" "$name"
           echo "name=$name" >> "$GITHUB_OUTPUT"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: ${{ steps.package.outputs.name }}
           path: dist/${{ steps.package.outputs.name }}.tar.gz
@@ -257,7 +257,7 @@ jobs:
     # A hang must not hold a runner for the default six hours.
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: actions-rust-lang/setup-rust-toolchain@v1
       # The setup action sets RUSTFLAGS, which overrides .cargo/config.toml's
       # target rustflags: link the C runtime statically here explicitly, so
@@ -280,7 +280,7 @@ jobs:
           echo "name=$name" >> "$GITHUB_OUTPUT"
       # upload-artifact zips the directory: the download is a .zip holding
       # termos.exe, the ConPTY beside it and BUILDINFO.txt.
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: ${{ steps.package.outputs.name }}
           path: dist/${{ steps.package.outputs.name }}
@@ -293,7 +293,7 @@ jobs:
     # A hang must not hold a runner for the default six hours.
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       # cargo-fuzz needs nightly; the pinned stable toolchain is overridden
       # with `+nightly` only for this job.
       - name: Install nightly
@@ -319,7 +319,7 @@ jobs:
     # A hang must not hold a runner for the default six hours.
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: actions-rust-lang/setup-rust-toolchain@v1
       - name: Latency, idle CPU, memory, flood throughput
         run: cargo xtask perf 30
@@ -331,7 +331,7 @@ jobs:
     # A hang must not hold a runner for the default six hours.
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           target: x86_64-unknown-linux-musl
@@ -362,7 +362,7 @@ jobs:
       matrix:
         os: [ubuntu-24.04, ubuntu-24.04-arm]
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: actions-rust-lang/setup-rust-toolchain@v1
       - name: bubblewrap, uidmap, subordinate IDs, user namespaces
         run: |
@@ -380,7 +380,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           target: wasm32-wasip2
@@ -407,7 +407,7 @@ jobs:
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: actions-rust-lang/setup-rust-toolchain@v1
       # What the asset patterns in termos-models/src/llama.rs must match:
       # the assets of the build TermOS pins (llama::VERSION).

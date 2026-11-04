@@ -46,7 +46,7 @@ jobs:
       matrix:
         target: ${{ fromJSON(github.event.inputs.targets || '["x86_64", "aarch64-virt"]') }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       # Buildroot's output, the kernel and a release build of termos need
       # more than the runner's free space.
       - name: Free disk space
@@ -69,7 +69,7 @@ jobs:
       # restored from the last run and saved even when the build fails, so
       # the next attempt does not fetch them again.
       - name: Restore downloads
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: target/image/dl
           key: buildroot-dl-${{ matrix.target }}-${{ github.run_id }}
@@ -78,7 +78,7 @@ jobs:
         run: cargo xtask image build ${{ matrix.target }} --legal-info
       - name: Save downloads
         if: always()
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v6
         with:
           path: target/image/dl
           key: buildroot-dl-${{ matrix.target }}-${{ github.run_id }}-${{ github.run_attempt }}
@@ -109,14 +109,14 @@ jobs:
           fi
           ls -la boot dist
       # Screenshots and serial logs on their own, small, to look at first.
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: boot-${{ matrix.target }}
           path: boot/
           retention-days: 14
           if-no-files-found: ignore
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: image-${{ matrix.target }}
