@@ -9,6 +9,7 @@ use termos_render::caps::{Caps, ImageProtocol};
 use termos_render::diff::Span;
 use termos_render::encode::CursorState;
 
+use crate::input::decode::{KeyAlternates, KeyKind};
 use crate::input::{KeyEvent, MouseEvent};
 
 /// The frontend protocol: bumped on any incompatible change to these
@@ -18,7 +19,9 @@ use crate::input::{KeyEvent, MouseEvent};
 /// - 2: capabilities v2 (graphics, pixel sizes, background colour,
 ///   remote/tmux/reduced-motion flags).
 /// - 3: images (`FrameUpdate::images`, `ImageData`, `ImageFree`).
-pub const PROTOCOL_VERSION: u32 = 3;
+/// - 4: Kitty keyboard details (`ClientMsg::KeyDetail`,
+///   `ServerMsg::KeyboardFlags`).
+pub const PROTOCOL_VERSION: u32 = 4;
 
 /// A frame for one client: the cells that changed since the last frame this
 /// client received, plus where the cursor goes.
@@ -71,6 +74,13 @@ pub enum ClientMsg {
     },
     /// The outer terminal gained (`true`) or lost focus.
     Focus(bool),
+    /// A key with more than [`ClientMsg::Key`] says: a repeat or a
+    /// release, or the alternate keys a Kitty terminal reported (D-103).
+    KeyDetail {
+        key: KeyEvent,
+        kind: KeyKind,
+        alternates: KeyAlternates,
+    },
 }
 
 /// Server → frontend.
@@ -101,4 +111,8 @@ pub enum ServerMsg {
     ImageFree {
         id: u32,
     },
+    /// The Kitty keyboard flags beyond disambiguation (2, 4, 8, 16) the
+    /// program in this client's focused pane asked for. A client whose
+    /// terminal speaks the protocol sets them there (D-103).
+    KeyboardFlags(u8),
 }

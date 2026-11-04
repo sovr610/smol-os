@@ -1041,6 +1041,22 @@ rewrite history.
   - reading Windows input with `ReadFile`, which skips resize records;
   - keeping key records and guessing pastes from timing.
 
+## D-103: Kitty keyboard flags 2 and 4 for programs in panes
+- **Status:** Accepted (lead; completes D-046, whose flags 2 and 4 were `TODO(M9)`) · 2026-11-04
+- **Context:** Programs in panes can ask for event types (flag 2: repeats and releases) and alternate keys (flag 4: the shifted key and the key's place on a US layout). TermOS can only pass these on if the outer terminal reports them. Asking every terminal for them all the time would change how every key arrives, even when no program wants them.
+- **Decision:**
+  - **The terminal is asked only when a program asks.** Each client still pushes flag 1 when its terminal speaks the protocol. When its focused pane's program sets flags 2, 4, 8 or 16, the server tells that client (`ServerMsg::KeyboardFlags`). The client then sets exactly those flags plus 1 on its terminal (`CSI = flags ; 1 u`), and drops them again when focus moves on. The pop at exit restores the terminal.
+  - **Keys carry what the terminal reported.** A repeat, a release, or a key with alternates travels as `ClientMsg::KeyDetail`; a plain press is still `ClientMsg::Key`. The frontend protocol becomes version 4. Shift, which tmux notation folds into the character, is kept in the alternates (`shifted`), so the key code a program gets is the key without Shift (`CSI 49:33;4u` for Alt+!). With flag 16 the terminal's text wins over a guess.
+  - **Releases go where the press went.** Only presses sent to a pane whose program asked for releases are remembered, at most 32 per client. A release goes to the same pane even if focus moved, and a release with no press is dropped. Presses TermOS handled itself (the prefix, bindings) therefore never send a stray release.
+  - **The encoder follows the specification:**
+    - repeats and releases carry `:2` and `:3`;
+    - keys sent as text, and unmodified Enter, Tab and Backspace without flag 8, have no release;
+    - without flag 2 a repeat is a press and a release is dropped;
+    - alternates appear only when they differ from the code.
+  - **The `CSI ? u` reply** now lists all five flags.
+  - **One gap stays:** modifier keys pressed alone (flag 8) are not passed on, since the desktop's keys have no such code.
+- **Alternatives:** always asking the terminal for every flag (all keys as escape codes for everyone); always asking for 1, 2 and 4 (releases for a program asking for flag 8 would still miss text keys); a key message carrying every field every time.
+
 ---
 
 ## Open questions (the owner will be asked before the milestone that needs each one)

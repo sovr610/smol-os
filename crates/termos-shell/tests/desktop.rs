@@ -363,6 +363,51 @@ async fn programs_get_kitty_keys_when_they_ask() {
     h.key("C-c");
 }
 
+/// A program that asks for event types and alternate keys (Kitty flags 2
+/// and 4) gets repeats, releases (only for keys it got the press of) and
+/// alternate keys, and the client is told to ask its terminal for them.
+#[cfg(unix)]
+#[tokio::test]
+async fn programs_get_kitty_releases_and_alternate_keys() {
+    use termos_core::input::decode::{KeyAlternates, KeyKind};
+
+    let mut h = Harness::new("");
+    h.type_text("printf '\\033[>7u'; cat -v\n");
+    h.wait_for("cat running", |_, d| {
+        d.focused_modes().is_some_and(|m| m.kitty_flags == 7)
+    })
+    .await;
+    h.screen();
+    assert!(
+        h.outbox.contains(&ServerMsg::KeyboardFlags(2 | 4)),
+        "the client was not told: {:?}",
+        h.outbox
+    );
+    let detail = |spec: &str, kind, alternates| ClientMsg::KeyDetail {
+        key: spec.parse().expect("key spec"),
+        kind,
+        alternates,
+    };
+    h.key("C-a");
+    h.desktop
+        .handle_client(C, detail("C-a", KeyKind::Repeat, KeyAlternates::default()));
+    h.desktop
+        .handle_client(C, detail("C-a", KeyKind::Release, KeyAlternates::default()));
+    // A release whose press the program never got is not sent.
+    h.desktop
+        .handle_client(C, detail("C-q", KeyKind::Release, KeyAlternates::default()));
+    let bang = KeyAlternates {
+        unshifted: Some('1'),
+        shifted: Some('!'),
+        base: None,
+    };
+    h.desktop
+        .handle_client(C, detail("M-!", KeyKind::Press, bang));
+    h.type_text("x\n");
+    h.wait_text("^[[97;5u^[[97;5:2u^[[97;5:3u^[[49:33;4ux")
+        .await;
+}
+
 /// A float opening animates for a local client and not for one over SSH:
 /// about eight changed frames for one, none for the other, then no timer.
 #[tokio::test]

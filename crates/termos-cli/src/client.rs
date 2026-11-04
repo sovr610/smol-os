@@ -121,9 +121,13 @@ pub(crate) enum Ended {
 }
 
 /// Runs the frontend until the server detaches it or the session ends.
+/// `kitty_keyboard`: the terminal speaks the Kitty keyboard protocol (the
+/// client pushed flag 1 on entering), so the flags a pane's program asks
+/// for can be set there too.
 pub(crate) async fn run(
     mut end: ClientEnd,
     caps: Caps,
+    kitty_keyboard: bool,
     typeahead: Vec<ClientMsg>,
     out: &mut impl Write,
 ) -> io::Result<Ended> {
@@ -204,6 +208,12 @@ pub(crate) async fn run(
                 Some(ServerMsg::Clipboard(text)) => {
                     out.write_all(&osc52_copy(&text))?;
                     out.flush()?;
+                }
+                Some(ServerMsg::KeyboardFlags(flags)) => {
+                    if kitty_keyboard {
+                        out.write_all(&term_input::kitty_set(flags))?;
+                        out.flush()?;
+                    }
                 }
                 Some(ServerMsg::Bell) => {
                     out.write_all(b"\x07")?;

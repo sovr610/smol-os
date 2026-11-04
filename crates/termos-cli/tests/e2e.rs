@@ -169,11 +169,14 @@ fn detach_ls_attach_msg_and_kill_server() {
 fn pastes_are_text_and_kitty_keys_work() {
     let mut t = Termos::start("");
     t.wait_ready();
+    // The shell's line editor may act on the pasted Ctrl+B (readline moves
+    // the cursor back: `echo pasted%-ok-`); what matters is that TermOS
+    // passed it on instead of splitting.
     t.send(b"\x1b[200~echo pasted-\x02%-ok\r\x1b[201~");
     let screen = t.wait_for("the pasted command's output", T, |s| {
         s.lines().any(|l| {
             let l = l.trim();
-            l.starts_with("pasted-") && l.ends_with("%-ok")
+            !l.contains("echo") && l.starts_with("pasted") && l.contains("%-ok")
         })
     });
     assert!(
@@ -196,6 +199,14 @@ fn pastes_are_text_and_kitty_keys_work() {
         t.send(b"\x1b[27u");
         t.wait_for("the palette to close", T, |s| {
             !s.contains("Command palette")
+        });
+        // A program asks for releases (flag 2): the client asks the
+        // terminal, and the release the terminal sends reaches it.
+        t.send(b"printf '\\033[>3u'; cat -v\r");
+        t.wait_output(T, "\x1b[=3;1u");
+        t.send(b"\x1b[97;5u\x1b[97;5:3ux\r");
+        t.wait_for("the press and release in the pane", T, |s| {
+            s.contains("^[[97;5u^[[97;5:3ux")
         });
     }
     t.send(b"\x02d");

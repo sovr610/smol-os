@@ -465,6 +465,7 @@ fn csi_key(params: &Params, fin: u8, n: usize) -> Step {
                     &KeyAlternates::default(),
                     mods,
                     KeyKind::Press,
+                    None,
                 ),
             ),
             code => match tilde_key(code) {
@@ -483,7 +484,16 @@ fn csi_key(params: &Params, fin: u8, n: usize) -> Step {
                 shifted: alt(1),
                 base: alt(2),
             };
-            Step::Event(n, kitty_key(params.get(0, 0), &alternates, mods, kind))
+            // The text the key types (flag 16): its first character.
+            let text = params
+                .has(2, 0)
+                .then(|| params.get(2, 0))
+                .and_then(char::from_u32)
+                .filter(|c| !c.is_control());
+            Step::Event(
+                n,
+                kitty_key(params.get(0, 0), &alternates, mods, kind, text),
+            )
         }
         _ => Step::Event(n, None),
     }
@@ -507,8 +517,15 @@ fn tilde_key(n: u32) -> Option<KeyCode> {
     })
 }
 
-/// A key of the Kitty protocol's `CSI code u` form.
-fn kitty_key(code: u32, alternates: &KeyAlternates, mods: u32, kind: KeyKind) -> Option<Input> {
+/// A key of the Kitty protocol's `CSI code u` form; `text` is what it
+/// types, when the terminal says (flag 16).
+fn kitty_key(
+    code: u32,
+    alternates: &KeyAlternates,
+    mods: u32,
+    kind: KeyKind,
+    text: Option<char>,
+) -> Option<Input> {
     let key = match code {
         9 => KeyCode::Tab,
         13 | 57414 => KeyCode::Enter,
@@ -539,15 +556,19 @@ fn kitty_key(code: u32, alternates: &KeyAlternates, mods: u32, kind: KeyKind) ->
         57344..=63743 => return None,
         _ => {
             let c = char::from_u32(code).filter(|c| !c.is_control())?;
+            let shift = decode_mods(mods).contains(Mods::SHIFT);
+            let typed = match (text, alternates.shifted) {
+                (Some(t), _) => t,
+                (None, Some(s)) if shift => s,
+                (None, _) if shift => single_upper(c),
+                (None, _) => c,
+            };
+            // With Shift held, `shifted` is what it typed, so whoever
+            // encodes the key again knows Shift was part of it.
             let alternates = KeyAlternates {
                 unshifted: Some(c),
-                ..*alternates
-            };
-            let shift = decode_mods(mods).contains(Mods::SHIFT);
-            let typed = match alternates.shifted {
-                Some(s) if shift => s,
-                _ if shift => single_upper(c),
-                _ => c,
+                shifted: shift.then_some(typed),
+                base: alternates.base,
             };
             return key_event(KeyCode::Char(typed), mods, kind, alternates);
         }
@@ -949,6 +970,21 @@ mod tests {
         for (bytes, want) in table {
             assert_eq!(keys(bytes), vec![k(want)], "{bytes:?}");
         }
+        // The text the terminal reports wins (flag 16); Shift is kept in
+        // `shifted` even when the terminal gave no shifted key.
+        assert_eq!(keys(b"\x1b[97;;229u"), vec![k("å")]);
+        assert_eq!(
+            decode(b"\x1b[97;6u"),
+            vec![Input::Key {
+                key: k("C-a"),
+                kind: KeyKind::Press,
+                alternates: KeyAlternates {
+                    unshifted: Some('a'),
+                    shifted: Some('A'),
+                    base: None,
+                },
+            }]
+        );
         // Modifier keys alone and lock keys are not keys here.
         assert!(decode(b"\x1b[57441;2u\x1b[57358u").is_empty());
         let release = decode(b"\x1b[97;1:3u");

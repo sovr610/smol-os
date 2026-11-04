@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! Encoding desktop input for a child program, the way xterm would send it.
 
+use termos_core::input::decode::{KeyAlternates, KeyKind};
 use termos_core::input::{KeyCode, KeyEvent, Mods, MouseButton, MouseEvent, MouseKind};
 
 use crate::vt::VtModes;
@@ -15,8 +16,24 @@ fn modifier_param(mods: Mods) -> u8 {
 /// The bytes a key press sends to a program: the Kitty keyboard protocol
 /// when the program enabled it, legacy (xterm) encoding otherwise.
 pub fn encode_key(key: KeyEvent, modes: &VtModes) -> Vec<u8> {
+    encode_key_event(key, KeyKind::Press, &KeyAlternates::default(), modes)
+}
+
+/// [`encode_key`] for a press, repeat or release, with the alternate keys
+/// the outer terminal reported. Repeats and releases are told apart only
+/// for programs that asked (Kitty flag 2): others get a repeat as a press
+/// and no release.
+pub fn encode_key_event(
+    key: KeyEvent,
+    kind: KeyKind,
+    alternates: &KeyAlternates,
+    modes: &VtModes,
+) -> Vec<u8> {
     if modes.kitty_flags != 0 {
-        return encode_kitty(key, modes.kitty_flags);
+        return encode_kitty(key, kind, alternates, modes.kitty_flags);
+    }
+    if kind == KeyKind::Release {
+        return Vec::new();
     }
     let mods = key.mods;
     let has_mods = mods.intersects(Mods::SHIFT | Mods::ALT | Mods::CTRL);
@@ -123,36 +140,70 @@ fn kitty_mods(mods: Mods) -> u32 {
         + 8 * u32::from(mods.contains(Mods::SUPER))
 }
 
-/// A key press in the Kitty keyboard protocol
-/// (<https://sw.kovidgoyal.net/kitty/keyboard-protocol/>) for the flags
-/// in [`crate::vt::KITTY_FLAGS_SUPPORTED`]:
+/// A key in the Kitty keyboard protocol
+/// (<https://sw.kovidgoyal.net/kitty/keyboard-protocol/>):
 ///
 /// - 1 (disambiguate): Esc and keys with Ctrl/Alt/Super become `CSI code ;
 ///   mods u`; text, and unmodified Enter, Tab and Backspace, stay as they
 ///   are; other keys use the `CSI 1 ; mods X` / `CSI n ; mods ~` forms.
+/// - 2 (event types): repeats and releases carry `:2` or `:3` after the
+///   modifiers. Keys sent as text (and unmodified Enter, Tab, Backspace
+///   without flag 8) have no release.
+/// - 4 (alternate keys): `CSI code:shifted:base`, with the character Shift
+///   typed and the key's place on a US layout, when they differ from the
+///   code.
 /// - 8 (all keys as escape codes): text keys and Enter/Tab/Backspace too.
 /// - 16 (associated text, with 8): the text a key types, as code points.
 ///
-/// The key code of a shifted letter is the lowercase letter; other shifted
-/// symbols are reported as typed, since the base key depends on the
-/// keyboard layout (alternate keys, flag 4, are not implemented).
-fn encode_kitty(key: KeyEvent, flags: u8) -> Vec<u8> {
+/// The key code is the key without Shift: from the outer terminal's report
+/// when there was one, otherwise the lowercase of an uppercase letter.
+fn encode_kitty(key: KeyEvent, kind: KeyKind, alternates: &KeyAlternates, flags: u8) -> Vec<u8> {
+    let events = flags & 2 != 0;
+    let alternate = flags & 4 != 0;
     let all = flags & 8 != 0;
     let with_text = all && flags & 16 != 0;
+    if kind == KeyKind::Release && !events {
+        return Vec::new();
+    }
+    // Without flag 2 a repeat is just another press.
+    let kind = if events { kind } else { KeyKind::Press };
+    let release = kind == KeyKind::Release;
     let mods = if key.code == KeyCode::BackTab {
         key.mods | Mods::SHIFT
     } else {
         key.mods
     };
-    let m = kitty_mods(mods);
-    let csi_u = |code: u32, m: u32, text: Option<char>| -> Vec<u8> {
+    let kind_param = match kind {
+        KeyKind::Press => None,
+        KeyKind::Repeat => Some(2),
+        KeyKind::Release => Some(3),
+    };
+    // `;mods[:kind]`, or nothing for a plain press.
+    let mods_field = |m: u32| -> String {
+        match kind_param {
+            Some(k) => format!("{m}:{k}"),
+            None if m != 1 => m.to_string(),
+            None => String::new(),
+        }
+    };
+    let csi_u = |code: u32, keys: (Option<char>, Option<char>), m: u32, text: Option<char>| {
         let mut s = format!("\x1b[{code}");
-        let text = text.filter(|_| with_text);
-        if m != 1 || text.is_some() {
-            s.push(';');
-            if m != 1 {
-                s.push_str(&m.to_string());
+        let (shifted, base) = if alternate { keys } else { (None, None) };
+        if shifted.is_some() || base.is_some() {
+            s.push(':');
+            if let Some(c) = shifted {
+                s.push_str(&u32::from(c).to_string());
             }
+            if let Some(c) = base {
+                s.push(':');
+                s.push_str(&u32::from(c).to_string());
+            }
+        }
+        let text = text.filter(|_| with_text && !release);
+        let field = mods_field(m);
+        if !field.is_empty() || text.is_some() {
+            s.push(';');
+            s.push_str(&field);
         }
         if let Some(t) = text {
             s.push(';');
@@ -161,42 +212,60 @@ fn encode_kitty(key: KeyEvent, flags: u8) -> Vec<u8> {
         s.push('u');
         s.into_bytes()
     };
+    let m = kitty_mods(mods);
     // `CSI 1 ; mods X` (or `CSI X`) and `CSI n ; mods ~` (or `CSI n ~`).
     let functional = |n: u32, final_byte: char| -> Vec<u8> {
-        if m != 1 {
-            format!("\x1b[{n};{m}{final_byte}").into_bytes()
+        let field = mods_field(m);
+        if !field.is_empty() {
+            format!("\x1b[{n};{field}{final_byte}").into_bytes()
         } else if n == 1 {
             format!("\x1b[{final_byte}").into_bytes()
         } else {
             format!("\x1b[{n}{final_byte}").into_bytes()
         }
     };
+    // Enter, Tab and Backspace stay legacy unless modified (or flag 8),
+    // and then have no release.
     let legacy_unless = |code: u32, legacy: u8| -> Vec<u8> {
         if m == 1 && !all {
-            vec![legacy]
+            if release { Vec::new() } else { vec![legacy] }
         } else {
-            csi_u(code, m, None)
+            csi_u(code, (None, None), m, None)
         }
     };
     match key.code {
         KeyCode::Char(c) => {
             let types_text = !mods.intersects(Mods::CTRL | Mods::ALT | Mods::SUPER);
             if types_text && !all {
-                return c.to_string().into_bytes();
+                return if release {
+                    Vec::new()
+                } else {
+                    c.to_string().into_bytes()
+                };
             }
-            // An uppercase letter was typed with Shift (tmux notation
-            // folds Shift into the letter).
-            let (code, m) = if c.is_ascii_uppercase() {
-                (c.to_ascii_lowercase(), kitty_mods(mods | Mods::SHIFT))
+            // Shift is folded into the character (tmux notation), so it
+            // comes back from what the terminal reported, or from an
+            // uppercase letter.
+            let shift = alternates.shifted.is_some()
+                || (alternates.unshifted.is_none() && c.is_ascii_uppercase());
+            let code = alternates.unshifted.unwrap_or(if c.is_ascii_uppercase() {
+                c.to_ascii_lowercase()
             } else {
-                (c, m)
+                c
+            });
+            let shifted = if shift {
+                Some(alternates.shifted.unwrap_or(c)).filter(|&s| s != code)
+            } else {
+                None
             };
-            csi_u(u32::from(code), m, types_text.then_some(c))
+            let base = alternates.base.filter(|&b| b != code);
+            let m = kitty_mods(if shift { mods | Mods::SHIFT } else { mods });
+            csi_u(u32::from(code), (shifted, base), m, types_text.then_some(c))
         }
         KeyCode::Enter => legacy_unless(13, b'\r'),
         KeyCode::Tab | KeyCode::BackTab => legacy_unless(9, b'\t'),
         KeyCode::Backspace => legacy_unless(127, 0x7f),
-        KeyCode::Esc => csi_u(27, m, None),
+        KeyCode::Esc => csi_u(27, (None, None), m, None),
         KeyCode::Up => functional(1, 'A'),
         KeyCode::Down => functional(1, 'B'),
         KeyCode::Right => functional(1, 'C'),
@@ -216,7 +285,7 @@ fn encode_kitty(key: KeyEvent, flags: u8) -> Vec<u8> {
             functional(code, '~')
         }
         // F13 to F35 have private-use code points.
-        KeyCode::F(n @ 13..=35) => csi_u(57376 + u32::from(n - 13), m, None),
+        KeyCode::F(n @ 13..=35) => csi_u(57376 + u32::from(n - 13), (None, None), m, None),
         KeyCode::F(_) => Vec::new(),
     }
 }
@@ -408,6 +477,101 @@ mod tests {
             encode_key(KeyEvent::plain(KeyCode::F(13)), &m),
             b"\x1b[57376u".to_vec()
         );
+    }
+
+    /// Flags 2 (event types) and 4 (alternate keys), from the protocol's
+    /// specification.
+    #[test]
+    fn kitty_event_types_and_alternate_keys() {
+        use termos_core::input::decode::{Decoder, Input};
+
+        let enc = |flags: u8, spec: &str, kind: KeyKind| {
+            let m = VtModes {
+                kitty_flags: flags,
+                ..VtModes::default()
+            };
+            String::from_utf8(encode_key_event(
+                key(spec),
+                kind,
+                &KeyAlternates::default(),
+                &m,
+            ))
+            .expect("utf-8")
+        };
+        use KeyKind::{Press, Release, Repeat};
+        let events: &[(u8, &str, KeyKind, &str)] = &[
+            (3, "Escape", Release, "\x1b[27;1:3u"),
+            (3, "C-a", Repeat, "\x1b[97;5:2u"),
+            (3, "C-a", Release, "\x1b[97;5:3u"),
+            (3, "Up", Release, "\x1b[1;1:3A"),
+            (3, "C-Up", Repeat, "\x1b[1;5:2A"),
+            (3, "F5", Release, "\x1b[15;1:3~"),
+            (3, "Home", Press, "\x1b[H"),
+            // Text and plain Enter: repeats are typed again, releases
+            // are not sent, without flag 8.
+            (3, "a", Repeat, "a"),
+            (3, "a", Release, ""),
+            (3, "Enter", Release, ""),
+            (3 | 8, "a", Release, "\x1b[97;1:3u"),
+            (3 | 8, "Enter", Release, "\x1b[13;1:3u"),
+            (3 | 8 | 16, "a", Press, "\x1b[97;;97u"),
+            (3 | 8 | 16, "a", Release, "\x1b[97;1:3u"),
+            // Without flag 2 a repeat is a press and a release is nothing.
+            (1, "C-a", Repeat, "\x1b[97;5u"),
+            (1, "C-a", Release, ""),
+            (0, "a", Release, ""),
+            (0, "Up", Repeat, "\x1b[A"),
+        ];
+        for (flags, k, kind, want) in events {
+            assert_eq!(enc(*flags, k, *kind), *want, "flags {flags}, {k}, {kind:?}");
+        }
+
+        // Alternate keys come from what the outer terminal reported:
+        // decode its bytes and encode them for the program.
+        let through = |flags: u8, bytes: &[u8]| {
+            let mut d = Decoder::new();
+            let mut out = Vec::new();
+            d.feed(bytes, &mut out);
+            d.flush(&mut out);
+            let m = VtModes {
+                kitty_flags: flags,
+                ..VtModes::default()
+            };
+            out.into_iter()
+                .map(|i| match i {
+                    Input::Key {
+                        key,
+                        kind,
+                        alternates,
+                    } => String::from_utf8(encode_key_event(key, kind, &alternates, &m))
+                        .expect("utf-8"),
+                    other => panic!("not a key: {other:?}"),
+                })
+                .collect::<String>()
+        };
+        let table: &[(u8, &[u8], &str)] = &[
+            // Shift+Alt+1 types '!': the code is the 1 key.
+            (5, b"\x1b[49:33;4u", "\x1b[49:33;4u"),
+            (1, b"\x1b[49:33;4u", "\x1b[49;4u"),
+            // Ctrl+Shift+a keeps its Shift.
+            (5, b"\x1b[97:65;6u", "\x1b[97:65;6u"),
+            (5, b"\x1b[97;6u", "\x1b[97:65;6u"),
+            // A Cyrillic layout: the key in the place of 'a'.
+            (5, b"\x1b[1092::97;5u", "\x1b[1092::97;5u"),
+            (7, b"\x1b[1092::97;5:3u", "\x1b[1092::97;5:3u"),
+            (1, b"\x1b[1092::97;5u", "\x1b[1092;5u"),
+            // Everything at once: a shifted Cyrillic key with its text.
+            (
+                31,
+                b"\x1b[1092:1060:97;2;1060u",
+                "\x1b[1092:1060:97;2;1060u",
+            ),
+            // Legacy keys pass through unchanged in meaning.
+            (5, b"\x1bx", "\x1b[120;3u"),
+        ];
+        for (flags, from, want) in table {
+            assert_eq!(through(*flags, from), *want, "flags {flags}, {from:?}");
+        }
     }
 
     #[test]

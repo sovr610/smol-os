@@ -56,11 +56,12 @@ pub struct VtModes {
     pub kitty_flags: u8,
 }
 
-/// Kitty keyboard flags TermOS implements for programs in panes:
-/// disambiguate (1), report all keys as escape codes (8), report
-/// associated text (16).
-// TODO(M9b): Kitty keyboard release events (flag 2) and alternate keys (flag 4) for programs in panes.
-pub const KITTY_FLAGS_SUPPORTED: u8 = 1 | 8 | 16;
+/// Kitty keyboard flags TermOS implements for programs in panes (all
+/// five): disambiguate (1), event types (2), alternate keys (4), all keys
+/// as escape codes (8), associated text (16). Repeats, releases and
+/// alternate keys reach a program when the outer terminal reports them
+/// (D-103); modifier keys pressed alone are not passed on.
+pub const KITTY_FLAGS_SUPPORTED: u8 = 1 | 2 | 4 | 8 | 16;
 
 /// The URI scheme of the hidden links that anchor images to text.
 const ANCHOR: &str = "termos-image:";
@@ -298,6 +299,12 @@ fn kitty_flags(m: TermMode) -> u8 {
     let mut flags = 0;
     if m.contains(TermMode::DISAMBIGUATE_ESC_CODES) {
         flags |= 1;
+    }
+    if m.contains(TermMode::REPORT_EVENT_TYPES) {
+        flags |= 2;
+    }
+    if m.contains(TermMode::REPORT_ALTERNATE_KEYS) {
+        flags |= 4;
     }
     if m.contains(TermMode::REPORT_ALL_KEYS_AS_ESC) {
         flags |= 8;
@@ -962,13 +969,15 @@ mod tests {
     #[test]
     fn kitty_keyboard_modes_are_tracked_and_bounded() {
         let mut vt = AlacrittyVt::new(10, 2, 0);
-        vt.advance(b"\x1b[>3u\x1b[?u");
-        assert_eq!(vt.modes().kitty_flags, 1, "flag 2 is not implemented");
+        vt.advance(b"\x1b[>7u\x1b[?u");
+        assert_eq!(vt.modes().kitty_flags, 7);
         let replies: Vec<_> = vt.take_events();
         assert!(
-            replies.contains(&VtEvent::Reply(b"\x1b[?1u".to_vec())),
-            "the reply lists only supported flags: {replies:?}"
+            replies.contains(&VtEvent::Reply(b"\x1b[?7u".to_vec())),
+            "the reply lists the flags: {replies:?}"
         );
+        // Unknown bits are not claimed.
+        assert_eq!(mask_keyboard_report(b"\x1b[?95u".to_vec()), b"\x1b[?31u");
         vt.advance(b"\x1b[<u");
         assert_eq!(vt.modes().kitty_flags, 0);
         // Enough pushes to overflow the emulator's own stack (which would

@@ -1320,7 +1320,7 @@ fn attach(
     }));
     let ended = {
         let mut out = stdout.lock();
-        runtime.block_on(client::run(end, caps, typeahead, &mut out))
+        runtime.block_on(client::run(end, caps, kitty, typeahead, &mut out))
     };
     drop(guard);
     let mut stdout = std::io::stdout();

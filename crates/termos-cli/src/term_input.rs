@@ -30,6 +30,13 @@ pub(crate) const MODES_OFF: &[u8] =
 pub(crate) const KITTY_PUSH: &[u8] = b"\x1b[>1u";
 pub(crate) const KITTY_POP: &[u8] = b"\x1b[<1u";
 
+/// Sets the pushed Kitty keyboard flags to 1 and the ones a pane's
+/// program asked for (2, 4, 8, 16), so the terminal reports what that
+/// program needs (D-103).
+pub(crate) fn kitty_set(flags: u8) -> Vec<u8> {
+    format!("\x1b[={};1u", 1 | (flags & (2 | 4 | 8 | 16))).into_bytes()
+}
+
 /// What the reader thread delivers.
 #[derive(Debug)]
 pub(crate) enum Incoming {
@@ -175,14 +182,25 @@ fn pump(mut source: impl Source, tx: &mpsc::UnboundedSender<Incoming>, raw: bool
     }
 }
 
-/// The message an input event sends to the server, if any.
+/// The message an input event sends to the server, if any: a plain press
+/// as [`ClientMsg::Key`], anything more as [`ClientMsg::KeyDetail`].
 pub(crate) fn to_msg(input: Input) -> Option<ClientMsg> {
     match input {
-        Input::Key { key, kind, .. } => {
-            // Releases come only from a Kitty terminal asked for them
-            // (flag 2), which the client does not ask for.
-            (kind != KeyKind::Release).then_some(ClientMsg::Key(key))
-        }
+        Input::Key {
+            key,
+            kind,
+            alternates,
+        } => Some(
+            if kind == KeyKind::Press && alternates == KeyAlternates::default() {
+                ClientMsg::Key(key)
+            } else {
+                ClientMsg::KeyDetail {
+                    key,
+                    kind,
+                    alternates,
+                }
+            },
+        ),
         Input::Mouse(m) => Some(ClientMsg::Mouse(m)),
         Input::Paste(text) => Some(ClientMsg::Paste(text)),
         Input::Focus(f) => Some(ClientMsg::Focus(f)),
@@ -259,6 +277,8 @@ pub(crate) mod records {
     const DOUBLE_CLICK: u32 = 0x2;
     const MOUSE_WHEELED: u32 = 0x4;
     const MOUSE_HWHEELED: u32 = 0x8;
+    const VK_SPACE: u16 = 0x20;
+    const VK_2: u16 = 0x32;
 
     /// Collects the text of key records as UTF-8 bytes.
     #[derive(Debug, Default)]
@@ -273,13 +293,28 @@ pub(crate) mod records {
     impl Records {
         /// A key record. In VT input mode the console turns keys into the
         /// characters of their sequences: key-down records whose character
-        /// is the text. A record with no character is a key that types
-        /// nothing (Shift alone) unless it has no virtual key either: then
-        /// it carries the NUL of Ctrl+Space.
-        pub(crate) fn key(&mut self, down: bool, repeat: u16, vk: u16, unit: u16) {
-            if !down || (unit == 0 && vk != 0) {
+        /// is the text, with no virtual key (so a NUL character is the NUL
+        /// of Ctrl+Space). Keys it cannot translate stay as they were; of
+        /// those only Ctrl+Space (and Ctrl+Shift+2, which a ConPTY makes of
+        /// a NUL it is sent) type something: NUL. The rest (Shift alone,
+        /// say) type nothing.
+        pub(crate) fn key(&mut self, down: bool, repeat: u16, vk: u16, unit: u16, control: u32) {
+            if !down {
                 return;
             }
+            let unit = if vk == 0 {
+                unit
+            } else {
+                let ctrl = control & (LEFT_CTRL | RIGHT_CTRL) != 0;
+                let alt = control & (LEFT_ALT | RIGHT_ALT) != 0;
+                let nul_key =
+                    ctrl && !alt && matches!(vk, VK_SPACE | VK_2) && (unit == 0 || unit == 0x20);
+                match unit {
+                    _ if nul_key => 0,
+                    0 => return,
+                    unit => unit,
+                }
+            };
             for _ in 0..repeat.max(1) {
                 self.unit(unit);
             }
@@ -402,22 +437,27 @@ pub(crate) mod records {
             let mut pieces = Vec::new();
             // An arrow key as VT input mode delivers it: ESC [ A.
             for unit in [0x1b, u16::from(b'['), u16::from(b'A')] {
-                r.key(true, 1, 0, unit);
+                r.key(true, 1, 0, unit, 0);
             }
             // Key-ups and Shift alone type nothing; Ctrl+Space is NUL.
-            r.key(false, 1, 0x41, u16::from(b'a'));
-            r.key(true, 1, 0x10, 0);
-            r.key(true, 1, 0, 0);
+            r.key(false, 1, 0x41, u16::from(b'a'), 0);
+            r.key(true, 1, 0x10, 0, SHIFT);
+            r.key(true, 1, 0, 0, 0);
+            // Untranslated Ctrl+Space and Ctrl+Shift+2 are NUL too; with
+            // Alt (AltGr) they are not.
+            r.key(true, 1, VK_SPACE, 0x20, LEFT_CTRL);
+            r.key(true, 1, VK_2, 0, LEFT_CTRL | SHIFT);
+            r.key(true, 1, VK_2, 0, LEFT_CTRL | RIGHT_ALT);
             // A repeated key, and an emoji as a surrogate pair.
-            r.key(true, 2, 0x41, u16::from(b'a'));
-            r.key(true, 1, 0, 0xd83d);
-            r.key(true, 1, 0, 0xde00);
+            r.key(true, 2, 0x41, u16::from(b'a'), 0);
+            r.key(true, 1, 0, 0xd83d, 0);
+            r.key(true, 1, 0, 0xde00, 0);
             // A lone low surrogate is dropped.
-            r.key(true, 1, 0, 0xde00);
+            r.key(true, 1, 0, 0xde00, 0);
             r.flush(&mut pieces);
             assert_eq!(
                 pieces,
-                vec![Piece::Bytes("\x1b[A\0aa😀".as_bytes().to_vec())]
+                vec![Piece::Bytes("\x1b[A\0\0\0aa😀".as_bytes().to_vec())]
             );
         }
 
@@ -425,7 +465,7 @@ pub(crate) mod records {
         fn mouse_records() {
             let mut r = Records::default();
             let mut pieces = Vec::new();
-            r.key(true, 1, 0, u16::from(b'x'));
+            r.key(true, 1, 0, u16::from(b'x'), 0);
             r.mouse(&mut pieces, (3, 4), LEFT_BUTTON, LEFT_CTRL, 0);
             r.mouse(&mut pieces, (5, 4), LEFT_BUTTON, 0, MOUSE_MOVED);
             r.mouse(&mut pieces, (5, 4), 0, 0, 0);
@@ -669,8 +709,13 @@ mod sys {
                         // SAFETY: both members of the character union are
                         // plain integers; the W API fills UnicodeChar.
                         let unit = unsafe { k.uChar.UnicodeChar };
-                        self.records
-                            .key(k.bKeyDown != 0, k.wRepeatCount, k.wVirtualKeyCode, unit);
+                        self.records.key(
+                            k.bKeyDown != 0,
+                            k.wRepeatCount,
+                            k.wVirtualKeyCode,
+                            unit,
+                            k.dwControlKeyState,
+                        );
                     }
                     MOUSE_EVENT => {
                         // SAFETY: the event type says which member is set.
@@ -754,10 +799,15 @@ mod tests {
             Some(ClientMsg::Key(KeyEvent::ctrl('b')))
         );
         assert_eq!(
-            to_msg(key(KeyKind::Repeat)),
-            Some(ClientMsg::Key(KeyEvent::ctrl('b')))
+            to_msg(key(KeyKind::Release)),
+            Some(ClientMsg::KeyDetail {
+                key: KeyEvent::ctrl('b'),
+                kind: KeyKind::Release,
+                alternates: KeyAlternates::default(),
+            })
         );
-        assert_eq!(to_msg(key(KeyKind::Release)), None);
+        assert_eq!(kitty_set(2 | 4), b"\x1b[=7;1u");
+        assert_eq!(kitty_set(0xff), b"\x1b[=31;1u");
         assert_eq!(
             to_msg(Input::Paste("x".into())),
             Some(ClientMsg::Paste("x".into()))

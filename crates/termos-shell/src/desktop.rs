@@ -14,7 +14,8 @@ use termos_core::app::{App, AppEffect, AppWaker, render_app};
 use termos_core::clipboard::{ClipSource, SharedClipboard};
 use termos_core::config::{Config, StatusPosition, WindowSize};
 use termos_core::ids::{ClientId, PaneId, PaneIds};
-use termos_core::input::{KeyEvent, Mods, MouseButton, MouseEvent, MouseKind};
+use termos_core::input::decode::{KeyAlternates, KeyKind};
+use termos_core::input::{KeyCode, KeyEvent, Mods, MouseButton, MouseEvent, MouseKind};
 use termos_core::paths::Paths;
 use termos_core::proto::{ClientMsg, ServerMsg};
 use termos_render::caps::{Caps, ImageProtocol};
@@ -26,7 +27,7 @@ use crate::images::{self, BlockCache, Candidate, Place, ShownImage};
 use termos_render::encode::CursorState;
 use termos_render::grid::{Grid, Rect};
 use termos_render::theme::{Theme, ThemeBase, is_light};
-use termos_term::input::{encode_focus, encode_key, encode_mouse, encode_paste};
+use termos_term::input::{encode_focus, encode_key, encode_key_event, encode_mouse, encode_paste};
 use termos_term::pty::{PtyEvent, PtyPane, SpawnSpec};
 use termos_term::vt::{AlacrittyVt, VtBackend, VtEvent};
 use termos_wm::compose::{ComposeOptions, compose};
@@ -240,6 +241,18 @@ enum Drag {
     },
 }
 
+/// What tells a key's release from another key's: the key without Shift
+/// (as the terminal reported it), so a release after Shift was let go
+/// still matches.
+fn key_identity(k: KeyEvent, alternates: &KeyAlternates) -> KeyCode {
+    match (k.code, alternates.unshifted) {
+        (KeyCode::BackTab, _) => KeyCode::Tab,
+        (KeyCode::Char(_), Some(u)) => KeyCode::Char(u),
+        (KeyCode::Char(c), None) => KeyCode::Char(c.to_lowercase().next().unwrap_or(c)),
+        (code, _) => code,
+    }
+}
+
 /// A client's theme (D-088): `[theme]` for its terminal's background, with
 /// the icons of `[ui]` and gradients where it shows truecolor.
 fn client_theme(config: &Config, pick: Option<ThemeBase>, caps: &Caps) -> Theme {
@@ -285,6 +298,11 @@ struct ClientUi {
     mouse_owner: Option<PaneId>,
     status_regions: StatusRegions,
     title_sent: String,
+    /// The Kitty keyboard flags last sent to this client (D-103).
+    keyboard_sent: u8,
+    /// Keys pressed into panes whose programs want releases (Kitty flag
+    /// 2): the release goes to the same pane.
+    keys_down: Vec<(KeyCode, PaneId)>,
     /// The open menu and its submenus (D-085).
     menu: Option<Menu>,
     /// Where the pointer was last seen, and what is under it.
@@ -317,6 +335,8 @@ impl Default for ClientUi {
             mouse_owner: None,
             status_regions: StatusRegions::default(),
             title_sent: String::new(),
+            keyboard_sent: 0,
+            keys_down: Vec::new(),
             menu: None,
             pointer: None,
             hover: Hover::None,
@@ -1674,8 +1694,10 @@ impl Desktop {
             ui.theme = client_theme(&self.config, ui.theme_pick, caps);
             ui.cols = (*cols).max(2);
             ui.rows = (*rows).max(2);
-            // A fresh client must not inherit a stale title.
+            // A fresh client must not inherit a stale title or keyboard.
             ui.title_sent.clear();
+            ui.keyboard_sent = 0;
+            ui.keys_down.clear();
             // The logo, for a moment (D-089).
             if self.config.ui.splash && Self::animates(&self.config, ui) {
                 self.anim.start(anim::Kind::Splash(client), Instant::now());
@@ -1690,7 +1712,7 @@ impl Desktop {
         }
         // Any input ends the splash at once; the input still counts.
         let input = match &msg {
-            ClientMsg::Key(_) | ClientMsg::Paste(_) => true,
+            ClientMsg::Key(_) | ClientMsg::KeyDetail { .. } | ClientMsg::Paste(_) => true,
             ClientMsg::Mouse(m) => !matches!(m.kind, MouseKind::Moved),
             _ => false,
         };
@@ -1700,6 +1722,7 @@ impl Desktop {
         if matches!(
             msg,
             ClientMsg::Key(_)
+                | ClientMsg::KeyDetail { .. }
                 | ClientMsg::Mouse(_)
                 | ClientMsg::Paste(_)
                 | ClientMsg::Resize { .. }
@@ -1716,7 +1739,17 @@ impl Desktop {
                 self.recompute_size();
                 self.dirty = true;
             }
-            ClientMsg::Key(k) => self.on_key(k),
+            ClientMsg::Key(k) => self.on_key(k, KeyKind::Press, &KeyAlternates::default()),
+            ClientMsg::KeyDetail {
+                key,
+                kind: KeyKind::Release,
+                alternates,
+            } => self.on_key_release(key, &alternates),
+            ClientMsg::KeyDetail {
+                key,
+                kind,
+                alternates,
+            } => self.on_key(key, kind, &alternates),
             ClientMsg::Mouse(m) => {
                 if self.config.mouse {
                     self.on_mouse(m);
@@ -1782,7 +1815,9 @@ impl Desktop {
 
     // ----- keys -------------------------------------------------------
 
-    fn on_key(&mut self, k: KeyEvent) {
+    /// A key press or repeat; `kind` and `alternates` matter only to a
+    /// program in a pane that asked for them (Kitty flags 2 and 4).
+    fn on_key(&mut self, k: KeyEvent, kind: KeyKind, alternates: &KeyAlternates) {
         let now = Instant::now();
         if let Some(prompt) = &mut self.ui.prompt {
             let action = prompt.handle_key(k);
@@ -1870,7 +1905,18 @@ impl Desktop {
                 kind: PaneKind::Term { vt, .. },
                 ..
             }) => {
-                let bytes = encode_key(k, &vt.modes());
+                let modes = vt.modes();
+                let bytes = encode_key_event(k, kind, alternates, &modes);
+                if modes.kitty_flags & 2 != 0 {
+                    let key = key_identity(k, alternates);
+                    let down = &mut self.ui.keys_down;
+                    down.retain(|(c, _)| *c != key);
+                    // A release lost on the way must not grow this.
+                    if down.len() >= 32 {
+                        down.remove(0);
+                    }
+                    down.push((key, id));
+                }
                 self.write_to_pane(id, bytes);
                 None
             }
@@ -1882,6 +1928,26 @@ impl Desktop {
         };
         if let Some(e) = effect {
             self.app_effect(id, e);
+        }
+    }
+
+    /// A key release: to the pane that got the press, if its program
+    /// asked for releases.
+    fn on_key_release(&mut self, k: KeyEvent, alternates: &KeyAlternates) {
+        let key = key_identity(k, alternates);
+        let Some(i) = self.ui.keys_down.iter().position(|(c, _)| *c == key) else {
+            return;
+        };
+        let (_, pane) = self.ui.keys_down.remove(i);
+        let bytes = match self.panes.get(&pane) {
+            Some(Pane {
+                kind: PaneKind::Term { vt, .. },
+                ..
+            }) => encode_key_event(k, KeyKind::Release, alternates, &vt.modes()),
+            _ => return,
+        };
+        if !bytes.is_empty() {
+            self.write_to_pane(pane, bytes);
         }
     }
 
@@ -3606,6 +3672,20 @@ impl Desktop {
             self.outbox
                 .push((self.current, ServerMsg::Title(title.clone())));
             self.ui.title_sent = title;
+        }
+        // The keyboard flags the focused program asked for, so the
+        // client can ask its terminal for them (D-103).
+        let keyboard = self
+            .focused()
+            .and_then(|id| match self.panes.get(&id).map(|p| &p.kind) {
+                Some(PaneKind::Term { vt, .. }) => Some(vt.modes().kitty_flags & (2 | 4 | 8 | 16)),
+                _ => None,
+            })
+            .unwrap_or(0);
+        if keyboard != self.ui.keyboard_sent {
+            self.outbox
+                .push((self.current, ServerMsg::KeyboardFlags(keyboard)));
+            self.ui.keyboard_sent = keyboard;
         }
 
         let bar = |x: u16, y: u16| CursorState {

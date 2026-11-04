@@ -248,7 +248,7 @@ Window = { id, title, source: Pty | App | Plugin | Agent, state: normal | minimi
 - **Input routing:** decoded input goes, in order, to:
   1. open shell overlays (prompts, menus, the palette, which-key);
   2. global bindings;
-  3. the focused window. Keys are re-encoded in the mode the child asked for: legacy or Kitty keyboard protocol.
+  3. the focused window. Keys are re-encoded in the mode the child asked for: legacy or Kitty keyboard protocol. Repeats, releases and alternate keys come from the outer terminal, which the client asks for them only while the focused program wants them (D-103); a release goes to the pane that got the press.
 - **Mouse (D-085):**
   - SGR mouse reporting (1006) with motion tracking (1003).
   - Hit tests run top-down. Dragging a title bar moves the window; dragging an edge or corner resizes it; clicking focuses; the wheel scrolls scrollback.

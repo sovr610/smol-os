@@ -192,5 +192,9 @@ animations are off, spinners stay still and there is no splash.
 Programs that use the Kitty keyboard protocol (Neovim, Helix, fish, kakoune
 and others, when they ask for it) receive keys in that form inside TermOS
 panes. They can then tell `Ctrl+I` from `Tab`, or `Esc` from the start of an
-escape sequence. TermOS supports the protocol's "disambiguate", "all keys as
-escape codes" and "associated text" modes; key release events come later.
+escape sequence. TermOS supports all five of the protocol's modes: disambiguation,
+key repeats and releases, alternate keys, all keys as escape codes, and
+associated text. Repeats, releases and alternate keys need the outer
+terminal to speak the protocol too (kitty, WezTerm with it turned on, foot,
+Ghostty, iTerm2): TermOS asks it for them while such a program has focus.
+Modifier keys pressed on their own are not passed on.

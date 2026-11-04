@@ -390,6 +390,7 @@ mod tests {
                 last: true,
             },
             ServerMsg::ImageFree { id: 3 },
+            ServerMsg::KeyboardFlags(2 | 4),
             ServerMsg::Bell,
             ServerMsg::Detached {
                 session: "main".into(),
@@ -432,6 +433,17 @@ mod tests {
             Ok(Some(ClientMsg::Key(KeyEvent::ctrl('b'))))
         );
         assert_eq!(d.next_frame::<ClientMsg>(), Ok(None));
+        let detail = ClientMsg::KeyDetail {
+            key: KeyEvent::ch('Ф'),
+            kind: crate::input::decode::KeyKind::Release,
+            alternates: crate::input::decode::KeyAlternates {
+                unshifted: Some('ф'),
+                shifted: Some('Ф'),
+                base: Some('a'),
+            },
+        };
+        d.push(&encode_frame(&detail).expect("encodes"));
+        assert_eq!(d.next_frame::<ClientMsg>(), Ok(Some(detail)));
     }
 
     #[test]

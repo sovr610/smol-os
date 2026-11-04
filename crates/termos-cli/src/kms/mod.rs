@@ -330,6 +330,8 @@ impl Console {
             | ServerMsg::Title(_)
             | ServerMsg::ImageData { .. }
             | ServerMsg::ImageFree { .. } => {}
+            // The console's keyboard reports neither repeats nor releases.
+            ServerMsg::KeyboardFlags(_) => {}
         }
         Ok(None)
     }

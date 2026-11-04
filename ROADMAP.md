@@ -732,7 +732,7 @@ What was shown, and where (Linux, in an isolated `tmux -L termos-m7` with its ow
 
 **Progress**
 - [x] Terminal input through one decoder on every platform, and VT input mode on Windows: bracketed paste, the Kitty keyboard protocol and the capability probe there; a fuzz target and an end-to-end paste and Kitty-keys test (D-102)
-- [ ] Kitty keyboard release events and alternate keys (flags 2 and 4)
+- [x] Kitty keyboard release events and alternate keys (flags 2 and 4): the terminal is asked for them only while the focused program wants them; desktop and end-to-end tests (D-103)
 - [ ] App windows saved and restored with the session
 - [ ] The KMS console's clipboard, visual bell and pixel images
 - [ ] Foreground programs on macOS and Windows; GPU readings from the OS
@@ -1041,6 +1041,5 @@ Generated from the `TODO(M<n>)` markers in the code. Don't edit by hand; run `ca
 | M9b | `crates/termos-shell/src/server.rs` | a hidden window for WM_ENDSESSION, so logoff and shutdown always save. |
 | M9b | `crates/termos-term/src/intercept.rs` | images from programs in panes on Windows, where ConPTY can filter APC and DCS sequences out. |
 | M9b | `crates/termos-term/src/pty.rs` | foreground program name, directory and command line on macOS (libproc) and Windows (process snapshot APIs), so snapshots there name and restore programs too. |
-| M9b | `crates/termos-term/src/vt.rs` | Kitty keyboard release events (flag 2) and alternate keys (flag 4) for programs in panes. |
 | M10d | `crates/termos-devkit/src/cli_agents.rs` | curl on the bare-metal images (the owner picks its TLS library), for `termos agent install` there. |
 <!-- open-work:end -->
