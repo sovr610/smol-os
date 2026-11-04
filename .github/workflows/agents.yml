@@ -4,10 +4,12 @@ name: Agent CLIs
 # D-094): `termos agent install` downloads each vendor's own program,
 # checks it against the SHA-256 the vendor publishes (Claude Code's
 # release manifest; GitHub's asset digest for Codex) and registers
-# TermOS's MCP server with it. Each CLI then runs and connects to the
-# server (an MCP handshake, which TermOS's audit log records): Claude Code
-# through `claude mcp list`, Codex through `codex exec` against a stand-in
-# model server that refuses at once (Codex starts its MCP servers first).
+# TermOS's MCP server with it; a second account of each (M11a) is
+# separate, registered and followed by TermOS's shims. Each CLI then runs
+# and connects to the server (an MCP handshake, which TermOS's audit log
+# records): Claude Code through `claude mcp list`, Codex through `codex
+# exec` against a stand-in model server that refuses at once (Codex
+# starts its MCP servers first).
 # No account and no API key: nothing here signs in. Runs when the
 # installer or the MCP server changes, nightly (the vendors release
 # often) and on demand.
@@ -20,6 +22,9 @@ on:
       - "crates/termos-devkit/src/cli_agents.rs"
       - "crates/termos-cli/src/coding_agents.rs"
       - "crates/termos-ai/src/mcp_server.rs"
+      - "crates/termos-devkit/src/accounts.rs"
+      - "crates/termos-cli/src/accounts_cmd.rs"
+      - "crates/termos-cli/src/shim.rs"
       - ".github/workflows/agents.yml"
   workflow_dispatch:
 
@@ -107,6 +112,38 @@ jobs:
           cat codex.txt
           cd "$GITHUB_WORKSPACE"
           bash .github/scripts/mcp-audited.sh codex
+      - name: A second account of each, separate and registered
+        env:
+          DISABLE_AUTOUPDATER: "1"
+        run: |
+          termos=target/debug/termos
+          bin="$XDG_DATA_HOME/termos/bin"
+          ext=""; [ "$RUNNER_OS" = Windows ] && ext=.exe
+          $termos account add claude second --label "Second" --no-sign-in
+          $termos account add codex second --no-sign-in
+          $termos account list | tee accounts.txt
+          grep -q "second" accounts.txt
+          # Each account has its own settings, with TermOS's server.
+          second="$XDG_DATA_HOME/termos/accounts/claude/second"
+          test -f "$second/.claude.json"
+          grep -q '"termos"' "$second/.claude.json"
+          grep -q "mcp_servers.termos" "$XDG_DATA_HOME/termos/accounts/codex/second/config.toml"
+          # `claude` follows the account in use, through TermOS's shim.
+          $termos account use claude second
+          "$bin/claude$ext" mcp list | tee mcp.txt
+          grep -i "termos" mcp.txt | grep -qi "connected"
+          $termos account use codex second
+          "$bin/codex$ext" mcp list | tee mcp.txt
+          grep -q "termos" mcp.txt
+          $termos account use claude default
+          # Claude Code's limits, as its status line passes them.
+          $termos account statusline claude on
+          echo '{"model":{"display_name":"Fixture"},"rate_limits":{"five_hour":{"used_percentage":42.5,"resets_at":1800000000}}}' \
+            | CLAUDE_CONFIG_DIR="$second" $termos agent statusline | tee line.txt
+          grep -q "5 h 42%" line.txt
+          $termos account statusline claude off
+          $termos account remove claude second --yes
+          $termos account remove codex second --yes
       - name: Update and remove
         run: |
           termos=target/debug/termos
