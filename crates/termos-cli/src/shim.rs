@@ -231,11 +231,8 @@ mod tests {
         // The one in use.
         all.use_account(Tool::Claude, "work").expect("use");
         let l = plan_with(&paths, Tool::Claude, None, &env(vec![])).expect("plan");
-        assert!(
-            var(&l, "CLAUDE_CONFIG_DIR")
-                .expect("set")
-                .ends_with("claude/work")
-        );
+        let folder = |l: &Launch| PathBuf::from(var(l, "CLAUDE_CONFIG_DIR").expect("set"));
+        assert!(folder(&l).ends_with(Path::new("claude").join("work")));
         assert_eq!(var(&l, "TERMOS_ACCOUNT_CLAUDE").as_deref(), Some("work"));
 
         // Pinned for this window.
@@ -246,11 +243,7 @@ mod tests {
             &env(vec![("TERMOS_ACCOUNT_CLAUDE", "play".into())]),
         )
         .expect("plan");
-        assert!(
-            var(&l, "CLAUDE_CONFIG_DIR")
-                .expect("set")
-                .ends_with("claude/play")
-        );
+        assert!(folder(&l).ends_with(Path::new("claude").join("play")));
 
         // The user's own folder wins over the one in use.
         let l = plan_with(
