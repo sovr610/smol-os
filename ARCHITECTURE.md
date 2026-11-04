@@ -101,6 +101,7 @@ agents and models. A frontend is only a *client* of the server (D-007).
 | `termos-cli` | The `termos` binary: server, clients, every subcommand | M0 |
 | `termos-plugin` | Plugin protocol types and a blocking Rust SDK (D-034); WIT definitions for widgets later (M4) | M3 |
 | `termos-hw` | CPU, GPU, memory, temperature, disk, network and process readings (sysinfo plus sysfs and NVML probes, D-050), shared by the system monitor and models | M4 |
+| `termos-center` | The command center: its window, the data it gathers and the sampler that records the machine's load in the journal (D-093) | M10 |
 | `xtask` | Repo automation: `ci`, `check-todos`, `todos` | M0 |
 
 **Dependency direction.** These are the edges we intend. There are no cycles, and a
@@ -110,6 +111,7 @@ crate never depends on one listed above it.
 | --- | --- |
 | `termos-cli` | everything below. It wires the window factories from apps, ai and devkit into the shell. |
 | `termos-shell` | wm, term, apps, plugin, core, render |
+| `termos-center` | ai, models, hw, core, render. The `termos` binary opens its window through the launcher. |
 | `termos-ai` | term (PTY-backed `run_command`), core, render. It reaches `termos-models` only over HTTP. |
 | `termos-devkit` | term, core, render |
 | `termos-apps` | hw, core, render |

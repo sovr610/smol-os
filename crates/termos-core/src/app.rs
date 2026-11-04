@@ -178,6 +178,8 @@ pub enum LaunchKind {
     AgentResume,
     /// The audit log viewer (`audit.open [session]`).
     Audit,
+    /// The command center (`center.open`, D-093).
+    Center,
 }
 
 /// What the desktop knows when it opens a launched window.
@@ -187,6 +189,11 @@ pub struct LaunchContext<'a> {
     pub paths: &'a crate::paths::Paths,
     /// The focused pane's folder (an agent's workspace).
     pub cwd: Option<&'a std::path::Path>,
+    /// The server's socket, for windows that use its control API (the
+    /// command center).
+    pub socket: Option<&'a std::path::Path>,
+    /// The session the window opens in.
+    pub session: &'a str,
 }
 
 /// Renders `app` into `grid` at `at`.

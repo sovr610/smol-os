@@ -28,7 +28,7 @@ questions (DECISIONS.md, "Open questions").
 | M9 | Release: A/B updates, the live ISO and installer, the network page, the release pipeline with musl builds, docs (D-077 to D-083) | 🔍 |
 | M10a | Mouse-first desktop: menus, context menus, hover and double-click; the `tos` command in every pane (D-084, D-085) | 🔍 |
 | M10b | Graphics: richer chrome, icons, wallpaper, pixel charts where the terminal can show them (D-084, D-087 to D-090) | 🔍 |
-| M10c | The command center: live views and history of the AI and the OS, with actions (D-084) | ⏳ |
+| M10c | The command center: live views and history of the AI and the OS, with actions (D-084, D-092, D-093) | 🚧 |
 | M10d | Claude Code and Codex CLI: installed by TermOS, with a TermOS MCP server (D-084) | ⏳ |
 | M9b | Platform gaps: the Windows agent sandbox and input, snapshots and sensors on macOS and Windows, Kitty keyboard flags, app windows in sessions, the KMS console's clipboard, bell and images (D-077) | ⏳ |
 
@@ -836,7 +836,7 @@ Not shown here: pixel graphics (the CPU chart as a picture, a picture wallpaper)
 ---
 
 ## M10c — The command center
-**Status:** ⏳ · Owner answers: observe and act, with history (D-084).
+**Status:** 🚧 · Owner answers: observe and act, with history (D-084); the machine sampled every minute, also while closed (D-092). Design: D-093.
 
 **Deliverables**
 - A command center window (`tos center`, the menu, a key): the AI side (agent sessions, tokens and cost per provider and model, tool calls and decisions, the audit chain, local models and the router, MCP servers, external agents) and the OS side (processes, sessions and panes, hardware, logs, network, updates).

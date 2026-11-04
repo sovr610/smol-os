@@ -715,6 +715,7 @@ impl Server {
             clipboard: std::sync::Arc::clone(&self.clipboard),
             termos_exe: None,
             launcher: self.opts.launcher.clone(),
+            server_socket: Some(self.opts.socket_path.clone()),
             // Lets `termos msg`, `ls` and `detach` inside a pane find us
             // (D-029; supersedes D-027's pid-only value).
             pane_env: std::iter::once((
@@ -2175,6 +2176,26 @@ impl Server {
                     }
                 }
                 Ok(json!({ "sessions": keys.len() }))
+            }
+            // The command center's Go (D-093): show a pane, switching to
+            // its workspace.
+            "pane.focus" => {
+                #[derive(Deserialize)]
+                struct P {
+                    pane: u64,
+                    #[serde(default)]
+                    session: Option<String>,
+                }
+                let p: P = req.params_as()?;
+                let key = self.session_with(p.session.as_deref(), Some(p.pane))?;
+                let e = self
+                    .sessions
+                    .get_mut(&key)
+                    .ok_or_else(|| RpcError::not_found("no such session"))?;
+                e.desktop
+                    .focus_pane(Some(PaneId(p.pane)))
+                    .map_err(RpcError::not_found)?;
+                Ok(json!({ "session": e.desktop.name() }))
             }
             // `tos` (D-085): acting on the pane it runs in.
             "pane.command" => {

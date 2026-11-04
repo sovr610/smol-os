@@ -15,6 +15,7 @@ mod images;
 mod install;
 #[cfg(all(target_os = "linux", feature = "kms"))]
 mod kms;
+mod launcher;
 mod models;
 mod probe;
 #[cfg(any(windows, test))]
@@ -1373,11 +1374,28 @@ fn run_server(paths: &Paths, config_path: &Path, t: &Target) -> anyhow::Result<E
     let home = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
         .filter(|h| !h.is_empty())
         .map(PathBuf::from);
-    opts.launcher = Some(std::sync::Arc::new(termos_ai::ui::AgentLauncher::new(
-        std::env::current_exe().ok(),
-        Some(config_path.to_owned()),
-        home,
-    )));
+    // The command center's history and live agent list (D-093), shared by
+    // agent sessions and the command center; the machine's load goes into
+    // the history every minute (D-092).
+    let journal = std::sync::Arc::new(termos_core::journal::Journal::new(
+        &paths.state_dir,
+        config.center.keep_days,
+    ));
+    let registry = std::sync::Arc::new(termos_ai::registry::Registry::default());
+    termos_center::sampler::start(std::sync::Arc::clone(&journal), config.center.sample);
+    opts.launcher = Some(std::sync::Arc::new(launcher::Windows {
+        agents: termos_ai::ui::AgentLauncher::new(
+            std::env::current_exe().ok(),
+            Some(config_path.to_owned()),
+            home,
+        )
+        .with_center(
+            std::sync::Arc::clone(&journal),
+            std::sync::Arc::clone(&registry),
+        ),
+        journal,
+        registry,
+    }));
     // Plugins run in the same sandbox, through `termos sandbox run` (D-064).
     // Only Linux has one; elsewhere a wrapper would add nothing (and on
     // Windows it could not replace itself with the plugin).

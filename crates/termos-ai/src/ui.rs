@@ -34,6 +34,9 @@ pub struct AgentLauncher {
     config_file: Option<PathBuf>,
     home: Option<PathBuf>,
     secrets: std::sync::OnceLock<Arc<SecretSlot>>,
+    /// The command center's history and live sessions (D-093).
+    journal: Option<Arc<termos_core::journal::Journal>>,
+    registry: Option<Arc<crate::registry::Registry>>,
 }
 
 impl AgentLauncher {
@@ -47,7 +50,22 @@ impl AgentLauncher {
             config_file,
             home,
             secrets: std::sync::OnceLock::new(),
+            journal: None,
+            registry: None,
         }
+    }
+
+    /// Sessions record their usage and decisions in `journal` and list
+    /// themselves in `registry` while they run (the command center).
+    #[must_use]
+    pub fn with_center(
+        mut self,
+        journal: Arc<termos_core::journal::Journal>,
+        registry: Arc<crate::registry::Registry>,
+    ) -> Self {
+        self.journal = Some(journal);
+        self.registry = Some(registry);
+        self
     }
 
     fn launch(&self, ctx: &LaunchContext<'_>, profile: String, resume: Option<String>) -> Launch {
@@ -74,6 +92,8 @@ impl AgentLauncher {
             helper: self.helper.clone(),
             config_file: self.config_file.clone(),
             home: self.home.clone(),
+            journal: self.journal.clone(),
+            registry: self.registry.clone(),
         }
     }
 }
@@ -118,6 +138,9 @@ impl Launcher for AgentLauncher {
                 &audit::dir(&ctx.paths.state_dir),
                 arg,
             ))),
+            // The termos binary opens it (termos-center); an agent-only
+            // launcher has none.
+            LaunchKind::Center => Err("the command center is not part of this build".into()),
         }
     }
 }

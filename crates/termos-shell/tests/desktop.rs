@@ -132,6 +132,7 @@ impl Harness {
             pane_env: common::pane_env(),
             cwd: None,
             launcher: None,
+            server_socket: None,
         };
         let mut desktop = Desktop::new(opts, config, tx, COLS, ROWS).expect("desktop starts");
         desktop.handle_client(
@@ -1237,6 +1238,7 @@ async fn snapshots_keep_layout_and_scrollback() {
         clipboard: termos_core::clipboard::ClipboardHistory::shared(50),
         termos_exe: None,
         launcher: None,
+        server_socket: None,
         session_name: "again".into(),
         config_path: h.config_path(),
         paths: Paths {

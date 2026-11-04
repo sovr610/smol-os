@@ -80,6 +80,8 @@ pub enum Icon {
     Keys,
     Palette,
     About,
+    /// The command center (M10c).
+    Center,
     ImageViewer,
     Markdown,
     Git,
@@ -157,6 +159,7 @@ impl Icon {
             Icon::Keys => "⌥",
             Icon::Palette => "›",
             Icon::About => "◈",
+            Icon::Center => "◎",
             Icon::ImageViewer | Icon::Image => "▧",
             Icon::Markdown | Icon::Text => "≡",
             Icon::Git => "±",
@@ -207,6 +210,7 @@ impl Icon {
             Icon::Keys => "\u{f11c}",
             Icon::Palette => "\u{f002}",
             Icon::About => "\u{f05a}",
+            Icon::Center => "\u{f0e4}",
             Icon::ImageViewer | Icon::Image => "\u{f03e}",
             Icon::Markdown | Icon::Text => "\u{f15c}",
             Icon::Git => "\u{f1d3}",
@@ -239,6 +243,7 @@ impl Icon {
             Icon::Theme => "%",
             Icon::Workspace | Icon::Session => "=",
             Icon::Help | Icon::Tutorial | Icon::About => "?",
+            Icon::Center => "@",
             Icon::Detach => "<",
             Icon::Quit | Icon::Close => "x",
             Icon::Files | Icon::Folder => "/",
@@ -292,7 +297,7 @@ impl Icon {
     }
 
     /// Every icon (for tests and previews).
-    pub const ALL: [Icon; 49] = [
+    pub const ALL: [Icon; 50] = [
         Icon::Menu,
         Icon::Terminal,
         Icon::FloatingTerminal,
@@ -318,6 +323,7 @@ impl Icon {
         Icon::Keys,
         Icon::Palette,
         Icon::About,
+        Icon::Center,
         Icon::ImageViewer,
         Icon::Markdown,
         Icon::Git,

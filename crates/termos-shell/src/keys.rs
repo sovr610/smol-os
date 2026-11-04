@@ -95,6 +95,7 @@ pub fn default_prefix_bindings() -> Vec<Binding> {
         b("g", C::GitOpen),
         b("a", C::AgentOpen(String::new())),
         b("A", C::AgentResume(String::new())),
+        b("C", C::CenterOpen),
         b("Enter", C::Menu),
         b(":", C::Palette),
         b("?", C::Keys),
@@ -239,7 +240,7 @@ mod tests {
         assert_eq!(get("3"), Some(Command::WorkspaceSelect(3)));
         assert_eq!(get("C-b"), Some(Command::SendPrefix));
         assert_eq!(get("M-5"), Some(Command::LayoutSelect(Preset::Tiled)));
-        assert!(t.lookup_prefix(KeyEvent::ch('C')).is_none());
+        assert!(t.lookup_prefix(KeyEvent::ch('Q')).is_none());
         assert!(
             t.lookup_prefix("C-Left".parse().expect("key"))
                 .is_some_and(|b| b.repeat)

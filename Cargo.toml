@@ -27,6 +27,7 @@ termos-wm = { path = "crates/termos-wm" }
 termos-term = { path = "crates/termos-term" }
 termos-shell = { path = "crates/termos-shell" }
 termos-apps = { path = "crates/termos-apps" }
+termos-center = { path = "crates/termos-center" }
 # Its `tls` feature is chosen by termos-cli (D-058).
 termos-ai = { path = "crates/termos-ai", default-features = false }
 # Its `tls` and `candle` features are chosen by termos-cli.

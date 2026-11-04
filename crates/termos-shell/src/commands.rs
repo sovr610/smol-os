@@ -103,6 +103,8 @@ pub enum Command {
     AgentExternal(String),
     /// The agents' audit logs (empty: the newest).
     AuditOpen(String),
+    /// The command center (D-093).
+    CenterOpen,
 }
 
 /// Static description of a command name.
@@ -266,6 +268,10 @@ pub const COMMANDS: &[CommandInfo] = &[
         arg: Some("claude"),
     },
     info("audit.open", "AI agent audit logs"),
+    info(
+        "center.open",
+        "The command center: AI and system, live and over time",
+    ),
     CommandInfo {
         name: "file.open",
         description: "Open a file",
@@ -462,6 +468,7 @@ impl FromStr for Command {
                 )),
             },
             "audit.open" => Ok(Command::AuditOpen(arg.unwrap_or("").to_owned())),
+            "center.open" => no_arg(Command::CenterOpen),
             "network.open" => no_arg(Command::NetworkOpen),
             "update.open" => no_arg(Command::UpdateOpen),
             "settings.open" => no_arg(Command::SettingsOpen),
@@ -571,6 +578,7 @@ impl fmt::Display for Command {
             Command::AgentExternal(n) => write!(f, "agent.external {n}"),
             Command::AuditOpen(id) if id.is_empty() => f.write_str("audit.open"),
             Command::AuditOpen(id) => write!(f, "audit.open {id}"),
+            Command::CenterOpen => f.write_str("center.open"),
         }
     }
 }

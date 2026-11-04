@@ -421,6 +421,34 @@ fn disks(list: &sysinfo::Disks) -> Vec<DiskSample> {
     out
 }
 
+/// Asks process `pid` to end (the command center's Kill, D-093): SIGTERM
+/// on Unix, so it can clean up; Windows has no such request for other
+/// programs, so there it is terminated. TermOS's own process and the
+/// system's first processes are refused.
+pub fn end_process(pid: u32) -> Result<(), String> {
+    use sysinfo::{Pid, ProcessesToUpdate, Signal, System};
+    if pid <= 1 || pid == std::process::id() {
+        return Err(format!("process {pid} is not one to end"));
+    }
+    let target = Pid::from_u32(pid);
+    let mut system = System::new().map_err(|e| format!("cannot read processes: {e}"))?;
+    system.refresh_processes(ProcessesToUpdate::Some(&[target]), true);
+    let process = system
+        .process(target)
+        .ok_or_else(|| format!("no process {pid}"))?;
+    let sent = process
+        .kill_with(Signal::Term)
+        .unwrap_or_else(|| process.kill());
+    if sent {
+        Ok(())
+    } else {
+        Err(format!(
+            "cannot end process {pid} ({}): not allowed",
+            process.name().to_string_lossy()
+        ))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -467,5 +495,24 @@ mod tests {
         for c in &a.cpu.cores {
             assert!((0.0..=100.5).contains(c), "{c}");
         }
+    }
+
+    #[test]
+    fn ending_a_process() {
+        assert!(end_process(1).is_err(), "never the first process");
+        assert!(end_process(std::process::id()).is_err(), "never TermOS");
+        let program = if cfg!(windows) { "cmd" } else { "sleep" };
+        let args: &[&str] = if cfg!(windows) {
+            &["/c", "ping -n 30 127.0.0.1 >nul"]
+        } else {
+            &["30"]
+        };
+        let mut child = std::process::Command::new(program)
+            .args(args)
+            .spawn()
+            .expect("spawn");
+        end_process(child.id()).expect("ended");
+        let status = child.wait().expect("wait");
+        assert!(!status.success(), "{status:?}");
     }
 }

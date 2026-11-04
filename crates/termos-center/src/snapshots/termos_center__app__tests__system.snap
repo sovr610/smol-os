@@ -1,0 +1,34 @@
+---
+source: crates/termos-center/src/app.rs
+expression: render(&mut app)
+---
+  Overview   AI   System   History                                                       ↻ 12:00:00
+────────────────────────────────────────────────────────────────────────────────────────────────────
+ Processes (by CPU) [End  e]                            Sessions and panes
+     PID  NAME                             CPU     MEM  main · 2 workspaces · 1 attached
+    4242  runaway                          97%    300M   ● %1    bash                 [Go] [Close]
+     777  editor                            3%     80M     %5    claude               [Go] [Close]
+
+                                                        Machine
+                                                        /        ██████████████▍········· 300G/500G
+                                                        Network ↓ 2.0K/s ↑ 512B/s [Network]
+                                                        TermOS 0.0.0 [Updates] [Monitor]
+
+                                                        Log
+                                                        11:58:01.000Z  INFO termos: session main st…
+                                                        11:59:30.000Z  WARN termos: a plugin was sl…
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ 1-4 tabs · ↑↓ select · e end process · r refresh · q close

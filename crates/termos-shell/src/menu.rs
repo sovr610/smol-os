@@ -146,6 +146,7 @@ fn command_icon(c: &Command) -> Option<Icon> {
         Command::ClipboardOpen => Icon::Clipboard,
         Command::AgentOpen(_) | Command::AgentResume(_) | Command::AgentExternal(_) => Icon::Agent,
         Command::AuditOpen(_) => Icon::Audit,
+        Command::CenterOpen => Icon::Center,
         _ => return None,
     })
 }

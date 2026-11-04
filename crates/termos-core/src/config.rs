@@ -62,6 +62,8 @@ pub struct Config {
     pub models: ModelsConfig,
     /// The bare-metal console (M8, D-073).
     pub kms: KmsConfig,
+    /// The command center's history (M10c, D-092).
+    pub center: CenterConfig,
 }
 
 impl Default for Config {
@@ -89,6 +91,7 @@ impl Default for Config {
             secrets: SecretsConfig::default(),
             models: ModelsConfig::default(),
             kms: KmsConfig::default(),
+            center: CenterConfig::default(),
         }
     }
 }
@@ -377,6 +380,50 @@ impl Default for ClipboardConfig {
     }
 }
 
+/// How often the machine is sampled for the command center's history
+/// (`[center] sample`, D-092).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+pub enum SampleEvery {
+    #[default]
+    #[serde(rename = "1m")]
+    OneMinute,
+    #[serde(rename = "5m")]
+    FiveMinutes,
+    #[serde(rename = "off")]
+    Off,
+}
+
+impl SampleEvery {
+    /// The interval; `None` when off.
+    pub fn interval(self) -> Option<std::time::Duration> {
+        match self {
+            Self::OneMinute => Some(std::time::Duration::from_secs(60)),
+            Self::FiveMinutes => Some(std::time::Duration::from_secs(300)),
+            Self::Off => None,
+        }
+    }
+}
+
+/// The command center (M10c, D-092, D-093).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(default, deny_unknown_fields, rename_all = "kebab-case")]
+pub struct CenterConfig {
+    /// Days of history kept (1 to 365).
+    pub keep_days: u32,
+    /// How often CPU, memory and network are recorded, also while the
+    /// command center is closed: "1m", "5m" or "off".
+    pub sample: SampleEvery,
+}
+
+impl Default for CenterConfig {
+    fn default() -> Self {
+        Self {
+            keep_days: 7,
+            sample: SampleEvery::OneMinute,
+        }
+    }
+}
+
 /// The developer environment (M5a, D-054).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
 #[serde(default, deny_unknown_fields, rename_all = "kebab-case")]
@@ -600,6 +647,11 @@ snapshot-delay-ms = 2000
 [plugins]
 enabled = []             # plugin directory names under ~/.config/termos/plugins
 sandbox = true           # in the agent sandbox where there is one (Linux)
+
+[center]
+# The command center's history: AI usage, tool calls and the machine's load.
+keep-days = 7            # days kept on disk (1 to 365)
+sample = "1m"            # CPU, memory and network every "1m" or "5m", or "off"
 
 [clipboard]
 # Copies remembered for the clipboard manager (prefix =), newest first.

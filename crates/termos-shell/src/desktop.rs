@@ -188,6 +188,8 @@ pub struct DesktopOptions {
     /// Opens agent windows and audit logs (the `termos` binary wires it in;
     /// `None`: agents are not part of this build).
     pub launcher: Option<std::sync::Arc<dyn termos_core::app::Launcher>>,
+    /// The server's socket (windows that use the control API get it).
+    pub server_socket: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1125,6 +1127,8 @@ impl Desktop {
             config: &self.config,
             paths: &self.opts.paths,
             cwd: cwd.as_deref(),
+            socket: self.opts.server_socket.as_deref(),
+            session: &self.session.name,
         };
         match launcher.open(kind, arg, &ctx) {
             Ok(app) => {
@@ -2130,6 +2134,7 @@ impl Desktop {
                 self.launch(termos_core::app::LaunchKind::AgentResume, &arg)
             }
             Command::AuditOpen(arg) => self.launch(termos_core::app::LaunchKind::Audit, &arg),
+            Command::CenterOpen => self.launch(termos_core::app::LaunchKind::Center, ""),
             Command::AgentExternal(name) => self.open_external_agent(&name, area),
             Command::FileOpen(path) => {
                 use termos_apps::files::{OpenKind, open_kind};

@@ -26,6 +26,7 @@ pub mod clipboard;
 pub mod config;
 pub mod ids;
 pub mod input;
+pub mod journal;
 pub mod local;
 pub mod log;
 pub mod models_endpoint;

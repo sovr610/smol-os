@@ -38,6 +38,7 @@ futures-util.workspace = true
 secrecy.workspace = true
 serde_json.workspace = true
 termos-ai.workspace = true
+termos-center.workspace = true
 termos-core.workspace = true
 termos-devkit.workspace = true
 termos-hw.workspace = true

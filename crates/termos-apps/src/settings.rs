@@ -228,6 +228,26 @@ const SETTINGS: &[Setting] = &[
         },
     ),
     s(
+        "Command center",
+        "center",
+        "keep-days",
+        "History kept (days)",
+        "AI usage, tool calls and the machine's load",
+        Kind::Number {
+            min: 1,
+            max: 365,
+            step: 1,
+        },
+    ),
+    s(
+        "Command center",
+        "center",
+        "sample",
+        "Record the machine",
+        "CPU, memory and network, also while it is closed",
+        Kind::Choice(&["1m", "5m", "off"]),
+    ),
+    s(
         "System",
         "",
         "",

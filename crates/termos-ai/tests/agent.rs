@@ -158,6 +158,9 @@ fn a_session_fixes_a_bug_with_approvals() {
     agents
         .profiles
         .insert("default".into(), ProfileConfig::default());
+    // The command center's history and live list (D-093).
+    let journal = Arc::new(termos_core::journal::Journal::new(&paths.state_dir, 7));
+    let registry = Arc::new(termos_ai::registry::Registry::default());
     let handle = agent::start(Launch {
         agents,
         secrets: Arc::new(SecretSlot::with(store)),
@@ -168,8 +171,13 @@ fn a_session_fixes_a_bug_with_approvals() {
         helper: None,
         config_file: None,
         home: Some(dir.path().join("home")),
+        journal: Some(Arc::clone(&journal)),
+        registry: Some(Arc::clone(&registry)),
     })
     .expect("start");
+    let live = registry.list();
+    assert_eq!(live.len(), 1, "listed while it runs");
+    let key = live[0].key;
 
     // The secrets file is locked: a wrong passphrase, then the right one.
     wait_until(&handle, "the passphrase", |v| {
@@ -210,7 +218,16 @@ fn a_session_fixes_a_bug_with_approvals() {
         assert!(diff.contains("+    a + b"), "{diff}");
         assert!(p.remember);
     }
-    handle.send(Input::Approve { remember: false });
+    // Approved from the command center: the live list shows what it
+    // waits for.
+    let asking = registry.list();
+    assert_eq!(asking[0].state, termos_ai::registry::State::Asking);
+    assert_eq!(
+        asking[0].pending.as_ref().map(|p| p.tool.as_str()),
+        Some("edit_file")
+    );
+    // Denying or approving needs a call waiting; this one is.
+    assert!(registry.act(key, termos_ai::registry::Act::Approve));
     wait_until(
         &handle,
         "the command to ask",
@@ -299,6 +316,55 @@ fn a_session_fixes_a_bug_with_approvals() {
         ]
     );
     assert_eq!(saved.messages.len(), 8, "user, 3 × (call, result), answer");
+
+    // The history has the session, its usage and every decision, and no
+    // longer lists it as running.
+    let kinds: Vec<String> = journal
+        .read(0)
+        .iter()
+        .map(|r| match &r.event {
+            termos_core::journal::Event::Session { state, .. } => format!("session {state}"),
+            termos_core::journal::Event::Usage { cost, .. } => {
+                assert!(cost.is_some(), "priced");
+                "usage".into()
+            }
+            termos_core::journal::Event::Tool { tool, decision, .. } => {
+                format!("{tool} {decision}")
+            }
+            other => format!("{other:?}"),
+        })
+        .collect();
+    assert_eq!(kinds.first().map(String::as_str), Some("session started"));
+    assert_eq!(kinds.last().map(String::as_str), Some("session ended"));
+    assert!(
+        kinds.iter().filter(|k| *k == "usage").count() >= 1,
+        "{kinds:?}"
+    );
+    let spent: f64 = journal
+        .read(0)
+        .iter()
+        .filter_map(|r| match &r.event {
+            termos_core::journal::Event::Usage { cost, .. } => *cost,
+            _ => None,
+        })
+        .sum();
+    assert!(
+        (spent - cost.unwrap_or_default()).abs() < 1e-9,
+        "the turns add up to the session's cost"
+    );
+    for d in [
+        "read_file allowed",
+        "edit_file approved",
+        "run_command approved",
+    ] {
+        assert!(kinds.iter().any(|k| k == d), "{d}: {kinds:?}");
+    }
+    let start = Instant::now();
+    while !registry.list().is_empty() {
+        assert!(start.elapsed() < Duration::from_secs(10), "still listed");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(!registry.act(key, termos_ai::registry::Act::Stop), "gone");
 
     // The canary key appears nowhere TermOS wrote.
     let mut written = Vec::new();

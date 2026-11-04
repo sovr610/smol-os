@@ -16,6 +16,7 @@
 //! - [`mcp`]: MCP servers over stdio (sandboxed) and streamable HTTP.
 //! - [`secrets`]: API keys in the OS keyring or an age file.
 //! - [`history`]: saved conversations; [`external`]: CLI agent presets.
+//! - [`registry`]: the live sessions, for the command center (D-093).
 //! - [`ui`]: the agent window, the audit viewer, and the launcher the
 //!   desktop opens them with.
 
@@ -27,6 +28,7 @@ pub mod mcp;
 pub mod policy;
 pub mod provider;
 pub mod redact;
+pub mod registry;
 pub mod sandbox;
 pub mod secrets;
 pub mod sse;

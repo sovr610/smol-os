@@ -125,6 +125,7 @@ impl Desktop {
             )
             .icon(Icon::Apps),
             Entry::submenu("AI agents", agents).icon(Icon::Agent),
+            Entry::item("Command center", Command::CenterOpen),
             Entry::submenu(
                 "Project",
                 vec![

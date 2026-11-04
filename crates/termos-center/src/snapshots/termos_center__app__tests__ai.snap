@@ -1,0 +1,34 @@
+---
+source: crates/termos-center/src/app.rs
+expression: render(&mut app)
+---
+  Overview   AI   System   History                                                       ↻ 12:00:00
+────────────────────────────────────────────────────────────────────────────────────────────────────
+ Running agents
+   default    fixture/fixture-coder    working      12.8k   $0.42 [Stop] [Audit]
+   default    fixture/fixture-coder    asking       12.8k   $0.42 [Approve] [Deny] [Stop] [Audit]
+     asks: cargo test — commands ask in this profile
+
+ Usage · last 24 h
+   fixture/fixture-coder                   1 turns  in   12.0k  out     800     $0.42
+ Tool calls  allowed 1 · approved 1 · refused 1
+ Most used   run_command 3
+ Audit       3 logs, every chain verified [Open]
+ Models      router not running · org/fixture-gguf 4.0G
+ MCP servers files (mcp-files)
+ CLI agents  [claude (1 open)]
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ 1-4 tabs · a approve · d deny · s stop · r refresh · q close

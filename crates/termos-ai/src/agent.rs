@@ -19,6 +19,7 @@ use std::time::Duration;
 use secrecy::SecretString;
 use termos_core::app::AppWaker;
 use termos_core::config::agents::{AgentsConfig, Price, ProfileConfig, SecretStoreKind};
+use termos_core::journal::{self, Journal};
 use termos_core::paths::Paths;
 use termos_term::{AlacrittyVt, VtBackend};
 use tokio::sync::mpsc;
@@ -32,6 +33,7 @@ use crate::provider::{
     StopReason, Usage,
 };
 use crate::redact::Redactor;
+use crate::registry::Registry;
 use crate::sandbox;
 use crate::secrets::{SecretError, SecretStore};
 use crate::tools::{Call, Output, Preview, SandboxSetup, Toolbox};
@@ -232,6 +234,11 @@ pub struct Launch {
     /// The config file the server reads (passed on to the model router).
     pub config_file: Option<PathBuf>,
     pub home: Option<PathBuf>,
+    /// The command center's history: usage, tool decisions, start and end
+    /// (D-093).
+    pub journal: Option<Arc<Journal>>,
+    /// Where the command center finds the session while it runs.
+    pub registry: Option<Arc<Registry>>,
 }
 
 impl std::fmt::Debug for Launch {
@@ -300,6 +307,10 @@ impl Handle {
     pub fn send(&self, input: Input) {
         let _ = self.input.send(input);
     }
+
+    pub(crate) fn waker_weak(&self) -> std::sync::Weak<Mutex<Option<AppWaker>>> {
+        Arc::downgrade(&self.waker)
+    }
 }
 
 /// Starts a session on its own thread.
@@ -310,6 +321,7 @@ pub fn start(launch: Launch) -> std::io::Result<Handle> {
     )));
     let (tx, rx) = mpsc::unbounded_channel();
     let waker: Arc<Mutex<Option<AppWaker>>> = Arc::new(Mutex::new(None));
+    let registry = launch.registry.clone();
     let shared = Shared {
         view: Arc::clone(&view),
         waker: Arc::clone(&waker),
@@ -329,11 +341,15 @@ pub fn start(launch: Launch) -> std::io::Result<Handle> {
             };
             rt.block_on(run(launch, shared, rx));
         })?;
-    Ok(Handle {
+    let handle = Handle {
         view,
         input: tx,
         waker,
-    })
+    };
+    if let Some(r) = registry {
+        r.register(&handle);
+    }
+    Ok(handle)
 }
 
 /// The session's side of the shared view.
@@ -433,6 +449,7 @@ struct Session {
     created: String,
     profile: String,
     workspace: PathBuf,
+    journal: Option<Arc<Journal>>,
 }
 
 /// Waits for an input the predicate accepts; `None` when the window
@@ -703,6 +720,15 @@ impl Session {
                 sandbox: sandbox_line.clone(),
             });
         }
+        if let Some(j) = &launch.journal {
+            j.record(journal::Event::Session {
+                session: id.clone(),
+                profile: launch.profile.clone(),
+                provider: provider_name.clone(),
+                model: model.clone(),
+                state: "started".into(),
+            });
+        }
         let history_dir = agents
             .history
             .then(|| history::dir(&launch.paths.state_dir));
@@ -738,6 +764,7 @@ impl Session {
             created,
             profile: launch.profile.clone(),
             workspace,
+            journal: launch.journal.clone(),
         })
     }
 
@@ -762,6 +789,13 @@ impl Session {
     }
 
     fn audit(&mut self, event: Event) {
+        if let (Some(j), Event::Tool { tool, decision, .. }) = (&self.journal, &event) {
+            j.record(journal::Event::Tool {
+                session: self.id.clone(),
+                tool: tool.clone(),
+                decision: decision.clone(),
+            });
+        }
         if let Some(a) = &mut self.audit
             && let Err(e) = a.append(event)
         {
@@ -916,6 +950,19 @@ impl Session {
             match result {
                 Ok(reply) => {
                     self.usage.add(reply.usage);
+                    if let Some(j) = &self.journal {
+                        let u = reply.usage;
+                        j.record(journal::Event::Usage {
+                            session: self.id.clone(),
+                            provider: self.provider_name.clone(),
+                            model: self.model.clone(),
+                            input: u.input,
+                            output: u.output,
+                            cache_read: u.cache_read,
+                            cache_write: u.cache_write,
+                            cost: self.price.map(|p| u.cost(&p)),
+                        });
+                    }
                     let (usage, cost) = (self.usage, self.price.map(|p| self.usage.cost(&p)));
                     self.shared.update(|v| {
                         v.usage = usage;
@@ -1158,6 +1205,15 @@ impl Session {
         self.audit(Event::Note {
             text: "the session window closed".into(),
         });
+        if let Some(j) = &self.journal {
+            j.record(journal::Event::Session {
+                session: self.id.clone(),
+                profile: self.profile.clone(),
+                provider: self.provider_name.clone(),
+                model: self.model.clone(),
+                state: "ended".into(),
+            });
+        }
         self.save();
         let hub = std::mem::take(&mut self.tools.mcp);
         hub.shutdown().await;

@@ -1,0 +1,34 @@
+---
+source: crates/termos-center/src/app.rs
+expression: render(&mut app)
+---
+  Overview   AI   System   History                                                       ↻ 12:00:00
+────────────────────────────────────────────────────────────────────────────────────────────────────
+ AI                                                System
+ Agents     2 running · 1 asking                   CPU      ████████████▋·····················  37%
+   ⚠ default: cargo test [Approve] [Deny]          Memory   ███████████▎·················· 6.0G/16G
+ 24 h       12.8k tokens · $0.42                   Network ↓ 2.0K/s ↑ 512B/s
+ Tool calls 3 (1 refused)                          Busiest runaway 97% · editor 3%
+ Audit      3 logs, all verified                   Sessions 1 · panes 2 · terminals attached 1
+ Models     1 installed · router off
+
+
+ Last 24 h
+ CPU %
+
+
+
+
+                                                                                                ⢀⣀⢀
+                                                                                               ⢀⣸⢸⣸
+
+
+
+
+ Tokens                                                                                           █
+                                                                                                  █
+                                                                                                  █
+                                                                                                  █
+                                                                                                  █
+                                                                                                  █
+ 1-4 tabs · a approve · d deny · s stop · r refresh · q close

@@ -1,0 +1,31 @@
+[package]
+name = "termos-center"
+description = "The TermOS command center: AI agents and the system, live and over time"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[dependencies]
+jiff.workspace = true
+ratatui-core.workspace = true
+serde_json.workspace = true
+termos-ai.workspace = true
+termos-core.workspace = true
+termos-hw.workspace = true
+termos-models.workspace = true
+termos-render.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+unicode-width.workspace = true
+
+[dev-dependencies]
+insta.workspace = true
+tempfile.workspace = true
+
+[lints]
+workspace = true

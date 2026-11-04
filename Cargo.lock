@@ -5420,6 +5420,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "termos-center"
+version = "0.0.0"
+dependencies = [
+ "insta",
+ "jiff",
+ "ratatui-core",
+ "serde_json",
+ "tempfile",
+ "termos-ai",
+ "termos-core",
+ "termos-hw",
+ "termos-models",
+ "termos-render",
+ "tokio",
+ "tracing",
+ "unicode-width",
+]
+
+[[package]]
 name = "termos-cli"
 version = "0.0.0"
 dependencies = [
@@ -5439,6 +5458,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "termos-ai",
+ "termos-center",
  "termos-core",
  "termos-devkit",
  "termos-hw",
@@ -5458,6 +5478,7 @@ version = "0.0.0"
 dependencies = [
  "bitflags 2.13.2",
  "insta",
+ "jiff",
  "notify",
  "notify-debouncer-mini",
  "postcard",

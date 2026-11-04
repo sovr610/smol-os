@@ -87,6 +87,8 @@ enum TosCmd {
     Files { dir: Option<PathBuf> },
     /// The system monitor.
     Monitor,
+    /// The command center: AI agents and the system, live and over time.
+    Center,
     /// Settings.
     Settings,
     /// The clipboard history.
@@ -310,6 +312,7 @@ fn run(tos: Tos) -> anyhow::Result<ExitCode> {
             named(&format!("files.open {}", p.display()))?;
         }
         TosCmd::Monitor => named("monitor.open")?,
+        TosCmd::Center => named("center.open")?,
         TosCmd::Settings => named("settings.open")?,
         TosCmd::Clipboard => named("clipboard.open")?,
         TosCmd::Network => named("network.open")?,
