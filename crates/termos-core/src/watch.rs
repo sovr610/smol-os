@@ -5,6 +5,11 @@
 //! by writing a temporary file and renaming it are still noticed. The
 //! watcher thread blocks in the OS (inotify/FSEvents), so it costs nothing
 //! while idle.
+//!
+//! inotify also reports a file being opened, which is not a change: only
+//! a new identity, size or modification time counts. (Otherwise anything
+//! reading the config, the server's own reload included, would trigger a
+//! reload again, every debounce period, for ever.)
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -36,14 +41,21 @@ impl ConfigWatcher {
             .map_or_else(|| PathBuf::from("."), Path::to_path_buf);
         std::fs::create_dir_all(&dir).map_err(notify::Error::io)?;
         let name = file.file_name().map(ToOwned::to_owned);
+        let watched = file.to_owned();
+        let mut last = stamp(&watched);
         let mut debouncer = new_debouncer(
             Duration::from_millis(150),
             move |res: DebounceEventResult| {
                 if let Ok(events) = res
                     && events.iter().any(|e| e.path.file_name() == name.as_deref())
                 {
-                    // The server may have shut down; nothing to do then.
-                    let _ = tx.send(());
+                    // `stat` is not an event, so this cannot feed itself.
+                    let now = stamp(&watched);
+                    if now != last {
+                        last = now;
+                        // The server may have shut down; nothing to do then.
+                        let _ = tx.send(());
+                    }
                 }
             },
         )?;
@@ -55,6 +67,19 @@ impl ConfigWatcher {
             path: file.to_owned(),
         })
     }
+}
+
+/// What tells one version of the file from another: its identity, size
+/// and modification time (`None` when it is not there).
+type Stamp = Option<(u64, u64, Option<std::time::SystemTime>)>;
+
+fn stamp(file: &Path) -> Stamp {
+    let meta = std::fs::metadata(file).ok()?;
+    #[cfg(unix)]
+    let id = std::os::unix::fs::MetadataExt::ino(&meta);
+    #[cfg(not(unix))]
+    let id = 0;
+    Some((id, meta.len(), meta.modified().ok()))
 }
 
 #[cfg(test)]
@@ -79,5 +104,24 @@ mod tests {
         std::fs::rename(&tmp, &file).expect("rename");
         let got = tokio::time::timeout(Duration::from_secs(5), rx.recv()).await;
         assert!(matches!(got, Ok(Some(()))), "no event after rename");
+    }
+
+    #[tokio::test]
+    async fn reading_is_not_a_change() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file = dir.path().join("config.toml");
+        std::fs::write(&file, "mouse = true\n").expect("write");
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let _w = ConfigWatcher::spawn(&file, tx).expect("watch");
+        // Others read it (`termos agent`, `termos mcp serve`, the server's
+        // own reload): no event, so no reload loop.
+        for _ in 0..3 {
+            let _ = std::fs::read_to_string(&file).expect("read");
+        }
+        let got = tokio::time::timeout(Duration::from_millis(800), rx.recv()).await;
+        assert!(got.is_err(), "a read was taken for a change");
+        std::fs::write(&file, "mouse = false\n").expect("write");
+        let got = tokio::time::timeout(Duration::from_secs(5), rx.recv()).await;
+        assert!(matches!(got, Ok(Some(()))), "no event after write");
     }
 }
