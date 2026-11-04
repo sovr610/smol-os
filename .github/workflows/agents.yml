@@ -1,0 +1,98 @@
+name: Agent CLIs
+
+# Claude Code and Codex CLI installed by TermOS for real (ROADMAP M10d,
+# D-094): `termos agent install` downloads each vendor's own program,
+# checks it against the SHA-256 the vendor publishes (Claude Code's
+# release manifest; GitHub's asset digest for Codex) and registers
+# TermOS's MCP server with it. Each CLI then runs, lists the server and,
+# for Claude Code, connects to it (MCP handshake). No account and no API
+# key: nothing here signs in. Runs when the installer or the MCP server
+# changes, nightly (the vendors release often) and on demand.
+
+on:
+  schedule:
+    - cron: "41 5 * * *"
+  push:
+    paths:
+      - "crates/termos-devkit/src/cli_agents.rs"
+      - "crates/termos-cli/src/coding_agents.rs"
+      - "crates/termos-ai/src/mcp_server.rs"
+      - ".github/workflows/agents.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: agents-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  CARGO_PROFILE_DEV_DEBUG: "0"
+
+jobs:
+  install:
+    name: ${{ matrix.runner }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-24.04-arm, macos-latest, windows-latest]
+    defaults:
+      run:
+        shell: bash
+    env:
+      # GitHub's API is rate-limited per runner address without a token.
+      GITHUB_TOKEN: ${{ github.token }}
+      XDG_DATA_HOME: ${{ runner.temp }}/data
+      XDG_STATE_HOME: ${{ runner.temp }}/state
+      XDG_CONFIG_HOME: ${{ runner.temp }}/config
+      CODEX_HOME: ${{ runner.temp }}/codex
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - name: Build
+        run: cargo build --locked -p termos-cli --no-default-features
+      - name: Install Claude Code and Codex CLI
+        run: |
+          termos=target/debug/termos
+          $termos agent install claude
+          $termos agent install codex
+          $termos agent status | tee status.txt
+          grep -c "TermOS's MCP server: registered" status.txt | grep -qx 2
+      - name: They run
+        run: |
+          bin="$XDG_DATA_HOME/termos/bin"
+          ext=""; [ "$RUNNER_OS" = Windows ] && ext=.exe
+          "$bin/claude$ext" --version
+          "$bin/codex$ext" --version
+      - name: Claude Code connects to TermOS's MCP server
+        env:
+          DISABLE_AUTOUPDATER: "1"
+        run: |
+          bin="$XDG_DATA_HOME/termos/bin"
+          ext=""; [ "$RUNNER_OS" = Windows ] && ext=.exe
+          "$bin/claude$ext" mcp list | tee mcp.txt
+          grep -i "termos" mcp.txt | grep -qi "connected"
+      - name: Codex CLI lists TermOS's MCP server
+        run: |
+          bin="$XDG_DATA_HOME/termos/bin"
+          ext=""; [ "$RUNNER_OS" = Windows ] && ext=.exe
+          cat "$CODEX_HOME/config.toml"
+          "$bin/codex$ext" mcp list | tee mcp.txt
+          grep -q "termos" mcp.txt
+      - name: Update and remove
+        run: |
+          termos=target/debug/termos
+          $termos agent update | tee update.txt
+          grep -q "is installed" update.txt
+          $termos agent remove codex
+          $termos agent status | tee status.txt
+          grep -q "^Codex CLI *not installed by TermOS" status.txt
+          $termos mcp unregister codex
+          if grep -q "mcp_servers.termos" "$CODEX_HOME/config.toml"; then
+            echo "still registered"; exit 1
+          fi
