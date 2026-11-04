@@ -179,3 +179,65 @@ fn accounts_are_profiles_with_their_own_folders() {
             .success()
     );
 }
+
+/// `claude` in a TermOS window is TermOS's shim: it runs the real
+/// program as the account in use, one pinned for the window, or the
+/// user's own folder.
+#[test]
+fn the_shim_runs_the_cli_as_the_account() {
+    let w = world();
+    let env = &w.env;
+    // TermOS makes the shim when it starts, as the CLI is on PATH.
+    let t = common::Termos::start_in(std::sync::Arc::clone(env));
+    t.wait_ready();
+    let data = env.paths().data_dir;
+    let shim = data.join("bin/claude");
+    assert!(
+        std::fs::read_link(&shim).is_ok_and(|p| p.ends_with("termos")),
+        "{} is a link to termos",
+        shim.display()
+    );
+    assert!(data.join("bin/codex").exists(), "codex is on PATH too");
+
+    let run_shim = |vars: &[(&str, &str)]| {
+        let mut cmd = std::process::Command::new(&shim);
+        cmd.current_dir(env.path())
+            .env_remove("CLAUDE_CONFIG_DIR")
+            .env_remove("TERMOS_ACCOUNT_CLAUDE");
+        for (k, v) in env.vars() {
+            cmd.env(k, v);
+        }
+        for (k, v) in vars {
+            cmd.env(k, v);
+        }
+        cmd.arg("--version").output().expect("ran")
+    };
+    let last = || {
+        std::fs::read_to_string(&w.calls)
+            .expect("calls")
+            .lines()
+            .last()
+            .expect("a call")
+            .to_owned()
+    };
+
+    assert!(run_shim(&[]).status.success());
+    assert_eq!(last(), "claude default --version");
+    run(env, &["account", "add", "claude", "work", "--no-sign-in"]);
+    run(env, &["account", "use", "claude", "work"]);
+    assert!(run_shim(&[]).status.success());
+    let work = data.join("accounts/claude/work");
+    assert_eq!(last(), format!("claude {} --version", work.display()));
+    // Pinned for a window, or the user's own folder.
+    assert!(
+        run_shim(&[("TERMOS_ACCOUNT_CLAUDE", "default")])
+            .status
+            .success()
+    );
+    assert_eq!(last(), "claude default --version");
+    assert!(run_shim(&[("CLAUDE_CONFIG_DIR", "/mine")]).status.success());
+    assert_eq!(last(), "claude /mine --version");
+    let out = run_shim(&[("TERMOS_ACCOUNT_CLAUDE", "nope")]);
+    assert_eq!(out.status.code(), Some(127));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("no Claude Code account named nope"));
+}

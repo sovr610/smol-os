@@ -94,7 +94,7 @@ impl Env {
         termos_core::local::exists(&self.socket())
     }
 
-    fn vars(&self) -> Vec<(&'static str, PathBuf)> {
+    pub fn vars(&self) -> Vec<(&'static str, PathBuf)> {
         let d = self.path();
         let mut v = vec![
             ("HOME", d.to_owned()),

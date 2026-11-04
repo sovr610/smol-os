@@ -414,12 +414,17 @@ fn run(tos: Tos) -> anyhow::Result<ExitCode> {
 // ----- the link ---------------------------------------------------------
 
 /// The folder holding the `tos` link, put first on panes' `PATH`.
-fn bin_dir(paths: &Paths) -> PathBuf {
+pub(crate) fn bin_dir(paths: &Paths) -> PathBuf {
     paths.data_dir.join("bin")
 }
 
-fn link_name() -> &'static str {
-    if cfg!(windows) { "tos.exe" } else { NAME }
+/// `name`, as a program's file is named here.
+pub(crate) fn file_name(name: &str) -> String {
+    if cfg!(windows) {
+        format!("{name}.exe")
+    } else {
+        name.to_owned()
+    }
 }
 
 /// Makes `<data>/bin/tos` this executable (a symbolic link on Unix; a hard
@@ -429,7 +434,7 @@ fn link_name() -> &'static str {
 pub(crate) fn ensure_link(paths: &Paths) -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?;
     let dir = bin_dir(paths);
-    match make_link(&exe, &dir) {
+    match make_link(&exe, &dir, NAME) {
         Ok(()) => Some(dir),
         Err(e) => {
             tracing::warn!("cannot put `tos` in {}: {e}", dir.display());
@@ -438,16 +443,18 @@ pub(crate) fn ensure_link(paths: &Paths) -> Option<PathBuf> {
     }
 }
 
-fn make_link(exe: &Path, dir: &Path) -> std::io::Result<()> {
+/// Makes `<dir>/<name>` this executable (TermOS answers to the name it
+/// is started by: `tos`, and the agent CLIs' shims, D-097).
+pub(crate) fn make_link(exe: &Path, dir: &Path, name: &str) -> std::io::Result<()> {
     std::fs::create_dir_all(dir)?;
-    let link = dir.join(link_name());
+    let link = dir.join(file_name(name));
     #[cfg(unix)]
     {
         let exe = exe.canonicalize().unwrap_or_else(|_| exe.to_owned());
         if std::fs::read_link(&link).is_ok_and(|t| t == exe) {
             return Ok(());
         }
-        let tmp = dir.join(format!(".{NAME}.{}", std::process::id()));
+        let tmp = dir.join(format!(".{name}.{}", std::process::id()));
         let _ = std::fs::remove_file(&tmp);
         std::os::unix::fs::symlink(&exe, &tmp)?;
         std::fs::rename(&tmp, &link)
@@ -455,7 +462,7 @@ fn make_link(exe: &Path, dir: &Path) -> std::io::Result<()> {
     #[cfg(not(unix))]
     {
         // What the link was made from, to remake it after an update.
-        let stamp_path = dir.join("tos.source");
+        let stamp_path = dir.join(format!("{name}.source"));
         let meta = std::fs::metadata(exe)?;
         let modified = meta
             .modified()
@@ -468,14 +475,14 @@ fn make_link(exe: &Path, dir: &Path) -> std::io::Result<()> {
         if current {
             return Ok(());
         }
-        let tmp = dir.join(format!("tos.{}.tmp", std::process::id()));
+        let tmp = dir.join(format!("{name}.{}.tmp", std::process::id()));
         let _ = std::fs::remove_file(&tmp);
         if std::fs::hard_link(exe, &tmp).is_err() {
             std::fs::copy(exe, &tmp)?;
         }
-        // A running `tos.exe` cannot be replaced; move it aside first.
+        // A running program cannot be replaced; move it aside first.
         if link.exists() {
-            let old = dir.join(format!("tos.{}.old", std::process::id()));
+            let old = dir.join(format!("{name}.{}.old", std::process::id()));
             if std::fs::rename(&link, &old).is_ok() {
                 let _ = std::fs::remove_file(&old);
             }
@@ -499,14 +506,14 @@ mod tests {
         });
         std::fs::write(&exe, b"one").expect("write");
         let bin = dir.path().join("data/bin");
-        make_link(&exe, &bin).expect("made");
-        let link = bin.join(link_name());
+        make_link(&exe, &bin, NAME).expect("made");
+        let link = bin.join(file_name(NAME));
         assert_eq!(std::fs::read(&link).expect("read"), b"one");
         // Unchanged: left alone. Changed: remade.
-        make_link(&exe, &bin).expect("again");
+        make_link(&exe, &bin, NAME).expect("again");
         std::fs::remove_file(&exe).expect("rm");
         std::fs::write(&exe, b"two!").expect("write");
-        make_link(&exe, &bin).expect("remade");
+        make_link(&exe, &bin, NAME).expect("remade");
         assert_eq!(std::fs::read(&link).expect("read"), b"two!");
     }
 

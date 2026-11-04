@@ -448,10 +448,21 @@ mod tests {
             std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).expect("chmod");
             p
         };
+        // A script just written can be briefly "busy" to run while another
+        // test thread forks; only that is retried.
+        let settled = |p: &Path| {
+            (0..50).find_map(|_| {
+                let v = version_of(p);
+                if v.is_none() {
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                }
+                v
+            })
+        };
         let new = fake("new", "2026.1.2");
-        assert_eq!(version_of(&new), Some(Version(2026, 1, 2)));
+        assert_eq!(settled(&new), Some(Version(2026, 1, 2)));
         let old = fake("old", "2024.1.0");
-        assert_eq!(version_of(&old), Some(Version(2024, 1, 0)));
+        assert_eq!(settled(&old), Some(Version(2024, 1, 0)));
         assert_eq!(version_of(&dir.path().join("missing")), None);
     }
 }

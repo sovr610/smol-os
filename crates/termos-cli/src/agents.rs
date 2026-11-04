@@ -62,6 +62,10 @@ pub(crate) enum AgentCmd {
     Status,
     /// Run an external agent preset here (what `agent.external` opens).
     External {
+        /// For Claude Code and Codex: the account (default: the one in
+        /// use).
+        #[arg(long)]
+        account: Option<String>,
         name: String,
         /// Arguments for the agent.
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
@@ -400,7 +404,11 @@ pub(crate) fn agent_command(
         }
         AgentCmd::Remove { name } => return crate::coding_agents::remove(paths, name),
         AgentCmd::Status => return crate::coding_agents::status(paths),
-        AgentCmd::External { name, args } => return external_command(&config, paths, name, args),
+        AgentCmd::External {
+            account,
+            name,
+            args,
+        } => return external_command(&config, paths, name, account.as_deref(), args),
     }
     Ok(ExitCode::SUCCESS)
 }
@@ -424,6 +432,7 @@ fn external_command(
     config: &Config,
     paths: &Paths,
     name: &str,
+    account: Option<&str>,
     args: &[String],
 ) -> anyhow::Result<ExitCode> {
     let presets = external::presets(&config.agents.external);
@@ -439,10 +448,11 @@ fn external_command(
     let mut preset = preset.clone();
     let mut env = Vec::new();
     if let Some(program) = preset.command.first()
-        && let Some((path, e)) = crate::coding_agents::resolve_external(paths, config, program)
+        && let Some(launch) =
+            crate::coding_agents::resolve_external(paths, config, program, account)?
     {
-        preset.command[0] = path.display().to_string();
-        env = e;
+        preset.command[0] = launch.program.display().to_string();
+        env = launch.env;
     }
     let preset = &preset;
     let here = std::env::current_dir()?;

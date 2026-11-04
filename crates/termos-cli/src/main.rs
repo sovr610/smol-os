@@ -22,6 +22,7 @@ mod models;
 mod probe;
 #[cfg(any(windows, test))]
 mod shadow;
+mod shim;
 mod tos;
 mod tryboot;
 mod update;
@@ -366,6 +367,10 @@ fn main() -> ExitCode {
     // Started through the `tos` link in a pane (D-085).
     if tos::invoked_as_tos() {
         return tos::main();
+    }
+    // Started as `claude` or `codex` through its link in a pane (D-097).
+    if let Some(tool) = shim::invoked_as() {
+        return shim::main(tool);
     }
     // The sandbox helper (D-061): Landlock, then the command in its place.
     // Its arguments are not TermOS's, so it is handled before parsing.
@@ -1387,8 +1392,7 @@ fn run_server(paths: &Paths, config_path: &Path, t: &Target) -> anyhow::Result<E
     opts.socket_path.clone_from(&t.socket);
     opts.handle_signals = true;
     opts.pane_env.extend(pane_path(paths));
-    opts.pane_env
-        .extend(coding_agents::pane_env(&paths.data_dir));
+    shim::ensure(paths);
     // Agent windows and audit logs (termos-ai), which the shell opens
     // without depending on it (ARCHITECTURE.md §4).
     let home = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })

@@ -429,8 +429,8 @@ pub fn dir(data_dir: &Path, tool: Tool) -> PathBuf {
     data_dir.join("agents").join(tool.name())
 }
 
-/// The folder TermOS puts first on every pane's `PATH`, where the
-/// installed programs are linked.
+/// The folder TermOS puts first on every pane's `PATH`, where its `tos`,
+/// `claude` and `codex` are (links to `termos`, D-085, D-097).
 pub fn bin_dir(data_dir: &Path) -> PathBuf {
     data_dir.join("bin")
 }
@@ -457,8 +457,9 @@ pub fn installed(data_dir: &Path, tool: Tool) -> Option<Installed> {
     })
 }
 
-/// Installs `release` (downloaded, checked, unpacked, made current and
-/// linked). Older versions are removed.
+/// Installs `release` (downloaded, checked, unpacked and made current).
+/// Older versions are removed. TermOS's `claude` and `codex` in
+/// `<data>/bin` are its own shims, which run the current version (D-097).
 pub fn install(
     fetch: &dyn Fetch,
     data_dir: &Path,
@@ -528,7 +529,6 @@ pub fn install(
         }
     }
     let path = target.join(tool.program());
-    link(&path, &bin_dir(data_dir).join(tool.program()))?;
     Ok(Installed {
         tool,
         version: release.version.clone(),
@@ -579,48 +579,10 @@ fn unpack(archive: &Path, into: &Path) -> Result<(), AgentError> {
     }
 }
 
-/// `link` names `target`: a symbolic link on Unix; a hard link (or a copy)
-/// on Windows.
-fn link(target: &Path, link: &Path) -> io::Result<()> {
-    if let Some(dir) = link.parent() {
-        std::fs::create_dir_all(dir)?;
-    }
-    #[cfg(unix)]
-    {
-        // Made beside it and renamed over it: never a moment without one.
-        let tmp = link.with_extension(format!("new-{}", std::process::id()));
-        let _ = std::fs::remove_file(&tmp);
-        std::os::unix::fs::symlink(target, &tmp)?;
-        std::fs::rename(&tmp, link)
-    }
-    #[cfg(not(unix))]
-    {
-        // A program that is running cannot be removed on Windows, but it
-        // can be renamed out of the way (and is removed next time).
-        if let Some(dir) = link.parent()
-            && let Ok(entries) = std::fs::read_dir(dir)
-        {
-            for e in entries.flatten() {
-                if e.file_name().to_string_lossy().contains(".old-") {
-                    let _ = std::fs::remove_file(e.path());
-                }
-            }
-        }
-        if std::fs::remove_file(link).is_err() && link.exists() {
-            std::fs::rename(
-                link,
-                link.with_extension(format!("old-{}", std::process::id())),
-            )?;
-        }
-        std::fs::hard_link(target, link).or_else(|_| std::fs::copy(target, link).map(|_| ()))
-    }
-}
-
-/// Removes `tool`: its versions and its link.
+/// Removes `tool`: its versions.
 pub fn remove(data_dir: &Path, tool: Tool) -> io::Result<bool> {
     let root = dir(data_dir, tool);
     let had = root.exists();
-    let _ = std::fs::remove_file(bin_dir(data_dir).join(tool.program()));
     if had {
         std::fs::remove_dir_all(&root)?;
     }
@@ -661,6 +623,18 @@ pub fn mcp_register(tool: Tool, program: &Path, termos: &Path) -> Option<Vec<Vec
     }
 }
 
+/// What `termos mcp serve` needs from the agent's environment: the
+/// server, session and pane (`$TERMOS`, `$TERMOS_PANE`) and TermOS's
+/// folders.
+pub const MCP_FORWARDED: &[&str] = &[
+    "TERMOS",
+    "TERMOS_PANE",
+    "XDG_RUNTIME_DIR",
+    "XDG_STATE_HOME",
+    "XDG_CONFIG_HOME",
+    "XDG_DATA_HOME",
+];
+
 /// Codex's `config.toml` with `[mcp_servers.termos]` running
 /// `termos mcp serve` (the rest of the file kept as it is).
 pub fn codex_config(existing: &str, termos: &Path) -> Result<String, AgentError> {
@@ -684,6 +658,13 @@ pub fn codex_config(existing: &str, termos: &Path) -> Result<String, AgentError>
     args.push("mcp");
     args.push("serve");
     termos_table["args"] = toml_edit::value(args);
+    // Codex starts MCP servers with an emptied environment; these tell
+    // `termos mcp serve` which TermOS, session and pane it serves.
+    let mut vars = toml_edit::Array::new();
+    for v in MCP_FORWARDED {
+        vars.push(*v);
+    }
+    termos_table["env_vars"] = toml_edit::value(vars);
     servers.insert("termos", toml_edit::Item::Table(termos_table));
     Ok(doc.to_string())
 }
@@ -843,7 +824,7 @@ mod tests {
     }
 
     #[test]
-    fn claude_installs_from_the_manifest_and_is_linked() {
+    fn claude_installs_from_the_manifest_and_is_removed() {
         let dir = tempfile::tempdir().expect("tempdir");
         let binary = b"#!/bin/sh\necho 9.9.9 (Claude Code)\n";
         let f = claude_fixture(binary, &sha(binary));
@@ -858,8 +839,6 @@ mod tests {
             install(&f, dir.path(), &release, &mut |s| said.push(s.to_owned())).expect("installed");
         assert_eq!(std::fs::read(&got.path).expect("read"), binary);
         assert_eq!(installed(dir.path(), Tool::Claude), Some(got.clone()));
-        let linked = bin_dir(dir.path()).join(Tool::Claude.program());
-        assert_eq!(std::fs::read(&linked).expect("linked"), binary);
         assert!(said.iter().any(|s| s == "checksum verified"));
         // Another platform is not in this manifest's fixture download.
         let mac = Platform {
@@ -878,7 +857,7 @@ mod tests {
         ));
         assert!(remove(dir.path(), Tool::Claude).expect("removed"));
         assert_eq!(installed(dir.path(), Tool::Claude), None);
-        assert!(!linked.exists());
+        assert!(!dir.path().join("agents/claude").exists());
     }
 
     #[test]
@@ -889,7 +868,7 @@ mod tests {
         let err = install(&f, dir.path(), &release, &mut |_| {}).expect_err("refused");
         assert!(matches!(err, AgentError::Checksum { .. }), "{err}");
         assert_eq!(installed(dir.path(), Tool::Claude), None);
-        assert!(!bin_dir(dir.path()).join(Tool::Claude.program()).exists());
+        assert!(!dir.path().join("agents/claude/9.9.9").exists());
         // A manifest that is not JSON, a version that is not one.
         let mut bad = claude_fixture(b"x", &sha(b"x"));
         bad.texts
@@ -1009,7 +988,18 @@ mod tests {
         let r = latest(&f, Tool::Codex, LINUX).expect("release");
         let got = install(&f, &data, &r, &mut |_| {}).expect("installed");
         assert!(got.path.ends_with("0.166.0/codex"));
-        let out = Command::new(&got.path).output().expect("runs");
+        // Just written: briefly "busy" to run while another test thread
+        // forks; only that is retried.
+        let out = (0..50)
+            .find_map(|_| match Command::new(&got.path).output() {
+                Err(e) if e.kind() == io::ErrorKind::ExecutableFileBusy => {
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                    None
+                }
+                other => Some(other),
+            })
+            .expect("settled")
+            .expect("runs");
         assert_eq!(String::from_utf8_lossy(&out.stdout), "codex-cli 0.166.0\n");
     }
 
@@ -1029,7 +1019,7 @@ mod tests {
             "{after}"
         );
         assert!(after.contains("[mcp_servers.other]"));
-        assert!(after.contains("[mcp_servers.termos]\ncommand = \"/opt/termos/termos\"\nargs = [\"mcp\", \"serve\"]"), "{after}");
+        assert!(after.contains("[mcp_servers.termos]\ncommand = \"/opt/termos/termos\"\nargs = [\"mcp\", \"serve\"]\nenv_vars = [\"TERMOS\", \"TERMOS_PANE\""), "{after}");
         // Again: the same, not twice.
         let again = codex_config(&after, termos).expect("edited");
         assert_eq!(again.matches("[mcp_servers.termos]").count(), 1);

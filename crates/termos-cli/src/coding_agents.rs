@@ -63,6 +63,7 @@ pub(crate) fn install_tool(
         return Ok(have.clone());
     }
     let got = ca::install(&Curl, &paths.data_dir, &release, &mut |m| say(m))?;
+    crate::shim::ensure(paths);
     say(&format!(
         "installed {} {} in {}",
         tool.title(),
@@ -382,7 +383,10 @@ pub(crate) fn update(
 
 pub(crate) fn remove(paths: &Paths, name: &str) -> anyhow::Result<ExitCode> {
     let (tool, _) = parse(name)?;
-    if ca::remove(&paths.data_dir, tool)? {
+    let removed = ca::remove(&paths.data_dir, tool)?;
+    // Its shim goes too, unless another copy is on PATH.
+    crate::shim::ensure(paths);
+    if removed {
         say(&format!(
             "removed {} (your settings and sign-in stay in your home folder)",
             tool.title()
@@ -442,64 +446,50 @@ fn tool_supported(tool: Tool, p: Platform) -> bool {
     }
 }
 
-/// The program to run for an external agent preset whose program is
-/// `program`: TermOS's own install, else the one on `PATH`. When neither
-/// exists and TermOS can install it, it asks (in the agent's window).
+/// The program and environment for an external agent preset whose
+/// program is `program`: for Claude Code and Codex, the real program as
+/// `account` (else the pinned one, else the one in use, D-097); when it
+/// is not installed and TermOS can install it, it asks (in the agent's
+/// window). `None`: not one of them, or nothing to run.
 pub(crate) fn resolve_external(
     paths: &Paths,
     config: &Config,
     program: &str,
-) -> Option<(PathBuf, Vec<(String, String)>)> {
-    let tool = Tool::from_name(program)?;
-    if let Some(i) = ca::installed(&paths.data_dir, tool) {
-        return Some((i.path, extra_env(tool)));
-    }
-    if termos_devkit::mise::which(program, std::env::var_os("PATH").as_ref()).is_some() {
-        return None;
-    }
-    if !std::io::stdin().is_terminal() || !tool_supported(tool, Platform::here()) {
-        return None;
-    }
-    print!(
-        "{} is not installed. Install it now (the official program from {}, checked against its SHA-256)? [Y/n] ",
-        tool.title(),
-        match tool {
-            Tool::Claude => "Anthropic",
-            Tool::Codex => "OpenAI's GitHub releases",
+    account: Option<&str>,
+) -> anyhow::Result<Option<crate::shim::Launch>> {
+    let Some(tool) = Tool::from_name(program) else {
+        return Ok(None);
+    };
+    if program_of(paths, tool).is_none() {
+        if !std::io::stdin().is_terminal() || !tool_supported(tool, Platform::here()) {
+            return Ok(None);
         }
-    );
-    let _ = std::io::stdout().flush();
-    let mut answer = String::new();
-    std::io::stdin().read_line(&mut answer).ok()?;
-    if answer.trim().to_ascii_lowercase().starts_with('n') {
-        return None;
-    }
-    match install_tool(paths, config, tool, None) {
-        Ok(i) => Some((i.path, extra_env(tool))),
-        Err(e) => {
-            eprintln!("termos: {e}");
-            None
+        print!(
+            "{} is not installed. Install it now (the official program from {}, checked against its SHA-256)? [Y/n] ",
+            tool.title(),
+            match tool {
+                Tool::Claude => "Anthropic",
+                Tool::Codex => "OpenAI's GitHub releases",
+            }
+        );
+        let _ = std::io::stdout().flush();
+        let mut answer = String::new();
+        std::io::stdin().read_line(&mut answer)?;
+        if answer.trim().to_ascii_lowercase().starts_with('n') {
+            return Ok(None);
+        }
+        if let Err(e) = install_tool(paths, config, tool, None) {
+            eprintln!("termos: {e:#}");
+            return Ok(None);
         }
     }
-}
-
-/// The environment TermOS's copy of `tool` runs with.
-fn extra_env(tool: Tool) -> Vec<(String, String)> {
-    match tool {
-        // TermOS updates it (`termos agent update`), not Claude Code itself.
-        Tool::Claude => vec![("DISABLE_AUTOUPDATER".to_owned(), "1".to_owned())],
-        Tool::Codex => Vec::new(),
+    let launch = crate::shim::plan(paths, tool, account)?;
+    if let Some(a) = &launch.account
+        && !a.is_default()
+    {
+        println!("termos: {}", describe(a));
     }
-}
-
-/// The pane environment for TermOS-installed agents: Claude Code's own
-/// updater off, as TermOS updates it.
-pub(crate) fn pane_env(data_dir: &Path) -> Vec<(String, String)> {
-    if ca::installed(data_dir, Tool::Claude).is_some() {
-        extra_env(Tool::Claude)
-    } else {
-        Vec::new()
-    }
+    Ok(Some(launch))
 }
 
 #[cfg(test)]
