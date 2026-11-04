@@ -30,6 +30,9 @@ questions (DECISIONS.md, "Open questions").
 | M10b | Graphics: richer chrome, icons, wallpaper, pixel charts where the terminal can show them (D-084, D-087 to D-090) | 🔍 |
 | M10c | The command center: live views and history of the AI and the OS, with actions (D-084, D-092, D-093) | 🔍 |
 | M10d | Claude Code and Codex CLI: installed by TermOS, with a TermOS MCP server (D-084, D-094, D-095) | 🔍 |
+| M11a | AI accounts: several subscriptions per provider, switching with the conversation kept, the usage app (D-096) | 🚧 |
+| M11b | Skills that teach Claude Code, Codex and other CLIs to use TermOS (D-096) | ⏳ |
+| M11c | The harness: one coding tool over Claude Code, Codex and API models, routing each task to the model that suits it (D-096) | ⏳ |
 | M9b | Platform gaps: the Windows agent sandbox and input, snapshots and sensors on macOS and Windows, Kitty keyboard flags, app windows in sessions, the KMS console's clipboard, bell and images (D-077) | ⏳ |
 
 Unfinished work in code is always a `TODO(M<n>)` marker (D-018). The
@@ -927,6 +930,41 @@ None of M10d runs while idle: the MCP server is a separate process the agent's C
 **Found and fixed on the way**
 - Reading `config.toml` (from `termos mcp serve`, `termos agent external`, `termos config check`) made the server reload it every 150 ms for as long as it ran: inotify reports opens, and the server's own reload is one. Only a real change counts now (regression test).
 - On Windows, Codex's archive holds helper programs beside it; the installer now takes the program by its exact name (caught by CI).
+
+---
+
+## M11a — AI accounts and the usage app
+**Status:** 🚧 · Owner answers: usage from each account's own logs plus the limit data the CLIs record, budgets for Claude Code; accounts as profiles, switched by the user, the conversation kept (D-096).
+
+**Deliverables**
+- Accounts: several of each CLI (Claude Code, Codex), each a profile in its own folder, signed in once; `termos account list|add|remove|use|rename`; the user's existing login is the `default` account; settings, instructions and skills shared between accounts; TermOS's MCP server registered in each.
+- Switching: `termos account use claude work`, the menu and the palette; `claude` and `codex` in every TermOS window follow the active account (or one pinned for the window); a running agent window restarts under another account and continues the same conversation.
+- The usage app: every account of every CLI, and TermOS's own agents by provider, on one window: tokens and models over 5 hours, today and 7 days; Codex's own 5-hour and weekly limit percentages; Claude Code's 5-hour window and week against a budget set per account; switch, open and sign in from it.
+
+**Acceptance:** accounts, switching and resuming are tested end to end with stand-in CLIs and recorded session logs; CI creates a second account for each real CLI and checks that it is separate and registered; the usage app is snapshot-tested.
+
+---
+
+## M11b — Skills for the agent CLIs
+**Status:** ⏳ · Owner answers: D-096.
+
+**Deliverables**
+- Skills that teach Claude Code, Codex and other CLIs what TermOS offers and how to use it: its MCP tools, `tos`, panes for servers and watchers, task panels, TermOS's own agents and models.
+- Installed with the CLIs and into every account; kept up to date by TermOS.
+
+**Acceptance:** each CLI lists the skills (CI, real CLIs, no keys).
+
+---
+
+## M11c — The harness
+**Status:** ⏳ · Owner answers: CLIs and API models as backends, research into tiers that the user fills with models (D-096).
+
+**Deliverables**
+- One TermOS coding window that plans, splits the work into tasks and hands each to Claude Code or Codex (headless, under the user's subscriptions) or to an API model (TermOS's own agent), by rules in settings; every hand-off visible and audited.
+- Settings: which models and accounts each backend uses, which task types go to which tier, budgets and fallbacks.
+- A researched guide to each provider's models' strengths and weaknesses, with sources, and tier defaults drawn from it.
+
+**Acceptance:** routing and hand-offs are tested against stand-in CLIs and a mock provider; CI runs a plan through real CLIs as far as is possible without keys.
 
 ---
 

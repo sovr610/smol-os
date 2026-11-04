@@ -938,6 +938,18 @@ rewrite history.
 
 ---
 
+## D-096: M11 owner answers: accounts and usage, skills, the multi-tool harness
+- **Status:** Accepted (owner) · 2026-11-04
+- **Context:** the owner asked for one app with the usage of every AI coding subscription, several accounts of the same provider (three Claude subscriptions, say) with quick switching, skills that teach Claude Code, Codex and the rest to use TermOS, and one coding tool over all of them that routes each task to the model that suits it, cheaply and well. Split into M11a (accounts, switching, the usage app), M11b (skills) and M11c (the harness).
+- **Decision:**
+  - **Usage (M11a):** tokens and models per account from each account's own session logs (exact, since every account has its own folder); plan-limit gauges where the CLI records them itself (Codex writes its 5-hour and weekly percentages into its logs); for Claude Code, use in 5-hour and weekly windows against a budget the user sets per account. TermOS never reads their login tokens and calls no vendor usage endpoint.
+  - **Switching (M11a):** each account is a profile in its own folder (Claude Code's `CLAUDE_CONFIG_DIR`, Codex's `CODEX_HOME`), signed in once. The user switches (menu, palette, `termos account use`): new windows use that account, and a running agent window can restart under the other account and continue the same conversation. Switching is always the user's choice: no automatic rotation to get around plan limits, which can break the providers' terms.
+  - **Harness (M11c):** one TermOS coding window that plans the work and hands each task to the backend that suits it: Claude Code or Codex headless under the user's subscriptions, or a model through an API key (TermOS's own agent). Routing rules are settings; every hand-off is visible and audited.
+  - **Routing (M11c):** research on each provider's current models, with sources, goes into a guide. Defaults map task types (planning, coding, review, tests, search, small edits, docs) to tiers (frontier, balanced, fast) per provider; the model behind each tier comes from the provider's model list and the user's settings. Model names stay out of the code (CLAUDE.md).
+- **Alternatives:** querying the vendors' limit endpoints with each account's login; swapping the one default login in place; a harness over CLIs only, or API models only; defaults that name models.
+
+---
+
 ## Open questions (the owner will be asked before the milestone that needs each one)
 
 | ID | Question | Needed by | Current lean |
