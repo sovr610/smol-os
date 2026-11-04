@@ -73,6 +73,7 @@ fn stand_in_rootfs(dir: &Path) -> (std::path::PathBuf, String) {
         ("id", "id"),
         ("cat", "cat"),
         ("touch", "touch"),
+        ("ls", "ls"),
     ] {
         let src = std::fs::canonicalize(which(program)).expect("canonicalize");
         std::fs::copy(&src, tree.join("bin").join(name)).expect("copy");
@@ -181,7 +182,7 @@ fn the_dev_rootfs_is_created_entered_updated_and_removed() {
                 "--",
                 "/bin/sh",
                 "-c",
-                "id -u; echo $HOME; echo $TERMOS_DEVROOT; touch made-inside; cat /var/log/apt-calls",
+                "id -u; echo $HOME; echo $TERMOS_DEVROOT; touch made-inside; cat /var/log/apt-calls; ls -ld /tmp",
             ],
         ),
         "enter",
@@ -192,6 +193,8 @@ fn the_dev_rootfs_is_created_entered_updated_and_removed() {
         inside.contains("apt-get update"),
         "create fetched the lists: {inside}"
     );
+    // apt checks signatures as its own user, in /tmp.
+    assert!(inside.contains("drwxrwxrwt"), "/tmp for everyone: {inside}");
     {
         use std::os::unix::fs::MetadataExt as _;
         let meta = std::fs::metadata(project.join("made-inside")).expect("made inside");

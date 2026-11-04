@@ -438,7 +438,11 @@ pub fn bwrap_args(i: &Inside<'_>) -> Vec<OsString> {
     add(&[&"--bind", &i.rootfs, &"/"]);
     add(&[&"--dev", &"/dev", &"--proc", &"/proc"]);
     add(&[&"--ro-bind", &"/sys", &"/sys"]);
-    add(&[&"--tmpfs", &"/tmp", &"--tmpfs", &"/run"]);
+    // `/tmp` for everyone, as on Debian: apt checks signatures as its
+    // `_apt` user there (bubblewrap's tmpfs is 0755 otherwise).
+    add(&[
+        &"--perms", &"1777", &"--tmpfs", &"/tmp", &"--tmpfs", &"/run",
+    ]);
     add(&[&"--ro-bind-try", &"/etc/resolv.conf", &"/etc/resolv.conf"]);
     add(&[&"--ro-bind-try", &"/etc/hosts", &"/etc/hosts"]);
     add(&[&"--bind", &i.home, &i.home]);
@@ -767,6 +771,10 @@ mod tests {
             "--bind /home/u/.local/share/termos/devroot/rootfs / --dev /dev --proc /proc"
         ));
         assert!(a.contains("--bind /home/u /home/u --chdir /home/u/src/app"));
+        assert!(
+            a.contains("--perms 1777 --tmpfs /tmp"),
+            "apt's `_apt` writes there"
+        );
         assert!(a.contains("--clearenv --setenv HOME /root -- /bin/bash -l"));
         assert!(a.ends_with("-- /bin/bash -l"));
         let outside = Inside {
