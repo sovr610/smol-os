@@ -610,6 +610,15 @@ fn debug_caps(raw: bool) -> anyhow::Result<ExitCode> {
         println!("note: no DA1 reply within 2 s; the replies below may be incomplete");
     }
     println!("image protocol: {}", caps.image_protocol());
+    #[cfg(windows)]
+    println!(
+        "pictures from programs in panes: {}",
+        if termos_term::pty::bundled_conpty() {
+            "yes (the ConPTY beside termos.exe)"
+        } else {
+            "no: the system's ConPTY drops them; put the Windows zip's conpty.dll and OpenConsole.exe beside termos.exe"
+        }
+    );
     println!("{}", serde_json::to_string_pretty(&caps)?);
     if raw {
         println!("raw replies: {:?}", String::from_utf8_lossy(&bytes));

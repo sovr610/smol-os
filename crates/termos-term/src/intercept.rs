@@ -9,7 +9,10 @@
 //! through unchanged, in order. A sequence longer than [`MAX_SEQUENCE`] is
 //! dropped (its remainder discarded up to the terminator).
 
-// TODO(M9b): images from programs in panes on Windows, where ConPTY can filter APC and DCS sequences out.
+//
+//! On Windows the system's ConPTY removes these sequences before they get
+//! here; the newer ConPTY the Windows zip ships beside `termos.exe` passes
+//! them on (D-107, [`crate::pty::bundled_conpty`]).
 
 /// Largest image sequence accepted.
 pub const MAX_SEQUENCE: usize = 32 * 1024 * 1024;

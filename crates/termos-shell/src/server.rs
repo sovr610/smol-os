@@ -1061,6 +1061,15 @@ impl Server {
             self.plugins.set_socket(self.opts.socket_path.clone());
         }
         self.load_saved();
+        #[cfg(windows)]
+        if termos_term::pty::bundled_conpty() {
+            tracing::info!("pictures from programs in panes: on (the ConPTY beside termos.exe)");
+        } else {
+            tracing::info!(
+                "pictures from programs in panes: off, the system's ConPTY drops them \
+                 (the Windows zip's conpty.dll and OpenConsole.exe beside termos.exe turn them on)"
+            );
+        }
         let mut signals = if self.opts.handle_signals {
             Signals::new()
         } else {
@@ -1106,6 +1115,10 @@ impl Server {
             if self.ask != Ask::Asked(k) {
                 self.save_snapshot(k);
             }
+        }
+        #[cfg(windows)]
+        if let Some(s) = &mut signals {
+            s.saved();
         }
         let ids: Vec<ClientId> = self.clients.keys().copied().collect();
         for c in ids {
@@ -2483,9 +2496,9 @@ impl Signals {
     }
 }
 
-/// The console events that stop the server. Logoff and shutdown are best
-/// effort: Windows may end the process before the snapshots are written,
-/// and the debounced snapshots are the safety net.
+/// What stops the server on Windows: console events, and logoff and
+/// shutdown heard by a hidden window (D-107), which waits until the
+/// snapshots are written ([`Signals::saved`]).
 #[cfg(windows)]
 struct Signals {
     c: tokio::signal::windows::CtrlC,
@@ -2493,6 +2506,9 @@ struct Signals {
     close: tokio::signal::windows::CtrlClose,
     logoff: tokio::signal::windows::CtrlLogoff,
     shutdown: tokio::signal::windows::CtrlShutdown,
+    ending: Option<tokio::sync::mpsc::UnboundedReceiver<std::sync::mpsc::SyncSender<()>>>,
+    /// Sent once the sessions are saved: Windows is waiting.
+    ack: Option<std::sync::mpsc::SyncSender<()>>,
 }
 
 #[cfg(windows)]
@@ -2505,17 +2521,35 @@ impl Signals {
             close: windows::ctrl_close().ok()?,
             logoff: windows::ctrl_logoff().ok()?,
             shutdown: windows::ctrl_shutdown().ok()?,
+            ending: crate::endsession::listen(),
+            ack: None,
         })
     }
 
     async fn recv(&mut self) -> &'static str {
-        // TODO(M9b): a hidden window for WM_ENDSESSION, so logoff and shutdown always save.
+        let ending = async {
+            match &mut self.ending {
+                Some(rx) => rx.recv().await,
+                None => std::future::pending().await,
+            }
+        };
         tokio::select! {
             _ = self.c.recv() => "Ctrl+C",
             _ = self.brk.recv() => "Ctrl+Break",
             _ = self.close.recv() => "the console closing",
             _ = self.logoff.recv() => "logoff",
             _ = self.shutdown.recv() => "shutdown",
+            ack = ending => {
+                self.ack = ack;
+                "logoff or shutdown"
+            }
+        }
+    }
+
+    /// The sessions are saved: Windows may go on.
+    fn saved(&mut self) {
+        if let Some(ack) = self.ack.take() {
+            let _ = ack.send(());
         }
     }
 }

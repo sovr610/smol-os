@@ -251,9 +251,12 @@ async fn run_cli(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
-    // Its own process group, so stopping it stops what it started.
+    // Its own process group (Unix) or job (Windows, started suspended
+    // until it is in the job), so stopping it stops what it started.
     #[cfg(unix)]
     cmd.process_group(0);
+    #[cfg(windows)]
+    cmd.creation_flags(crate::job::CREATE_SUSPENDED);
     let mut child = match cmd.spawn() {
         Ok(c) => c,
         Err(e) => {
@@ -263,6 +266,18 @@ async fn run_cli(
             };
         }
     };
+    #[cfg(windows)]
+    let job = match crate::job::Job::start(&mut child) {
+        Ok(job) => job,
+        Err(e) => {
+            return Outcome {
+                text: format!("cannot start {}: {e}", program.path.display()),
+                ..Outcome::default()
+            };
+        }
+    };
+    #[cfg(not(windows))]
+    let job = ();
     if let Some(mut stdin) = child.stdin.take() {
         let prompt = a.prompt.clone();
         tokio::spawn(async move {
@@ -331,7 +346,7 @@ async fn run_cli(
         }
     }
     if let Some(why) = ended_early {
-        stop_child(&mut child).await;
+        stop_child(&mut child, &job).await;
         out.stopped = why == "stopped";
         out.text = if out.stopped {
             "stopped".into()
@@ -378,8 +393,20 @@ async fn run_cli(
     out
 }
 
-/// Stops a CLI and everything it started.
-async fn stop_child(child: &mut tokio::process::Child) {
+/// Stops a CLI and everything it started: its process group on Unix, its
+/// job on Windows.
+#[cfg(windows)]
+async fn stop_child(child: &mut tokio::process::Child, job: &Option<crate::job::Job>) {
+    if let Some(job) = job {
+        job.terminate();
+    }
+    let _ = child.kill().await;
+}
+
+/// Stops a CLI and everything it started: its process group on Unix, its
+/// job on Windows.
+#[cfg(not(windows))]
+async fn stop_child(child: &mut tokio::process::Child, _job: &()) {
     #[cfg(unix)]
     if let Some(pid) = child
         .id()
@@ -395,8 +422,6 @@ async fn stop_child(child: &mut tokio::process::Child) {
         }
         let _ = rustix::process::kill_process_group(pid, rustix::process::Signal::KILL);
     }
-    // TODO(M9b): stop the CLI's whole process tree on Windows (a job
-    // object); only the CLI itself is stopped there.
     let _ = child.kill().await;
 }
 

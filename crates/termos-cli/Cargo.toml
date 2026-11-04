@@ -46,6 +46,7 @@ termos-hw.workspace = true
 termos-models.workspace = true
 termos-render.workspace = true
 termos-shell.workspace = true
+termos-term.workspace = true
 tokio = { workspace = true, features = ["rt", "macros", "sync", "time", "net"] }
 tracing.workspace = true
 

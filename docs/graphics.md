@@ -82,8 +82,11 @@ For safety, a program can only send image data itself. The Kitty protocol's
 "read this file" and "shared memory" options are refused, so printing
 something (say, `cat` of a downloaded file) can never make TermOS read a file.
 
-On Windows, images printed inside panes aren't supported yet: Windows'
-console layer can remove these sequences before TermOS sees them.
+On Windows, pictures printed inside panes need the ConPTY that comes in the
+TermOS zip: `conpty.dll` and `OpenConsole.exe`, beside `termos.exe`. Windows'
+own console layer removes the pictures before TermOS sees them. A
+`cargo install` build has only that one, until you copy the two files from
+the zip next to it. `termos debug caps` says which one is in use.
 
 ## Themes
 

@@ -326,6 +326,20 @@ impl PtyPane {
     }
 }
 
+/// Whether Microsoft's newer ConPTY sits beside this program, as the
+/// Windows zip ships it (D-107). portable-pty then loads it instead of the
+/// system's, and the pictures programs print in panes get through; the
+/// system's ConPTY drops them.
+#[cfg(windows)]
+pub fn bundled_conpty() -> bool {
+    std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(std::path::Path::to_path_buf))
+        .is_some_and(|dir| {
+            dir.join("conpty.dll").is_file() && dir.join("OpenConsole.exe").is_file()
+        })
+}
+
 impl Drop for PtyPane {
     fn drop(&mut self) {
         self.kill();
@@ -609,6 +623,49 @@ mod tests {
             pane.foreground_name()
         );
         assert!(pane.foreground_cwd().is_some_and(|d| d.is_dir()));
+    }
+
+    /// The ConPTY shipped beside termos.exe lets programs' pictures
+    /// through, Sixel and Kitty alike (D-107). CI puts it beside the test
+    /// binaries and sets `TERMOS_BUNDLED_CONPTY`; elsewhere the system's
+    /// ConPTY is in use, which drops them, and there is nothing to check.
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn the_bundled_conpty_lets_pictures_through() {
+        let required = std::env::var_os("TERMOS_BUNDLED_CONPTY").is_some();
+        if !required && !bundled_conpty() {
+            return;
+        }
+        assert!(
+            bundled_conpty(),
+            "conpty.dll and OpenConsole.exe are not beside the tests"
+        );
+        let dir = tempfile::tempdir().expect("tempdir");
+        let sixel = "\x1bPq#0;2;100;0;0#0~~~~~~-\x1b\\";
+        let kitty = "\x1b_Gf=24,s=1,v=1;/wAA\x1b\\";
+        std::fs::write(
+            dir.path().join("pic.txt"),
+            format!("{sixel}{kitty}done\r\n"),
+        )
+        .expect("write");
+        let (tx, mut rx) = mpsc::channel(64);
+        let spec = SpawnSpec {
+            args: vec!["/c".into(), "type pic.txt".into()],
+            cwd: Some(dir.path().to_path_buf()),
+            ..SpawnSpec::shell("cmd.exe", 40, 5)
+        };
+        let pane = PtyPane::spawn(PaneId(5), &spec, tx).expect("spawn");
+        let (out, _) = collect(&pane, &mut rx).await;
+        let text = String::from_utf8_lossy(&out);
+        assert!(text.contains("done"), "{text:?}");
+        assert!(
+            text.contains("\x1bPq"),
+            "the Sixel picture was dropped: {text:?}"
+        );
+        assert!(
+            text.contains("\x1b_G"),
+            "the Kitty picture was dropped: {text:?}"
+        );
     }
 
     #[cfg(windows)]

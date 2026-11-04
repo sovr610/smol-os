@@ -23,6 +23,8 @@ pub mod apps;
 pub mod commands;
 pub mod copymode;
 pub mod desktop;
+#[cfg(windows)]
+pub mod endsession;
 pub mod images;
 pub mod keys;
 pub mod menu;

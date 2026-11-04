@@ -86,6 +86,18 @@ jobs:
       # / Windows-only) code is linted where it compiles.
       - name: clippy
         run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+      # The ConPTY the Windows zip ships (D-107), beside the test binaries:
+      # the harness's terminals use it as Windows Terminal does, and the
+      # pass-through test checks programs' pictures get through it. The
+      # termos.exe the end-to-end tests start keeps the system's ConPTY,
+      # as `cargo install` users have.
+      - name: Bundled ConPTY (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          cargo test --locked -p termos-term --no-run
+          ./.github/scripts/fetch-conpty.sh target/debug/deps
+          echo "TERMOS_BUNDLED_CONPTY=1" >> "$GITHUB_ENV"
       # --no-fail-fast: one run shows every failing test binary, which
       # matters most on the platform nobody tests locally.
       - name: test
@@ -254,12 +266,13 @@ jobs:
           name="termos-${GITHUB_SHA::7}-windows-x86_64"
           mkdir -p "dist/$name"
           cp target/release/termos.exe "dist/$name/"
+          ./.github/scripts/fetch-conpty.sh "dist/$name"
           ./.github/scripts/buildinfo.sh "x86_64-pc-windows-msvc (Windows 10 1809 or newer, Windows Terminal)" > "dist/$name/BUILDINFO.txt"
           "dist/$name/termos.exe" --version
           TERMOS_BIN="dist/$name/termos.exe" ./.github/scripts/daemon-smoke.sh
           echo "name=$name" >> "$GITHUB_OUTPUT"
       # upload-artifact zips the directory: the download is a .zip holding
-      # termos.exe and BUILDINFO.txt.
+      # termos.exe, the ConPTY beside it and BUILDINFO.txt.
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.package.outputs.name }}

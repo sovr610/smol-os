@@ -18,6 +18,8 @@
 pub mod app;
 pub mod backends;
 pub mod events;
+#[cfg(windows)]
+mod job;
 pub mod plan;
 pub mod route;
 pub mod runner;

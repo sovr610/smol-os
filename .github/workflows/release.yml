@@ -162,6 +162,7 @@ jobs:
           name="termos-$V-windows-x86_64"
           mkdir -p "dist/$name" out
           cp target/release/termos.exe LICENSE "dist/$name/"
+          ./.github/scripts/fetch-conpty.sh "dist/$name"
           ./.github/scripts/buildinfo.sh "x86_64-pc-windows-msvc (Windows 10 1809 or newer)" > "dist/$name/BUILDINFO.txt"
           (cd dist && 7z a -tzip "../out/$name.zip" "$name" > /dev/null)
       - uses: actions/upload-artifact@v4

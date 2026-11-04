@@ -1095,6 +1095,24 @@ rewrite history.
   - **Windows:** utilisation and memory from the performance counters, through sysinfo, for every GPU. No temperature or power for AMD and Intel GPUs, as D-101 said.
 - **Alternatives:** our own libproc and process-snapshot FFI (more unsafe code for what sysinfo already does); the console's process list on Windows (`GetConsoleProcessList`, which needs attaching to each pane's console); raw SMC calls on every Mac.
 
+## D-107: Windows: job objects, saving at logoff, the ConPTY in the zip
+- **Status:** Accepted (lead; carries out D-101) · 2026-11-04
+- **Decision:**
+  - **Job objects for the harness's CLIs.** A CLI starts suspended, goes into a new job object, and only then has its thread resumed (found through a Toolhelp snapshot). Not even its first child can start outside the job. Stopping a task ends the whole job, as stopping its process group does on Unix. The job has no kill-on-close limit, so a CLI that finishes normally leaves what it started alone, as on Unix. Without a job (one could not be made) the CLI still runs, and stopping it stops only the CLI; a warning is logged. A CLI that cannot be resumed is stopped and reported. Windows test: a background script started by the CLI is ended with the job, and finishes when nothing stops it.
+  - **Logoff and shutdown.**
+    - A process that has loaded user32 gets no console events for these. A hidden top-level window (message-only windows miss the broadcast) on its own thread answers `WM_QUERYENDSESSION` with yes.
+    - On `WM_ENDSESSION` it hands the server an acknowledgement and waits, up to five seconds, until the server has written the snapshots and sends it.
+    - The console events stay for processes that get them. Windows test: the window waits for the acknowledgement, and asks nothing when the session is not ending after all.
+  - **The ConPTY in the zip.**
+    - Microsoft.Windows.Console.ConPTY 1.24.261001001 (MIT) is pinned by version and NuGet's SHA-512. `.github/scripts/fetch-conpty.sh` puts its x64 `conpty.dll` and `OpenConsole.exe` beside `termos.exe` in the test-build and release zips, with the licence (`THIRD-PARTY-CONPTY.txt`).
+    - portable-pty already loads a `conpty.dll` found beside the program, and this ConPTY passes programs' output through, pictures included: it has no pass-through flag to set and portable-pty needs no change.
+    - The Windows CI job puts it beside the test binaries; a test sends a Sixel and a Kitty picture through it. The `termos.exe` the end-to-end tests start keeps the system's ConPTY, as `cargo install` users have.
+    - Without the files TermOS uses the system's ConPTY, which drops the pictures, and says so in its log and in `termos debug caps`.
+- **Alternatives:**
+  - assigning the job after the CLI runs (its first children could escape);
+  - ending the CLI's job when its handle closes (it would also end what a finished CLI meant to leave running);
+  - downloading the ConPTY on first use.
+
 ---
 
 ## Open questions (the owner will be asked before the milestone that needs each one)

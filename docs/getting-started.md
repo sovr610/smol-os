@@ -326,9 +326,11 @@ known gaps listed below).
   Windows too: the newest program started under the pane's shell (Windows
   has no "foreground" program the way Unix terminals do). Restoring types
   allowlisted ones into PowerShell or cmd, quoted for that shell.
-- **Not there yet on Windows** (planned for M9b):
-  - saving at logoff or shutdown is best effort: `termos kill-server` first
-    if you want to be sure.
+- **Logoff and shutdown** save your sessions on Windows too: Windows waits
+  (up to five seconds) while TermOS writes them.
+- **Pictures programs print** in panes need the ConPTY that comes in the
+  Windows zip (`conpty.dll` and `OpenConsole.exe` beside `termos.exe`); see
+  [graphics.md](graphics.md).
 
 ## Differences from tmux
 
