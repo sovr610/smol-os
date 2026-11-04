@@ -31,7 +31,7 @@ questions (DECISIONS.md, "Open questions").
 | M10c | The command center: live views and history of the AI and the OS, with actions (D-084, D-092, D-093) | 🔍 |
 | M10d | Claude Code and Codex CLI: installed by TermOS, with a TermOS MCP server (D-084, D-094, D-095) | 🔍 |
 | M11a | AI accounts: several subscriptions per provider, switching with the conversation kept, the usage app (D-096, D-097) | 🔍 |
-| M11b | Skills that teach Claude Code, Codex and other CLIs to use TermOS, and `termos agent ask` (D-096, D-098) | 🚧 |
+| M11b | Skills that teach Claude Code, Codex and other CLIs to use TermOS, and `termos agent ask` (D-096, D-098) | 🔍 |
 | M11c | The harness: one coding tool over Claude Code, Codex and API models, routing each task to the model that suits it (D-096) | ⏳ |
 | M9b | Platform gaps: the Windows agent sandbox and input, snapshots and sensors on macOS and Windows, Kitty keyboard flags, app windows in sessions, the KMS console's clipboard, bell and images (D-077) | ⏳ |
 
@@ -972,14 +972,22 @@ Nothing M11a adds runs while idle: the shims run only when `claude` or `codex` s
 ---
 
 ## M11b — Skills for the agent CLIs
-**Status:** 🚧 · Owner answers: D-096, D-098.
+**Status:** 🔍 · Owner answers: D-096, D-098.
 
 **Deliverables**
-- [ ] Skills that teach Claude Code, Codex and other CLIs what TermOS offers and how to use it: its MCP tools, `tos`, panes for servers and watchers, task panels, TermOS's own agents and models (`termos`, `termos-dev`, `termos-agents`).
-- [ ] Installed into every Claude Code account and the shared `~/.agents/skills` (Codex, Gemini CLI, opencode); kept up to date by TermOS, never over a skill of the user's; `termos skills install|remove|status|show`; `[agents.skills] install`.
-- [ ] `termos agent ask`: TermOS's agent answers once on standard output, read-only, audited and counted, so the CLIs can hand sub-tasks to an API model or a local one.
+- [x] Skills that teach Claude Code, Codex and other CLIs what TermOS offers and how to use it: its MCP tools, `tos`, panes for servers and watchers, task panels, TermOS's own agents and models (`termos`, `termos-dev`, `termos-agents`; `crates/termos-devkit/skills/`).
+- [x] Installed into every Claude Code account and the shared `~/.agents/skills` (Codex, Gemini CLI, opencode); kept up to date by TermOS (at the server's start, `termos agent install`, `termos account add`), never over a skill of the user's or a copy they changed; `termos skills install|remove|status|show`; `[agents.skills] install`.
+- [x] `termos agent ask`: TermOS's agent answers once on standard output (or as JSON), read-only, audited, saved and counted, so the CLIs can hand sub-tasks to an API model or a local one; `termos agent profiles`.
+- [x] `tos panes`, `tos read` and `tos run -p` for CLIs without TermOS's MCP server.
 
-**Acceptance:** each CLI lists the skills (CI, real CLIs, no keys).
+**Acceptance:** each CLI lists the skills (CI, real CLIs, no keys). ✅ `agents.yml` on Linux x86_64 and aarch64, macOS and Windows: Claude Code (in the default account and a second one) and Codex each run once against a stand-in model server, and the request each sends the model lists the three skills with their descriptions. Gemini CLI and opencode read the same folder; they are not installed in CI.
+
+**Results**
+- Unit and end-to-end tests: install, update, kept and removed copies, a skill of the user's never touched, accounts that share a folder; the server installing them at start, `termos skills remove` staying removed across a restart; `termos agent ask` against a mock provider (the answer, JSON, standard input, refusals, the questions it cannot ask); `tos run -p`, `tos panes`, `tos read` in a real pane.
+- Nothing M11b adds runs while idle: the skills are checked once when the server starts (a few small file reads), and `termos agent ask` runs only when called.
+
+**Found and fixed on the way**
+- `pane.read` (behind `tos read` and the MCP server's `read_pane`) returned screen rows, so a key the pane wrapped was masked on its first row only. It now returns the lines as the program wrote them.
 
 ---
 
