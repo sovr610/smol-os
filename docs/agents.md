@@ -237,10 +237,28 @@ AppArmor; the `bubblewrap` package normally allows it, otherwise see
 
 Without bubblewrap, Landlock alone still confines writes and blocks TCP, but
 reads are not hidden and UDP is not blocked, so every command asks. Without
-either (macOS, Windows, kernels before 5.13) commands run as they are and every
-one asks, with a warning in the window. `sandbox = "required"` refuses to run
-commands without bubblewrap; `sandbox = "off"` runs them unconfined (they still
+either (macOS, kernels before 5.13) commands run as they are and every one
+asks, with a warning in the window. `sandbox = "required"` refuses to run
+commands without a sandbox; `sandbox = "off"` runs them unconfined (they still
 ask as the profile says).
+
+On **Windows**, commands run in an **AppContainer**, Windows's own app
+sandbox:
+
+- they read what Windows lets every app read (the system, Program Files)
+  and, of your own files, only the workspace, `write-paths`, and the
+  toolchains on your `PATH` inside your profile (`~/.cargo`, mise's data and
+  similar, and `~/.rustup`), read-only; the rest of your profile, keys
+  included, is out of reach;
+- they write only the workspace and `write-paths`;
+- there is no network unless the call asked for it and you agreed;
+- `termos sandbox run --read DIR` gives another folder, read-only.
+
+Windows grants a folder by rewriting the permissions of every file in it, so
+the first command in a big workspace or toolchain takes a while. TermOS keeps
+each grant afterwards; it is for TermOS's own container only, so nothing else
+gains access. `termos sandbox reset` takes every grant back and deletes the
+container.
 
 Commands run on a pseudo-terminal, so colours and progress bars look as they do
 in a pane; the window shows the output as it comes, the model gets it as plain
@@ -434,5 +452,4 @@ not see your other credentials. `termos agent presets` lists them.
 - Conversations are not compacted: a very long one eventually exceeds the
   model's context; start a new one.
 - The agent sees text, not images.
-- On Windows there is no sandbox yet (milestone M9b); on macOS commands are
-  confirm-only.
+- On macOS commands are confirm-only (no sandbox).

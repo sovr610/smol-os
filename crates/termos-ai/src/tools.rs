@@ -644,6 +644,7 @@ impl Toolbox {
         let spec = sandbox::Spec {
             workspace: self.policy.workspace.clone(),
             writable: self.policy.write_paths.clone(),
+            readable: Vec::new(),
             hidden: self.sandbox.hidden.clone(),
             network,
             cwd: self.policy.workspace.clone(),

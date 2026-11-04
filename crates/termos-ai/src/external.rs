@@ -159,6 +159,7 @@ pub fn command_line(
     let spec = crate::sandbox::Spec {
         workspace: workspace.to_owned(),
         writable,
+        readable: Vec::new(),
         hidden,
         network: preset.network,
         cwd: workspace.to_owned(),

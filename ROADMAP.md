@@ -737,7 +737,7 @@ What was shown, and where (Linux, in an isolated `tmux -L termos-m7` with its ow
 - [x] The KMS console's clipboard, visual bell and pixel images: the console keeps the last copy (Ctrl+Shift+V, Shift+Insert), flashes for the bell, and draws Kitty-style placements as pixels (D-105)
 - [x] Foreground programs on macOS and Windows; GPU readings from the OS: sysinfo for one process on macOS, the newest program under the shell on Windows, restored commands quoted per shell; macOS GPU temperature from the system's sensors (D-106)
 - [x] Windows: job objects, saving at logoff, the bundled ConPTY and images in panes: harness CLIs in a job (started suspended); a hidden window holds logoff and shutdown until the snapshots are written; Microsoft's ConPTY 1.24 pinned in the zip, with a pass-through test (D-107)
-- [ ] Windows: the AppContainer sandbox
+- [x] Windows: the AppContainer sandbox: workspace writable, toolchains readable, profile out of reach, no network unless asked; grants kept until `termos sandbox reset` (owner, D-108)
 
 **Acceptance:** each gap is closed with tests on its platform's CI runner, and the open-work table has no M9b rows.
 
@@ -1033,6 +1033,5 @@ Generated from the `TODO(M<n>)` markers in the code. Don't edit by hand; run `ca
 | --- | --- | --- |
 | M5b | `crates/termos-apps/src/lib.rs` | package manager UI over mise, the dev rootfs and the host package manager. |
 | M5b | `crates/termos-devkit/src/lib.rs` | dev rootfs, Podman and the package manager UI. |
-| M9b | `crates/termos-ai/src/sandbox.rs` | a Windows sandbox for agent commands (an AppContainer or a restricted token); until then every command asks. |
 | M10d | `crates/termos-devkit/src/cli_agents.rs` | curl on the bare-metal images (the owner picks its TLS library), for `termos agent install` there. |
 <!-- open-work:end -->

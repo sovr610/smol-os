@@ -423,7 +423,8 @@ termos-ai holds all of it; the CLI hands the server a launcher for its windows (
 - **Sandbox (D-061):**
   - Commands run under bubblewrap: new mount/pid/ipc/uts/net namespaces, the system bound read-only, the workspace read-write, a private `/tmp`, credentials and the runtime folder hidden, and no network unless granted.
   - Landlock adds defence in depth from inside, through `termos sandbox-exec` (writes, TCP, signal and abstract-socket scopes), which also drops credential-like environment variables. Landlock alone counts as partial (every command asks). seccomp is planned (after 1.0).
-  - On macOS hosted mode the sandbox degrades to confirm-only, with an explicit warning; on Windows too, until M9b (D-077).
+  - On Windows the helper runs the command in an AppContainer (D-108): the system readable as for every app, the workspace and `write-paths` writable, toolchains on `PATH` inside the profile readable, the rest of the profile out of reach, `internetClient` only with the network. Grants are recorded and kept (Windows rewrites every file's permissions to make one) until `termos sandbox reset`; the command runs suspended into a kill-on-close job, so it ends with the helper.
+  - On macOS hosted mode the sandbox degrades to confirm-only, with an explicit warning.
 - **Audit (D-062):** an append-only JSONL file per agent session in `$XDG_STATE_HOME/termos/audit/`. Entries are hash-chained (SHA-256 of the previous line; the conversation keeps the last hash) and record the tool, redacted arguments, the decision and why, a redacted result summary and timestamps. `termos audit verify` checks them; the viewer app (`audit.open`) lists them.
 - **MCP (D-063):** an `rmcp` client over stdio and streamable HTTP. Each server must be listed by the profile; local servers launch inside the sandbox.
 - **External CLI agents (D-063):** Claude Code, Codex CLI, Gemini CLI, aider and opencode have launcher presets (`agent.external NAME`) that open them in PTY windows, optionally under the sandbox.
@@ -553,7 +554,7 @@ termos-ai holds all of it; the CLI hands the server a launcher for its windows (
 - **Workspace and tooling:** a pinned toolchain (D-005); `cargo xtask ci` mirrors CI locally (D-020).
 - **CI** (D-016, D-041):
   - lint: fmt, repo checks, cargo-deny, and clippy for the Windows target from Linux (without default features: wasmtime and ring compile C there); `cargo xtask ci` also runs clippy for macOS arm64 when that target is installed;
-  - clippy, tests and a daemon smoke test (`new -d`, `ls`, `msg`, `kill-server`) on x86_64 Linux, aarch64 Linux, macOS arm64 and Windows x86_64; the Linux runners install bubblewrap and require the agent sandbox (D-061);
+  - clippy, tests and a daemon smoke test (`new -d`, `ls`, `msg`, `kill-server`) on x86_64 Linux, aarch64 Linux, macOS arm64 and Windows x86_64; the Linux runners install bubblewrap and require the agent sandbox (D-061), the Windows runner requires the AppContainer (D-108);
   - zigbuild cross-builds; a fuzz smoke pass; the performance budgets;
   - the sample WASM widget built from source for `wasm32-wasip2`, with the widget tests run against it;
   - images (`images.yml`, D-074–D-076): the x86_64 and aarch64 virt images built with Buildroot and booted in QEMU, on changes to the image, the console or the workflow, weekly and on demand (the Pi images on demand), with the images, screenshots, serial logs and the `legal-info` report kept;
@@ -573,7 +574,7 @@ termos-ai holds all of it; the CLI hands the server a launcher for its windows (
 | x86_64 Linux | Tier 1 | Tier 1 (UEFI + BIOS) | |
 | aarch64 Linux | Tier 1 | Tier 1 (generic UEFI) | |
 | macOS (arm64, x86_64) | Tier 1 | — | Agent sandbox is confirm-only (§11) |
-| Windows 10 1809+ / 11 (x86_64, native) | Tier 2 | — | Windows Terminal or another VT console; named pipes and ConPTY. Agent sandbox confirm-only for now. Gaps tracked as `TODO(M9b)` (D-035, D-077) |
+| Windows 10 1809+ / 11 (x86_64, native) | Tier 2 | — | Windows Terminal or another VT console; named pipes and ConPTY (the zip ships a newer one, D-107). Agent sandbox: an AppContainer (D-108) |
 | WSL2 | Tier 2 | — | |
 | Raspberry Pi 5 / 4 | Tier 2 (on Pi OS) | Tier 1 images | Latency budget 33 ms on Pi 4 |
 | Raspberry Pi 3 / Zero 2 W | Best effort | Best effort | 512 MB–1 GB RAM limits dev tools and local models |

@@ -48,6 +48,20 @@ unicode-width.workspace = true
 [target.'cfg(target_os = "linux")'.dependencies]
 landlock.workspace = true
 
+# The AppContainer sandbox (D-108).
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_Security_Isolation",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Com",
+    "Win32_System_Console",
+    "Win32_System_JobObjects",
+    "Win32_System_Threading",
+] }
+
 [dev-dependencies]
 insta.workspace = true
 tempfile.workspace = true

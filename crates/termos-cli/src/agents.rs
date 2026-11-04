@@ -157,6 +157,11 @@ pub(crate) enum SandboxCmd {
         /// Also writable.
         #[arg(long = "write", value_name = "PATH")]
         write: Vec<PathBuf>,
+        /// Also readable (Windows, whose sandbox reads only what it is
+        /// given beyond the system; everything not hidden is readable
+        /// elsewhere).
+        #[arg(long = "read", value_name = "PATH")]
+        read: Vec<PathBuf>,
         /// Also hidden (made empty).
         #[arg(long = "hide", value_name = "PATH")]
         hide: Vec<PathBuf>,
@@ -173,6 +178,9 @@ pub(crate) enum SandboxCmd {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true, required = true)]
         command: Vec<String>,
     },
+    /// Windows: take back every folder given to the agents' AppContainer
+    /// and delete it (grants are kept between commands otherwise).
+    Reset,
 }
 
 /// `termos agent ask`'s options.
@@ -826,9 +834,20 @@ pub(crate) fn audit_command(action: &AuditCmd, paths: &Paths) -> anyhow::Result<
 }
 
 pub(crate) fn sandbox_command(action: &SandboxCmd, paths: &Paths) -> anyhow::Result<ExitCode> {
+    if let SandboxCmd::Reset = action {
+        #[cfg(windows)]
+        {
+            let n = sandbox::reset(&paths.state_dir).context("cannot reset the sandbox")?;
+            println!("took back {n} folders and deleted the agents' AppContainer");
+        }
+        #[cfg(not(windows))]
+        println!("nothing to reset: the sandbox here keeps no grants");
+        return Ok(ExitCode::SUCCESS);
+    }
     let helper = std::env::current_exe().ok();
     let caps = sandbox::probe_now(helper.as_deref());
     match action {
+        SandboxCmd::Reset => Ok(ExitCode::SUCCESS),
         SandboxCmd::Status => {
             println!(
                 "{}",
@@ -839,6 +858,7 @@ pub(crate) fn sandbox_command(action: &SandboxCmd, paths: &Paths) -> anyhow::Res
         SandboxCmd::Run {
             net,
             write,
+            read,
             hide,
             keep,
             keep_env,
@@ -867,6 +887,7 @@ pub(crate) fn sandbox_command(action: &SandboxCmd, paths: &Paths) -> anyhow::Res
             let spec = sandbox::Spec {
                 workspace,
                 writable: write.clone(),
+                readable: read.clone(),
                 hidden,
                 network: *net,
                 cwd: here,

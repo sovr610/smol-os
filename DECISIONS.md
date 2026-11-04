@@ -1007,7 +1007,7 @@ rewrite history.
 ---
 
 ## D-101: M9b owner answers: the Windows sandbox, images on Windows, GPU sources, delivery
-- **Status:** Accepted (owner) · 2026-11-04
+- **Status:** Accepted (owner) · 2026-11-04 · when grants are taken back: superseded by D-108
 - **Context:** M9b closes the platform gaps of D-077. Four choices were open; the owner chose (2026-11-04):
 - **Decision:**
   - **Windows sandbox for agents' commands: an AppContainer** (closing D-077's "an AppContainer or a restricted token"). The project is writable, the rest of the profile is out of reach, and there is no network unless granted; TermOS grants the container the project (and, read-only, the toolchains a command needs) and takes the grants back.
@@ -1112,6 +1112,38 @@ rewrite history.
   - assigning the job after the CLI runs (its first children could escape);
   - ending the CLI's job when its handle closes (it would also end what a finished CLI meant to leave running);
   - downloading the ConPTY on first use.
+
+## D-108: The Windows sandbox: an AppContainer, with grants kept until reset
+- **Status:** Accepted (owner on grants, 2026-11-04; supersedes D-101's "takes the grants back") · 2026-11-04
+- **Context:**
+  - D-101 chose an AppContainer for agents' commands on Windows.
+  - An AppContainer reads only what is granted to it or to all apps. Granting a folder means Windows rewrites the permissions of every file in it, which takes seconds to minutes for a big project or `~/.cargo`, and taking the grant back costs the same.
+  - The owner was asked when grants should be taken back, and chose to keep them until a reset.
+- **Decision:**
+  - **The container:** one per TermOS installation (named from a hash of its state folder, so tests never touch the user's), made on first use. `termos sandbox-exec` (the helper the agent already wraps commands in) runs the command in it, and `termos sandbox status` reports "sandbox: AppContainer", which counts as full confinement.
+  - **What the command reaches:**
+    - It writes the workspace and the profile's `write-paths`.
+    - It reads what Windows lets every app read, plus, read-only:
+      - the folders on `PATH` inside the user's profile (a `bin` or `shims` folder's parent, so `~/.cargo` and mise's data come along) and `~/.rustup`;
+      - the program itself when named by path;
+      - `--read` folders.
+    - The rest of the profile (keys, `.ssh`, browsers) is out of reach without being listed, unlike bubblewrap's hiding.
+    - The network is `internetClient`, only when the call asked for it and the user agreed. AppContainers never reach loopback.
+  - **Grants are kept:** each grant is recorded in `<state>/sandbox/grants` and not repeated. `termos sandbox reset` takes every one back and deletes the container. A workspace that cannot be granted stops the command; a toolchain folder that cannot be granted is left out with a warning.
+  - **Running:**
+    - The command starts suspended in a kill-on-close job, so it ends with the helper (as bubblewrap's `--die-with-parent`).
+    - It gets inheritable copies of the helper's console handles.
+    - Its environment loses credential-like variables (D-061), and TEMP and TMP point at the container's own folder.
+    - The helper ignores Ctrl+C (the command gets it), waits, and passes on the exit code.
+  - **Tests:** CI requires the sandbox on the Windows runner (`TERMOS_REQUIRE_SANDBOX`). The end-to-end test shows that:
+    - a write lands in the workspace;
+    - a write outside it and a read of a file in the profile fail;
+    - a public address is unreachable without `--net` and reachable with it;
+    - `termos sandbox reset` succeeds.
+  - **Plugins** still run without a sandbox on Windows. They need the session's named pipe, which an AppContainer cannot open without its own grant.
+- **Alternatives:**
+  - taking grants back when each agent session ends, or after each command (the rewrite every time);
+  - a restricted low-integrity token, which cannot keep reads out of the profile.
 
 ---
 

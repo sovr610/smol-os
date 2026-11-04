@@ -172,6 +172,7 @@ async fn spawn_stdio(cfg: &McpServerConfig, launch: &Launch<'_>) -> Result<Clien
     let spec = Spec {
         workspace: launch.workspace.to_owned(),
         writable: cfg.write_paths.clone(),
+        readable: Vec::new(),
         hidden: launch.hidden.to_vec(),
         network: cfg.network,
         cwd: launch.workspace.to_owned(),

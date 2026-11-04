@@ -91,13 +91,16 @@ jobs:
       # pass-through test checks programs' pictures get through it. The
       # termos.exe the end-to-end tests start keeps the system's ConPTY,
       # as `cargo install` users have.
-      - name: Bundled ConPTY (Windows)
+      - name: Bundled ConPTY and the sandbox (Windows)
         if: runner.os == 'Windows'
         shell: bash
         run: |
           cargo test --locked -p termos-term --no-run
           ./.github/scripts/fetch-conpty.sh target/debug/deps
           echo "TERMOS_BUNDLED_CONPTY=1" >> "$GITHUB_ENV"
+          # The AppContainer sandbox (D-108): its tests fail rather than
+          # skip when it does not work.
+          echo "TERMOS_REQUIRE_SANDBOX=1" >> "$GITHUB_ENV"
       # --no-fail-fast: one run shows every failing test binary, which
       # matters most on the platform nobody tests locally.
       - name: test

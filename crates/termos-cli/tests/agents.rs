@@ -455,6 +455,86 @@ fn the_sandbox_confines_writes_and_the_network() {
     );
 }
 
+/// Windows: the AppContainer (D-108). Writes reach the workspace only,
+/// the rest of the user's files cannot be read, the network is closed
+/// without `--net`, and `termos sandbox reset` takes the grants back.
+#[cfg(windows)]
+#[test]
+fn the_appcontainer_confines_writes_reads_and_the_network() {
+    let env = Env::new("");
+    let status = env.run(&["sandbox", "status"]);
+    let line = String::from_utf8_lossy(&status.stdout).trim().to_owned();
+    if line != "sandbox: AppContainer" {
+        // CI sets this, so a broken sandbox cannot pass as an absent one.
+        assert!(
+            std::env::var("TERMOS_REQUIRE_SANDBOX").is_err(),
+            "the sandbox is required here but: {line}"
+        );
+        eprintln!("SKIPPED: {line}");
+        return;
+    }
+    let ws = env.path().join("ws");
+    std::fs::create_dir_all(&ws).expect("ws");
+    // Only the system on PATH: no toolchain folders to grant.
+    let root = std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".into());
+    let path = format!(r"{root}\System32;{root}");
+    let run = |args: &[&str]| {
+        let mut all = vec!["sandbox", "run"];
+        all.extend_from_slice(args);
+        env.command_in(&ws, &all)
+            .env("PATH", &path)
+            .output()
+            .expect("run termos")
+    };
+
+    let out = run(&["--", "cmd", "/c", "echo hi> inside.txt"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        std::fs::read_to_string(ws.join("inside.txt"))
+            .expect("inside")
+            .trim(),
+        "hi"
+    );
+
+    let outside = env.path().join("outside.txt");
+    let _ = run(&["--", "cmd", "/c", &format!("echo x> {}", outside.display())]);
+    assert!(!outside.exists(), "written from the sandbox");
+
+    let secret = env.path().join("secret.txt");
+    std::fs::write(&secret, "s3cret").expect("write");
+    let out = run(&["--", "cmd", "/c", &format!("type {}", secret.display())]);
+    assert!(
+        !String::from_utf8_lossy(&out.stdout).contains("s3cret"),
+        "read from the sandbox"
+    );
+
+    // No network without --net (AppContainers never reach loopback, so a
+    // public address tells).
+    let termos = env!("CARGO_BIN_EXE_termos");
+    let out = run(&["--", termos, "debug", "connect", "1.1.1.1:443"]);
+    assert!(
+        !out.status.success(),
+        "reached the network without --net: {}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+    let out = run(&["--net", "--", termos, "debug", "connect", "1.1.1.1:443"]);
+    assert!(
+        out.status.success(),
+        "--net did not open the network: {} {}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let out = env.run(&["sandbox", "reset"]);
+    assert!(out.status.success(), "{out:?}");
+    let said = String::from_utf8_lossy(&out.stdout);
+    assert!(said.contains("took back"), "{said}");
+}
+
 #[cfg(target_os = "linux")]
 #[test]
 fn plugins_run_in_the_sandbox() {

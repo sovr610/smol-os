@@ -17,8 +17,17 @@
 //!
 //! Without bubblewrap the helper's Landlock layer still confines writes,
 //! but reads are not hidden and the network is only partly closed: every
-//! command then asks. Without either (macOS, Windows, old kernels),
-//! commands run as they are and every one asks, with a warning.
+//! command then asks.
+//!
+//! On Windows the helper runs the command in an **AppContainer**
+//! ([`appcontainer`], D-108): the workspace writable, toolchains readable,
+//! the rest of the user's profile out of reach, no network unless asked.
+//!
+//! Without any of these (macOS, old kernels), commands run as they are
+//! and every one asks, with a warning.
+
+#[cfg(any(windows, test))]
+mod appcontainer;
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -34,6 +43,8 @@ pub struct Capabilities {
     /// A working bubblewrap.
     pub bwrap: Option<PathBuf>,
     pub landlock: Landlock,
+    /// Windows: the helper can run commands in an AppContainer.
+    pub appcontainer: bool,
 }
 
 /// How much Landlock the kernel enforces.
@@ -51,6 +62,7 @@ impl Capabilities {
         Self {
             bwrap: None,
             landlock: Landlock::None,
+            appcontainer: false,
         }
     }
 
@@ -59,6 +71,7 @@ impl Capabilities {
         match (mode, &self.bwrap, self.landlock) {
             (SandboxMode::Off, _, _) => Confinement::None,
             (_, Some(_), _) => Confinement::Full,
+            _ if self.appcontainer => Confinement::Full,
             (_, None, Landlock::Full | Landlock::Partial) => Confinement::Partial,
             (_, None, Landlock::None) => Confinement::None,
         }
@@ -68,6 +81,9 @@ impl Capabilities {
     pub fn describe(&self, mode: SandboxMode) -> String {
         if mode == SandboxMode::Off {
             return "sandbox off (profile): every command asks".into();
+        }
+        if self.appcontainer {
+            return "sandbox: AppContainer".into();
         }
         match (&self.bwrap, self.landlock) {
             (Some(_), Landlock::Full) => "sandbox: bubblewrap + Landlock".into(),
@@ -94,8 +110,25 @@ pub fn probe(helper: Option<&Path>) -> &'static Capabilities {
 
 /// Probes without caching.
 pub fn probe_now(helper: Option<&Path>) -> Capabilities {
+    // Windows: the helper says whether it can make its AppContainer.
+    if cfg!(windows) {
+        let appcontainer = helper
+            .and_then(|h| {
+                Command::new(h)
+                    .args(["sandbox-exec", "--probe"])
+                    .stdin(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .output()
+                    .ok()
+            })
+            .is_some_and(|out| String::from_utf8_lossy(&out.stdout).trim() == "appcontainer: yes");
+        tracing::info!("sandbox probe: AppContainer {appcontainer}");
+        return Capabilities {
+            appcontainer,
+            ..Capabilities::none()
+        };
+    }
     // macOS runs agent commands confirm-only by design (ARCHITECTURE.md §11).
-    // TODO(M9b): a Windows sandbox for agent commands (an AppContainer or a restricted token); until then every command asks.
     if !cfg!(target_os = "linux") {
         return Capabilities::none();
     }
@@ -136,7 +169,11 @@ pub fn probe_now(helper: Option<&Path>) -> Capabilities {
             }
         });
     tracing::info!("sandbox probe: bwrap {:?}, landlock {landlock:?}", bwrap);
-    Capabilities { bwrap, landlock }
+    Capabilities {
+        bwrap,
+        landlock,
+        appcontainer: false,
+    }
 }
 
 fn find_program(name: &str) -> Option<PathBuf> {
@@ -153,6 +190,10 @@ pub struct Spec {
     pub workspace: PathBuf,
     /// Writable besides the workspace.
     pub writable: Vec<PathBuf>,
+    /// Readable besides what every program may read. Only Windows's
+    /// AppContainer needs saying so; elsewhere everything not hidden is
+    /// readable.
+    pub readable: Vec<PathBuf>,
     /// Made empty inside the sandbox (folders) or `/dev/null` (files).
     pub hidden: Vec<PathBuf>,
     pub network: bool,
@@ -180,16 +221,40 @@ pub fn wrap(
     if argv.is_empty() {
         return Err(SandboxError("nothing to run".into()));
     }
-    if mode == SandboxMode::Required && caps.bwrap.is_none() {
-        return Err(SandboxError(
-            "the profile requires the sandbox, and bubblewrap is not available here".into(),
-        ));
+    if mode == SandboxMode::Required && caps.bwrap.is_none() && !caps.appcontainer {
+        return Err(SandboxError(if cfg!(windows) {
+            "the profile requires the sandbox, and the AppContainer is not available here".into()
+        } else {
+            "the profile requires the sandbox, and bubblewrap is not available here".into()
+        }));
     }
     if mode == SandboxMode::Off {
         return Ok(argv.to_vec());
     }
     let mut writable = vec![spec.workspace.clone()];
     writable.extend(spec.writable.iter().cloned());
+    if caps.appcontainer
+        && let Some(helper) = helper
+    {
+        let mut v = vec![helper.display().to_string(), "sandbox-exec".into()];
+        for w in &writable {
+            v.push("--write".into());
+            v.push(w.display().to_string());
+        }
+        for r in &spec.readable {
+            v.push("--read".into());
+            v.push(r.display().to_string());
+        }
+        if spec.network {
+            v.push("--net".into());
+        }
+        if spec.keep_env {
+            v.push("--keep-env".into());
+        }
+        v.push("--".into());
+        v.extend(argv.iter().cloned());
+        return Ok(v);
+    }
     let inner: Vec<String> = match (helper, cfg!(target_os = "linux")) {
         (Some(helper), true) => {
             let mut v = vec![helper.display().to_string(), "sandbox-exec".into()];
@@ -340,6 +405,7 @@ pub fn secret_env_names(vars: impl Iterator<Item = (String, String)>) -> Vec<Str
 /// code to use (`--probe` returns 0 after printing what is enforced).
 pub fn helper_main(args: &[String]) -> i32 {
     let mut writable = Vec::new();
+    let mut readable = Vec::new();
     let mut net = false;
     let mut probe = false;
     let mut keep_env = false;
@@ -355,6 +421,12 @@ pub fn helper_main(args: &[String]) -> i32 {
                 i += 1;
                 if let Some(p) = args.get(i) {
                     writable.push(PathBuf::from(p));
+                }
+            }
+            "--read" => {
+                i += 1;
+                if let Some(p) = args.get(i) {
+                    readable.push(PathBuf::from(p));
                 }
             }
             "--tmp" => {
@@ -379,7 +451,31 @@ pub fn helper_main(args: &[String]) -> i32 {
         eprintln!("termos sandbox-exec: nothing to run");
         return 2;
     }
-    let status = landlock::restrict(&writable, net);
+    #[cfg(windows)]
+    {
+        // Windows has no /tmp to replace: the container has its own.
+        let _ = tmp;
+        windows_main(probe, &writable, &readable, net, keep_env, rest)
+    }
+    #[cfg(not(windows))]
+    {
+        // Everything not hidden is readable outside Windows.
+        let _ = readable;
+        unix_main(probe, &writable, net, keep_env, tmp.as_deref(), rest)
+    }
+}
+
+/// The helper elsewhere: Landlock, then the command in its place.
+#[cfg(not(windows))]
+fn unix_main(
+    probe: bool,
+    writable: &[PathBuf],
+    net: bool,
+    keep_env: bool,
+    tmp: Option<&Path>,
+    rest: &[String],
+) -> i32 {
+    let status = landlock::restrict(writable, net);
     if probe {
         println!(
             "landlock: {}",
@@ -399,9 +495,86 @@ pub fn helper_main(args: &[String]) -> i32 {
         .filter_map(|(k, _)| k.into_string().ok())
         .filter(|k| !keep_env && is_secret_env(k))
         .collect();
-    exec(rest, &drop, tmp.as_deref())
+    exec(rest, &drop, tmp)
 }
 
+/// The helper on Windows: the command in the AppContainer (D-108).
+#[cfg(windows)]
+fn windows_main(
+    probe: bool,
+    writable: &[PathBuf],
+    readable: &[PathBuf],
+    net: bool,
+    keep_env: bool,
+    argv: &[String],
+) -> i32 {
+    use appcontainer::Grant;
+
+    let state = termos_core::paths::Paths::detect().state_dir;
+    if probe {
+        match appcontainer::probe(&state) {
+            Ok(()) => println!("appcontainer: yes"),
+            Err(e) => println!("appcontainer: no ({e})"),
+        }
+        return 0;
+    }
+    let mut wanted: Vec<Grant> = writable
+        .iter()
+        .map(|p| Grant {
+            write: true,
+            path: p.clone(),
+        })
+        .collect();
+    let profile = std::env::var_os("USERPROFILE").map(PathBuf::from);
+    let path: Vec<PathBuf> = std::env::var_os("PATH")
+        .map(|p| std::env::split_paths(&p).collect())
+        .unwrap_or_default();
+    let toolchains = profile
+        .as_deref()
+        .map(|home| appcontainer::toolchain_folders(&path, home))
+        .unwrap_or_default();
+    // The program itself, when named by its path (only the file).
+    let program = Path::new(&argv[0]);
+    let own = (program.is_absolute() && program.is_file()).then(|| program.to_path_buf());
+    for p in readable.iter().cloned().chain(toolchains).chain(own) {
+        wanted.push(Grant {
+            write: false,
+            path: p,
+        });
+    }
+    let temp = appcontainer::temp(&state);
+    let mut env: Vec<(std::ffi::OsString, std::ffi::OsString)> = std::env::vars_os()
+        .filter(|(k, _)| keep_env || !k.to_str().is_some_and(is_secret_env))
+        .filter(|(k, _)| {
+            !temp.is_some()
+                || !k.to_str().is_some_and(|k| {
+                    k.eq_ignore_ascii_case("TEMP") || k.eq_ignore_ascii_case("TMP")
+                })
+        })
+        .collect();
+    if let Some(t) = &temp {
+        env.push(("TEMP".into(), t.clone().into_os_string()));
+        env.push(("TMP".into(), t.clone().into_os_string()));
+    }
+    match appcontainer::run(&state, argv, &wanted, net, &env) {
+        // Exit codes are 32-bit on Windows; the helper passes them on.
+        Ok(code) => code as i32,
+        Err(e) => {
+            eprintln!("termos sandbox-exec: cannot run {}: {e}", argv[0]);
+            126
+        }
+    }
+}
+
+/// `termos sandbox reset` (Windows): takes back every folder TermOS gave
+/// its AppContainer and deletes the container (D-108). Returns how many
+/// grants were taken back.
+#[cfg(windows)]
+pub fn reset(state_dir: &Path) -> std::io::Result<usize> {
+    appcontainer::reset(state_dir)
+}
+
+#[cfg(not(windows))]
 fn command(argv: &[String], drop_env: &[String], tmp: Option<&Path>) -> Command {
     let mut cmd = Command::new(&argv[0]);
     cmd.args(&argv[1..]);
@@ -426,7 +599,7 @@ fn exec(argv: &[String], drop_env: &[String], tmp: Option<&Path>) -> i32 {
     }
 }
 
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 fn exec(argv: &[String], drop_env: &[String], tmp: Option<&Path>) -> i32 {
     match command(argv, drop_env, tmp).status() {
         Ok(s) => s.code().unwrap_or(1),
@@ -491,7 +664,7 @@ mod landlock {
     }
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", windows)))]
 mod landlock {
     use std::path::PathBuf;
 
@@ -516,6 +689,7 @@ mod tests {
         Spec {
             workspace: dir.join("ws"),
             writable: vec![dir.join("cache")],
+            readable: vec![dir.join("tools")],
             hidden: vec![
                 dir.join("home/.ssh"),
                 dir.join("home/.netrc"),
@@ -539,6 +713,7 @@ mod tests {
         let full = Capabilities {
             bwrap: Some(PathBuf::from("/usr/bin/bwrap")),
             landlock: Landlock::Full,
+            appcontainer: false,
         };
         let line = wrap(
             &spec(dir.path()),
@@ -587,6 +762,7 @@ mod tests {
         let ll = Capabilities {
             bwrap: None,
             landlock: Landlock::Full,
+            appcontainer: false,
         };
         assert_eq!(ll.confinement(SandboxMode::Auto), Confinement::Partial);
     }
