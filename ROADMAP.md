@@ -28,7 +28,7 @@ questions (DECISIONS.md, "Open questions").
 | M9 | Release: A/B updates, the live ISO and installer, the network page, the release pipeline with musl builds, docs (D-077 to D-083) | 🔍 |
 | M10a | Mouse-first desktop: menus, context menus, hover and double-click; the `tos` command in every pane (D-084, D-085) | 🔍 |
 | M10b | Graphics: richer chrome, icons, wallpaper, pixel charts where the terminal can show them (D-084, D-087 to D-090) | 🔍 |
-| M10c | The command center: live views and history of the AI and the OS, with actions (D-084, D-092, D-093) | 🚧 |
+| M10c | The command center: live views and history of the AI and the OS, with actions (D-084, D-092, D-093) | 🔍 |
 | M10d | Claude Code and Codex CLI: installed by TermOS, with a TermOS MCP server (D-084) | ⏳ |
 | M9b | Platform gaps: the Windows agent sandbox and input, snapshots and sensors on macOS and Windows, Kitty keyboard flags, app windows in sessions, the KMS console's clipboard, bell and images (D-077) | ⏳ |
 
@@ -836,7 +836,7 @@ Not shown here: pixel graphics (the CPU chart as a picture, a picture wallpaper)
 ---
 
 ## M10c — The command center
-**Status:** 🚧 · Owner answers: observe and act, with history (D-084); the machine sampled every minute, also while closed (D-092). Design: D-093, ARCHITECTURE.md §4, §9 and §11; user guide [center.md](docs/center.md).
+**Status:** 🔍 done, awaiting review · Owner answers: observe and act, with history (D-084); the machine sampled every minute, also while closed (D-092). Design: D-093, ARCHITECTURE.md §4, §9 and §11; user guide [center.md](docs/center.md).
 
 **Deliverables**
 - **The window** (`center.open`, prefix `C`, the menu, `tos center`), mouse first, every action a button and a key:
@@ -860,6 +860,28 @@ Not shown here: pixel graphics (the CPU chart as a picture, a picture wallpaper)
 - **The window, against fixtures:** a snapshot of every tab; Approve, Deny and Stop through clicks and keys reach the registry; Audit and CLI agent buttons run their commands; End and Close ask, then act, and a failure says so; No cancels; Go goes; a new range reads the history again, the timer does not; the CPU history is a pixels-only picture.
 - **Agents:** a whole session against a mock provider is listed in the registry, its edit approved from it; the journal holds its start, every decision, its usage (adding up to the session's cost) and its end, and no secret.
 - **End to end, real binary:** the data source against a real server lists the session and panes, reads the machine and the log, brings a pane forward, closes another, ends a real process, and the history shows both actions; on Unix, the window in a real client shows the server's panes, and a click on Close and `y` close one.
+
+**Budgets** (`cargo xtask perf 60`, release build, Linux x86_64, with the one-minute sampler running):
+
+| | M10c | Budget |
+| --- | --- | --- |
+| Keystroke→screen p50 / p99 | 0.34 / 1.31 ms | p99 < 16 ms |
+| Idle CPU, 60 s (also with the command center and monitor closed) | 0.000% | < 1% |
+| Idle CPU with a 4K picture open, with a WASM widget | 0.017% | < 1% |
+| CPU with the system monitor open, 60 s | 0.48% | < 1% |
+| RSS, server + client | 26.6 MB | < 150 MB |
+| RSS with a 4K picture open | 80.9 MB | < 150 MB |
+| 300 000-line flood | 172 ms | no regression (162 ms in M10b) |
+
+**Demo** (live, Linux, release build, default settings, in an isolated `tmux -L termos-m10c` with its own TermOS home):
+
+1. TermOS starts on the desktop. In its shell, `yes > /dev/null &` starts a busy process and `tos run -- sh` opens a second pane. Three minutes later the journal holds three system samples (`{"kind":"system","cpu":25.15,…}`).
+2. `C-b C` opens the command center: no agents, no tokens, audit and models empty; CPU 25%, the busiest process `yes 100%`, one session with three panes.
+3. `3` (System) lists `yes` first; `e` asks "End process 10810 (yes)?", `y` ends it (the process is gone) and the footer says "ended process 10810 (yes)".
+4. A click on pane `%1`'s **[Close]** asks "Close pane %1 (sh)?", `y` closes it; with nothing tiled left, the wallpaper shows behind the window again.
+5. `4` (History), `[` for 1 h: the CPU and memory chart holds the minutes sampled so far, and "Done from here" lists both actions.
+
+Not shown live: agent sessions (no provider keys here; the registry, its Approve, Deny and Stop, and the journal records are tested against a mock provider), and pictures (the terminal in the demo shows no images).
 
 ---
 
