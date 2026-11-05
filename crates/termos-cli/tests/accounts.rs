@@ -665,6 +665,8 @@ fn gemini_accounts_have_homes_of_their_own() {
         vec![
             ("PATH", path.into()),
             ("GEMINI_API_KEY", "inherited-key".into()),
+            // Over SSH: no browser here on any system.
+            ("SSH_CONNECTION", "203.0.113.1 50000 198.51.100.1 22".into()),
         ],
     );
     let user = env.path().join(".gemini");

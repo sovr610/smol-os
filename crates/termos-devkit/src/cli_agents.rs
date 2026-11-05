@@ -461,10 +461,12 @@ pub const GEMINI_SCRIPT: &str = "gemini.js";
 /// the bundle (paths quoted for the shell, or for `cmd`).
 pub fn gemini_launcher(node: &Path, script: &Path) -> String {
     if cfg!(windows) {
+        // Inside quotes only `%` is special to cmd (a user name may hold one).
+        let q = |p: &Path| format!("\"{}\"", p.display().to_string().replace('%', "%%"));
         format!(
-            "@echo off\r\nrem Gemini CLI, installed by TermOS: Node.js from mise runs its bundle.\r\n\"{}\" \"{}\" %*\r\n",
-            node.display(),
-            script.display()
+            "@echo off\r\nrem Gemini CLI, installed by TermOS: Node.js from mise runs its bundle.\r\n{} {} %*\r\n",
+            q(node),
+            q(script)
         )
     } else {
         let q = |p: &Path| format!("'{}'", p.display().to_string().replace('\'', "'\\''"));
@@ -1134,10 +1136,18 @@ mod tests {
             "{keyed}"
         );
         assert!(gemini_settings("// a comment\n{}", Path::new("/t"), false).is_err());
-        assert!(
-            gemini_launcher(Path::new("/n/o'de"), Path::new("/b/gemini.js"))
-                .contains("'/n/o'\\''de'")
-        );
+        let launcher = gemini_launcher(Path::new("/n/o'de%x"), Path::new("/b/gemini.js"));
+        if cfg!(windows) {
+            assert!(
+                launcher.contains("\"/n/o'de%%x\" \"/b/gemini.js\" %*"),
+                "{launcher}"
+            );
+        } else {
+            assert!(
+                launcher.contains("exec '/n/o'\\''de%x' '/b/gemini.js' \"$@\""),
+                "{launcher}"
+            );
+        }
     }
 
     fn claude_fixture(binary: &[u8], checksum: &str) -> Fixture {
