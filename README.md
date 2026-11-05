@@ -65,6 +65,7 @@ That checks the latency, idle-CPU and memory budgets on a release build
 - [docs/models.md](docs/models.md): local models: Hugging Face downloads, what fits your machine, llama.cpp, the model router.
 - [docs/packages.md](docs/packages.md): the dev rootfs (Debian, apt without root) and the package manager over mise, the dev rootfs, your system and Podman.
 - [docs/worktrees.md](docs/worktrees.md): a git worktree per task, with its own branch, ports and workspace; reviewing it, answering its agent, merging it.
+- [docs/attention.md](docs/attention.md): the agent that needs you marked and one key away, agents continuing after a restore, command blocks (jump between prompts, copy one command's output, failed commands marked).
 - [ARCHITECTURE.md](ARCHITECTURE.md): how the system is put together.
 - [ROADMAP.md](ROADMAP.md): milestones M0–M9b and open work.
 - [DECISIONS.md](DECISIONS.md): the decision log and open questions.

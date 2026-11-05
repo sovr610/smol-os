@@ -115,6 +115,9 @@ Restore session main saved at 14:02? (y/n)
     command center and the usage page. Agent conversations come back with
     `agent.resume`; the tutorial, notifications and harness windows are
     not reopened.
+  - Claude Code, Codex and Gemini CLI come back in their panes, in the
+    same account and folder, continuing their conversation
+    ([attention.md](attention.md#agents-come-back-after-a-restore)).
 - **`n`:** the saved sessions are kept. Restore them later with `termos restore`
   or the palette command "Restore saved sessions". `termos ls` shows them.
 
@@ -128,6 +131,7 @@ restore-programs = ["vim", "nvim", "less", "man", "htop", "top"]
 save-scrollback = false  # also save each pane's text
 scrollback-lines = 2000
 snapshot-delay-ms = 2000
+restore-agents = true    # Claude Code, Codex and Gemini CLI continue
 ```
 
 **Privacy:**
@@ -136,6 +140,8 @@ snapshot-delay-ms = 2000
   anything else only the program's name is kept, so a password typed as a
   command-line argument never reaches the disk.
 - Pane text is saved only with `save-scrollback = true`.
+- For an agent, the snapshot holds its CLI, account and conversation id,
+  never the conversation.
 - For an app window, the snapshot holds the command that reopens it, such
   as `files.open ~/projects` or `markdown.open ~/notes/todo.md`: a folder
   or file name, never what is in it.

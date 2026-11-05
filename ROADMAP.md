@@ -35,7 +35,7 @@ questions (DECISIONS.md, "Open questions").
 | M11c | The harness: one coding tool over Claude Code, Codex and API models, routing each task to the model that suits it (D-096, D-099, D-100) | 🔍 |
 | M11d | AI accounts: sign-in from TermOS through each vendor's own flow, API keys per account, Gemini CLI (D-111, D-112) | 🔍 |
 | M12a | Parallel agents in git worktrees, a review window that answers the agent, best-of-N (D-111, D-113, D-114) | 🔍 |
-| M12b | Agent attention and resume: "needs you" badges, jump to the waiting agent, agent panes resumed after restore, command blocks (D-111) | ⏳ |
+| M12b | Agent attention and resume: "needs you" badges, jump to the waiting agent, agent panes resumed after restore, command blocks (D-111, D-115, D-116) | 🔍 |
 | M12c | Remote access: a web client with share links, remote attach with local rendering, approvals on the phone (D-111) | ⏳ |
 | M12d | Hardening: pinned Actions, seccomp, a macOS sandbox, a network allowlist for agent CLIs (D-111) | ⏳ |
 | M12e | Harness v2, from T3 Code's design: long-lived two-way sessions with the CLIs, capability-based fallbacks, per-task checkpoints (proposed) | ⏳ |
@@ -1108,13 +1108,27 @@ Nothing M11a adds runs while idle: the shims run only when `claude` or `codex` s
 ---
 
 ## M12b — Agent attention and resume
-**Status:** ⏳ planned (D-111) · Ask first: which agent events become notifications by default.
+**Status:** 🔍 ready for review (D-111, D-115, D-116) · Asked: which agent events become notifications by default (D-115: needs-you loud, done quiet; shell integration injected; system notifications; agents resume their conversation).
 
 **Deliverables**
-- "Needs you": the CLIs' hooks (registered per account like TermOS's MCP server) and programs' OSC 9/99/777 notifications mark a waiting agent: a ring on its pane, a badge on its tab, the notification center, one key to jump to the agent waiting longest.
-- Agent panes come back after a session restore: Claude Code, Codex and Gemini CLI resumed in the same account and folder.
-- Command blocks (OSC 133): jump between prompts, copy one command's output, failed commands marked; `read_pane` and `tos read` give agents the last command, its output and exit status.
+- [x] "Needs you": the CLIs' hooks (registered per account like TermOS's MCP server) and programs' OSC 9/99/777 notifications mark a waiting agent: a ring on its pane, a badge on its tab, the notification center, one key to jump to the agent waiting longest.
+  - Hooks: `termos agent event` in Claude Code's and Gemini CLI's `settings.json` and Codex's `hooks.json`, per account; added on install, new accounts, agent windows and `termos agent hooks`.
+  - Needs you: a ring and a `● needs you` badge on the pane, `●` on its tab, a toast, a center entry, and a system notification through the outer terminal (kitty, iTerm2, WezTerm, Ghostty, Warp, foot, rxvt; `[notifications] system`). A finished turn: `✓` on its tab and a center entry only.
+  - Prefix `j` (`agent.waiting`) goes to the one waiting longest; `pane.list` reports `waiting`.
+- [x] Agent panes come back after a session restore: Claude Code, Codex and Gemini CLI resumed in the same account and folder.
+  - The conversation the hooks reported when it is still there, else the folder's latest; an agent run in a shell is typed into the restored shell (`[session] restore-agents`).
+- [x] Command blocks (OSC 133): jump between prompts, copy one command's output, failed commands marked; `read_pane` and `tos read` give agents the last command, its output and exit status.
+  - bash, zsh, fish and PowerShell start with an integration script after the user's own configuration (`[shell] integration`); blocks are anchored in the text with hidden links.
+  - Copy mode `[` `]` `o`, `pane.prompt-prev|next`, `pane.copy-output` (prefix `y`), `✗ status` beside failed commands, `tos read --command`, `read_pane`'s `last_command`.
 
+**What the tests cover**
+- The interceptor and parsers: OSC 9/99/777/133/633 split across reads, ConEmu's numbered OSC 9 left alone, kitty's notifications in parts and base64, VS Code's escapes, size limits; fuzz target `osc_signals`, and `vt_advance` now reads blocks.
+- Blocks in the emulator: output between prompts (wrapped lines joined, output without a final newline), exit statuses only after `C`, an empty line, a running command, clearing the screen, the `✗` mark only over blank cells.
+- Real shells on a real desktop (`termos-shell/tests/attention.rs`): bash 5 after a `.bashrc` whose own `PROMPT_COMMAND` reads `$?`, zsh after a `.zshrc`, fish 3 (CI installs zsh and fish and requires them on Linux); PowerShell with a native program's exit code on Windows.
+- The desktop: needs-you toast, tab badge, pane badge and system notification once per wait; the jump across workspaces; typing clears it; a finished turn's tick without a toast, cleared when seen; a program's OSC 9; a hand-printed block copied with `pane.copy-output`; an agent saved in a snapshot and typed into the restored shell.
+- The binary: `termos agent hooks` adds and removes the hooks in all three CLIs' files, keeping other settings, and writes through an account's linked `settings.json`; `termos agent event` outside TermOS does nothing; a hook's JSON piped to it in a pane marks the pane until answered; `tos read --command` in bash; `termos agent external --resume --conversation` continues the reported conversation, else the folder's latest.
+
+---
 ---
 
 ## M12c — Remote access

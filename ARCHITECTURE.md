@@ -261,7 +261,8 @@ Window = { id, title, source: Pty | App | Plugin | Agent, state: normal | minimi
 - **Commands:** every action is a named command, such as `pane.split-right`, `pane.resize-left 5` or `layout.select tiled`. Commands can be bound in config, run from the palette (Ctrl+Space or prefix `:`, fuzzy-matched) and called over JSON-RPC (`termos msg pane.split-right`). The which-key overlay lists the bindings available after the prefix.
 - **tmux-style keys (D-023):** prefix `C-b`, then tmux's default keys (`%`, `"`, arrows, `z`, `x`, `c`, `n`, `p`, `0`–`9`, `[`, `]`, …), plus TermOS keys for floats (`f`, `F`, `m`, `M`). Resize keys repeat without the prefix for `repeat-time-ms`. A TermOS *workspace* is a tmux *window* (a tab in the status line); a *pane* is a tmux *pane*.
 - **Tiling (D-024):** tmux-style panes separated by one-cell lines, sized by weights that respect each subtree's minimum extent. Presets are even-horizontal, even-vertical, main-vertical (master-stack), main-horizontal and tiled (grid). Splits that wouldn't fit are refused.
-- **Copy mode:** vi motions over the scrollback, selection, search, and yank to the paste buffer and the system clipboard (OSC 52). The mouse wheel and drag-select use it too.
+- **Copy mode:** vi motions over the scrollback, selection, search, and yank to the paste buffer and the system clipboard (OSC 52). The mouse wheel and drag-select use it too. Where the shell marks its commands, `[`/`]` jump between prompts and `o` copies one command's output (D-116).
+- **Attention (D-115, D-116):** a pane whose agent needs the user (its CLI's hook, or a program's OSC 9/99/777 notification) rings in the warn colour (`compose`'s per-pane ring style over the focus colour, and a float's border) and shows a `● needs you` badge; its tab gets `●`, and a toast, a notification-center entry and, where the terminal shows them, a system notification (`ServerMsg::Notify`) follow. A finished turn only marks its tab (`✓`) and the center. Input to the pane clears it; `agent.waiting` (prefix `j`) goes to the one waiting longest.
 - **PTY resize:** resizing a terminal window issues `TIOCSWINSZ`, which sends SIGWINCH to the child.
 - **Multiple clients:** when clients of different sizes attach, the session size follows `latest` (default), `smallest` or `largest`, as tmux's `window-size` does.
 
@@ -278,15 +279,16 @@ Window = { id, title, source: Pty | App | Plugin | Agent, state: normal | minimi
   - `hello {version, kind: frontend | control | plugin, client, session?, create?, token?, cwd?}`.
   - The reply is `{version, server, pid, session}`, or an error: `-32001` version mismatch, `-32004` no such session, `-32003` forbidden.
 - **Frontend stream:** after the reply, frames are a little-endian u32 length plus a postcard body (at most 16 MiB). These are the serde types in `termos-core::proto`:
-  - Server → client: `Frame(FrameUpdate { cols, rows, clear, spans, cursor, images })`, `ImageData { id, chunk, last }`, `ImageFree { id }`, `Clipboard`, `Bell`, `Title`, `Detached { session }`, `Exit { reason }`. `images` is the client's whole placement list, sent only when it changed.
+  - Server → client: `Frame(FrameUpdate { cols, rows, clear, spans, cursor, images })`, `ImageData { id, chunk, last }`, `ImageFree { id }`, `Clipboard`, `Bell`, `Notify { title, body }` (a system notification, which the client writes as its terminal's OSC 9, 99 or 777, D-116), `Title`, `Detached { session }`, `Exit { reason }`. `images` is the client's whole placement list, sent only when it changed.
   - Client → server: `Hello { version, caps, cols, rows }` (first), `Key`, `Mouse`, `Paste`, `Resize`, `Focus`.
   - **Backpressure:** a client gets its next frame only after the previous one was written to it (D-032).
-  - **Versions (D-043):** frontends speak protocol 3; control clients and plugins speak JSON-RPC version 1. Each is checked in the `hello` for its kind of connection.
+  - **Versions (D-043):** frontends speak protocol 5; control clients and plugins speak JSON-RPC version 1. Each is checked in the `hello` for its kind of connection.
 - **Control stream:** newline-delimited JSON-RPC 2.0 (lines up to 4 MiB). It's used by `termos msg …`, `termos ls` and the other subcommands, and by scripts. The v1 methods:
   - server: `server.info`, `server.kill`, `config.reload`;
   - sessions: `session.list/new/kill/rename/restore/saved`;
   - clients: `client.list/detach`;
-  - panes: `pane.list/send-text/send-keys/kill`, and for `tos`: `pane.command` (a named command on a given pane), `pane.open` (a program in a new split or float), `pane.rename`;
+  - panes: `pane.list/send-text/send-keys/kill`, `pane.read` (text, and the last command's line, output and status, D-116), and for `tos`: `pane.command` (a named command on a given pane), `pane.open` (a program in a new split or float), `pane.rename`;
+  - agents: `agent.event` (what the coding CLIs' hooks report through `termos agent event`: needs you, done, working, started, ended, with the conversation's id; D-116);
   - the clipboard: `clipboard.copy`, `clipboard.get` (the newest entry);
   - other: `notify.send`, `command.run`, `plugin.list`.
   - Every named command and plugin command is also a method of its own name.
@@ -320,7 +322,8 @@ Window = { id, title, source: Pty | App | Plugin | Agent, state: normal | minimi
   - **Where:** snapshots go to `$XDG_STATE_HOME/termos/sessions/<server>/<session>.json`, with a versioned schema, mode 0600, written atomically.
   - **What:** the layout of every workspace and, per pane, the directory, the foreground program, and optionally (`save-scrollback`) the text. Command lines are kept only for allowlisted programs.
   - **When:** debounced after structural changes and at shutdown. They are deleted when a session ends on purpose.
-  - **Restore:** a fresh server restores them by policy, `always | ask | never` (default ask). Shells restart in their directories and allowlisted programs (`restore-programs`) are re-run.
+  - **Restore:** a fresh server restores them by policy, `always | ask | never` (default ask). Shells restart in their directories and allowlisted programs (`restore-programs`) are re-run. Agent CLIs come back in their account and folder continuing their conversation (`SavedAgent`, `restore-agents`, D-116): an agent window as `termos agent external --resume [--conversation ID]`, an agent run in a shell typed into the restored shell with `tos`.
+- **Shell integration (D-115, D-116):** bash, zsh, fish and PowerShell start with a built-in script (`termos_shell::integration`, written to `<data>/shell-integration/`) that loads the user's own configuration and then sets OSC 133 marks: `--rcfile` for bash, `ZDOTDIR` for zsh, `XDG_DATA_DIRS` (vendor configuration) for fish, `-NoExit -Command` for PowerShell. `[shell] integration = false` turns it off.
 - **Logs:** `$XDG_STATE_HOME/termos/log/` (D-017).
 - **On Windows** (D-038): config lives in `%APPDATA%\termos`, state (snapshots, logs) in `%LOCALAPPDATA%\termos`; the `XDG_*` variables still override both. The default shell is `pwsh`, then `powershell`, then `%COMSPEC%`. With no foreground process group there, the program a pane shows and saves is the newest one started under its shell; restored commands are quoted for PowerShell or cmd (D-106).
 
@@ -430,6 +433,7 @@ termos-ai holds all of it; the CLI hands the server a launcher for its windows (
 - **Audit (D-062):** an append-only JSONL file per agent session in `$XDG_STATE_HOME/termos/audit/`. Entries are hash-chained (SHA-256 of the previous line; the conversation keeps the last hash) and record the tool, redacted arguments, the decision and why, a redacted result summary and timestamps. `termos audit verify` checks them; the viewer app (`audit.open`) lists them.
 - **MCP (D-063):** an `rmcp` client over stdio and streamable HTTP. Each server must be listed by the profile; local servers launch inside the sandbox.
 - **External CLI agents (D-063):** Claude Code, Codex CLI, Gemini CLI, aider and opencode have launcher presets (`agent.external NAME`) that open them in PTY windows, optionally under the sandbox.
+- **Their hooks (M12b, D-116):** each account's settings run `termos agent event --cli NAME` (Claude Code's and Gemini CLI's `settings.json`, Codex's `hooks.json`, which Codex asks the user to trust) at a permission request or question, the end of a turn, a prompt, and a conversation's start and end. The command maps the hook's JSON to `agent.event` for its pane (`$TERMOS_PANE`) and does nothing outside TermOS; it prints nothing and always succeeds. Registered by `termos agent install`, `termos account add`, every agent window and `termos agent hooks` (`[agents.hooks] register`). User guide: [docs/attention.md](docs/attention.md).
 - **Claude Code and Codex CLI (M10d, D-094, D-095):**
   - **Installed by TermOS** (`termos_devkit::cli_agents`, `termos agent install|update|remove|status`): the vendors' native programs, fetched with the system's `curl` (HTTPS only) and checked before use. Claude Code: the `stable` channel's version, that release's `manifest.json`, the platform's SHA-256. Codex: the GitHub release's asset with the SHA-256 digest GitHub publishes (none: refused). They live in `<data>/agents/<name>/<version>/`, linked into `<data>/bin`, first on every pane's `PATH`. `agent.external claude|codex` runs TermOS's copy and offers to install when there is none; Claude Code's own updater is off for it (`DISABLE_AUTOUPDATER`).
   - **TermOS's MCP server** (`termos mcp serve`, `termos_ai::mcp_server`): MCP over stdio, written by hand (JSON-RPC lines; versions 2024-11-05 to 2025-11-25), reaching the server through the control API as the agent's own pane (`$TERMOS`, `$TERMOS_PANE`). Tools: `list_panes`, `read_pane` (the new `pane.read` method; keys masked), `send_to_pane` (never its own), `open_pane`, `open_file`, `run_command`, `notify`, `copy_to_clipboard`. The CLI asks before each call; `[agents.termos-mcp]` denies tools and commands on top; every call goes to an audit log (`mcp-<id>`) and to the journal. Installing registers it (`claude mcp add --scope user`; `[mcp_servers.termos]` in Codex's `config.toml`, edited with toml_edit).
@@ -540,7 +544,7 @@ termos-ai holds all of it; the CLI hands the server a launcher for its windows (
   - VT input (M1), and terminal input decoding (`input_decode`: the same events however the bytes are split);
   - config parsing (M2);
   - protocol decoding (`proto_decode`: frames and JSON-RPC);
-  - capability replies (`caps_reply`), Sixel decoding (`sixel_decode`) and the image interceptor (`apc_dcs_intercept`);
+  - capability replies (`caps_reply`), Sixel decoding (`sixel_decode`), the image interceptor (`apc_dcs_intercept`) and notifications and shell marks (`osc_signals`);
   - markdown layout (`markdown_layout`);
   - provider event streams (`sse_parse`);
   - GGUF headers (`gguf_parse`), with the fit estimate over whatever they claim;

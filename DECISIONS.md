@@ -1269,6 +1269,76 @@ rewrite history.
     - **Keeping:** discards and forgets the others. In the window Enter keeps and `R` reviews; `harness.best SPEC PROMPT` and `termos harness best --with SPEC` start it.
 - **Alternatives:** libgit2 or gitoxide (no user hooks, editor or credential helpers; merges and worktrees less complete); worktrees inside the repository (`.git`-ignored) or beside it; the ports set only on the workspace's first panes; a merge-resolving agent for conflicts (M12e's checkpoints and hand-offs would carry it); keeping best-of-N attempts' conversations to continue them.
 
+## D-115: M12b owner answers: needs-you loud and done quiet, shell integration injected, system notifications, agents resume their conversation
+- **Status:** Accepted (owner, 2026-11-05) · 2026-11-05
+- **Context:** M12b (D-111) marks agents that wait for the user, brings agent panes back after a restore and adds command blocks (OSC 133). The owner was asked four questions.
+- **Decision:**
+  - **Needs you loud, done quiet.** An agent that waits for the user (a permission prompt, a question, a program's OSC 9/99/777 notification) gets a ring on its pane, a badge on its tab, a toast and an entry in the notification center. A finished turn only marks its tab and adds a center entry, without a toast.
+  - **Shell integration is injected automatically.** Panes start bash, zsh, fish and PowerShell with an integration script that loads the user's own configuration first and then adds the command marks. `[shell] integration = false` turns it off. The user's dotfiles are not changed.
+  - **System notifications where supported.** Needs-you events also go to the outer terminal as OSC 9, 777 or 99 (which the terminal or the desktop around it shows as a system notification), only for needs-you events. `[notifications] system = false` turns it off.
+  - **Agents resume their conversation.** After a restore, Claude Code, Codex and Gemini CLI panes restart in the same account and folder and continue that folder's latest conversation, the exact one when the CLI's hooks reported it.
+- **Alternatives:** a ring and toast for finished turns too, or only a badge for both; a `termos shell-integration` line the user adds to their own startup file, or only shells that mark prompts themselves (fish 4, Nushell); no system notifications, or the operating system's own notification service (D-Bus, macOS and Windows APIs) instead of the outer terminal; restarting agents fresh, or only offering a resume button.
+
+## D-116: Agent attention, command blocks and agents restored
+- **Status:** Accepted · 2026-11-05
+- **Context:** D-115's answers: an agent that needs you is loud and a finished turn quiet, shells marked by injected scripts, system notifications through the outer terminal, agents continuing their conversation after a restore.
+- **Decision:**
+  - **What programs signal (`termos_term::intercept`, `signals`):**
+    - The interceptor also takes out OSC 9, 99, 133, 633 and 777 (bounded at 64 KiB); `alacritty_terminal` ignores them. Other OSCs pass through as before.
+    - **Notifications:** iTerm2's OSC 9 (but not ConEmu's numbered commands, `9;4;…`), rxvt's `777;notify;title;body`, kitty's OSC 99 assembled from its parts (`d=0`, `p=title|body`, `e=1` base64; queries, closes and buttons ignored). Each becomes `VtEvent::Notify`; text is cleaned of control characters and cut (256-character titles, 1024-character bodies).
+    - **Marks:** OSC 133 `A`/`B`/`C`/`D;status` (`A;k=s` ignored) and VS Code's 633 `A`–`D` and `E;command line` (`\\` and `\xAB` escapes).
+  - **Command blocks (`termos_term::blocks`):**
+    - **Anchoring:** like images (D-048), blocks are anchored in the emulator's own text with hidden OSC 8 links: `termos-block:<n>:p` from `A` on the prompt, `termos-block:<n>:c` from `B` on the command line, closed when the output starts. They scroll, reflow and clear with the text.
+    - **Output start:** `C`, or the end of the command line (a newline after `B`).
+    - **Exit status:** `D;status` counts only after a `C`, so an empty line's `D` is not a command's status. Statuses are kept for the last 2000 blocks.
+    - **Output:** the text between a command line and the next block's first marked cell. Wrapped rows are joined; trailing blank lines are left out.
+    - **Command line:** 633's `E` when the shell sent it, else the command line's cells.
+    - **On screen:** a failed command shows `✗ status` at the right end of its line, drawn by TermOS only over blank cells.
+  - **Shell integration (`termos_shell::integration`):**
+    - The scripts are built in (`crates/termos-shell/shell-integration/`). They are written to `<data>/shell-integration/` when they differ, and are used when a pane starts its shell (`[shell] integration`, default on). `shell` takes a program or a `[shell]` table with `program` and `integration`.
+    - **bash:** `--rcfile termos.bash`, which sources `~/.bashrc`, then puts a status function first and a prompt-wrapping function last in `PROMPT_COMMAND` (a string or an array; the user's functions still see `$?`). It sets `PS0` for `C`; bash before 4.4 has no `PS0`, so no statuses there.
+    - **zsh:** `ZDOTDIR` pointing at TermOS's `.zshenv`, which puts the user's `ZDOTDIR` back (`TERMOS_ZDOTDIR`) and sources theirs. A first `precmd` sends `D` and `A`, a `line-init` widget hook sends `B`, and `preexec` sends `E` and `C`.
+    - **fish:** TermOS's folder first in `XDG_DATA_DIRS` (put back for children); `vendor_conf.d/termos.fish` reports `E` always, and `A`/`C`/`D` before fish 4, which marks prompts itself.
+    - **PowerShell:** `-NoExit -Command ". 'termos.ps1'"` after the profile. It wraps `prompt` (`D` from `$?`/`$LASTEXITCODE` when the history moved, then `A` … `B`) and `PSConsoleHostReadLine` (`E`, `C`), installing the latter at the first prompt if PSReadLine loads late.
+    - Other shells (`sh`, cmd) start as before.
+  - **Using blocks:**
+    - **Copy mode:** `[` and `]` jump between prompts, and `o` copies the output of the command under the cursor.
+    - **Commands:** `pane.prompt-prev`/`next`, and `pane.copy-output` (prefix `y`) for the last finished command's output.
+    - **`pane.read`:** returns `last_command {command, output, exit, state}` (`command: true` for only that; `finished` skips the reading command itself). `tos read [PANE] --command` prints it, and the MCP tool `read_pane` takes `last_command` (keys masked as before).
+  - **Attention (`termos_shell::attention`, `desktop/attend.rs`):**
+    - **Needs you:** a pane's `Attention {need: You|Done, since, who, message}`.
+    - **Ring and badge:** a pane that needs you gets a ring in the theme's warn colour. Separators around a tiled pane use it over the focus colour, and a float's border uses it; `compose` takes the style per pane. The pane also gets a `● needs you` badge at its top right, which shows even where no ring can be drawn.
+    - **Tab, toast, center:** its tab gets `●` in the warn colour. A toast and a center entry say who and where, and `ServerMsg::Notify` goes to every client (protocol 5) when `[notifications] system`. The same agent asking again updates the message without a second toast.
+    - **Done:** a `✓` on its tab (not the active one) and a center entry (`Notifications::record`, no toast); seeing its workspace clears it.
+    - **Clearing:** input to the pane (keys, paste, `pane.send-*`; not the wheel's arrow keys) clears both. So does the agent moving on (`working`, `ended`).
+    - **Jumping:** `agent.waiting` (prefix `j`, and the first item of the AI agents menu while one waits) goes to the one waiting longest: those that need you first, then finished turns. `pane.list` reports `waiting`.
+    - **Programs' notifications:** a program's OSC notification makes its pane need you, named after the foreground program.
+  - **System notifications (`Caps::notify_style`, client):** the client picks the sequence from its terminal (XTVERSION, `$TERM`, `$TERM_PROGRAM`):
+    - kitty: OSC 99, base64 parts;
+    - iTerm2, WezTerm, Ghostty and Warp: OSC 9 (prefixed when the text starts with a digit);
+    - foot and rxvt: OSC 777;
+    - any other terminal, and anything inside tmux: nothing.
+  - **Hooks (`termos_devkit::cli_agents::with_hooks`, `termos-cli/src/agent_hooks.rs`):**
+    - **What is registered:** `termos agent event --cli NAME` (10-second timeout where the CLI counts seconds) for these events:
+      - Claude Code's `SessionStart`, `SessionEnd`, `UserPromptSubmit`, `PermissionRequest`, `Notification`, `Stop` and `StopFailure`, in the account's `settings.json`;
+      - Codex's `SessionStart`, `SessionEnd`, `UserPromptSubmit`, `PermissionRequest` and `Stop`, in `$CODEX_HOME/hooks.json`. Codex asks the user to trust them once; TermOS says so and never writes the trust itself;
+      - Gemini CLI's `SessionStart`, `SessionEnd`, `BeforeAgent`, `Notification` and `AfterAgent`, in its `settings.json`.
+    - **Keeping the files:** older entries are replaced (found by the command), the user's hooks and other settings are kept, and linked settings files are written through the link.
+    - **When:** `termos agent install`, `termos account add` and every agent window register them (`[agents.hooks] register`); `termos agent hooks [--remove] [NAME]` does it by hand.
+    - **What the command does:** it reads the hook's JSON (stdin, or the last argument for Codex's `notify`), maps it to `needs-you`, `done`, `working`, `started` or `ended`, and calls the server's `agent.event` with the pane (`$TERMOS_PANE`), conversation id, account (`TERMOS_ACCOUNT_<CLI>`) and folder.
+    - Claude Code's `idle_prompt` reminder and quota notices are ignored. Outside TermOS it does nothing.
+    - It prints nothing and always exits 0.
+  - **Restore (`snapshot::SavedAgent`, `[session] restore-agents`):**
+    - **Saving:** a pane saves the agent it runs: its own agent window, or a CLI its hooks reported running in a shell. With it go the CLI, account and conversation.
+    - **Restoring a window:** an agent window comes back as `termos agent external --account A --resume [--conversation ID] CLI`.
+    - **Restoring a shell's agent:** a shell's agent is typed into the restored shell as `tos agent external …`, so the shell is there after it.
+    - **Which conversation:** `--resume` continues `--conversation` when `conversations::find` still finds it (a Claude Code file by id, a Codex rollout by its name's id, a Gemini session by its first line), else the folder's latest, else a new one.
+- **Alternatives:**
+  - **Anchoring:** absolute line numbers for marks (wrong after the scrollback fills and after reflow), or the per-row flags alacritty does not have.
+  - **Hooks:** the `--settings` flag per launch (missed outside agent windows; subcommands do not take it); Codex's `notify` alone (finished turns only, no approvals, and it is going away).
+  - **Notifications:** the operating system's notification APIs (a D-Bus, macOS and Windows dependency each, and nothing over SSH).
+  - **Restoring a shell's agent:** the CLI started in place of the shell (gone when the agent exits).
+
 ---
 
 ## Open questions (the owner will be asked before the milestone that needs each one)
