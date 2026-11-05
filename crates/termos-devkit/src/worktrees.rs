@@ -190,8 +190,28 @@ pub fn has_changes(dir: &Path) -> bool {
 /// The same folder, however it is spelled (macOS's `/var` is
 /// `/private/var`; Windows' drive letters and separators).
 pub fn same_path(a: &Path, b: &Path) -> bool {
-    let canon = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_owned());
-    a == b || canon(a) == canon(b)
+    a == b || canonical(a) == canonical(b)
+}
+
+/// `p` with links resolved, also when its end does not exist yet: the
+/// nearest folder up that exists is resolved and the rest appended (so a
+/// new file in a worktree is still found in it on macOS, whose `/var` is
+/// `/private/var`, and on Windows).
+pub fn canonical(p: &Path) -> PathBuf {
+    let mut rest = Vec::new();
+    let mut at = p;
+    loop {
+        if let Ok(c) = std::fs::canonicalize(at) {
+            return rest.iter().rev().fold(c, |acc, part| acc.join(part));
+        }
+        match (at.parent(), at.file_name()) {
+            (Some(parent), Some(name)) => {
+                rest.push(name.to_owned());
+                at = parent;
+            }
+            _ => return p.to_owned(),
+        }
+    }
 }
 
 // ---------------------------------------------------------------- repo
@@ -585,13 +605,12 @@ impl Store {
 
     /// The active worktree `path` is in.
     pub fn containing(&self, path: &Path) -> Option<Worktree> {
-        let canon = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_owned());
-        let path = canon(path);
+        let path = canonical(path);
         self.read()
             .ok()?
             .into_iter()
             .filter(Worktree::active)
-            .find(|w| path.starts_with(canon(&w.path)))
+            .find(|w| path.starts_with(canonical(&w.path)))
     }
 
     /// Makes a worktree: its branch, its folder (`git worktree add`), its
@@ -1733,6 +1752,22 @@ mod tests {
             ..WorktreesConfig::default()
         };
         Store::new(&dir.join("data"), &config)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn paths_not_made_yet_resolve_through_links() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let real = dir.path().join("real");
+        std::fs::create_dir_all(&real).expect("mkdir");
+        let link = dir.path().join("link");
+        std::os::unix::fs::symlink(&real, &link).expect("link");
+        let real = std::fs::canonicalize(&real).expect("canon");
+        assert_eq!(
+            canonical(&link.join("new/file.txt")),
+            real.join("new/file.txt")
+        );
+        assert!(same_path(&link, &real));
     }
 
     #[test]

@@ -129,9 +129,26 @@ fn context(dir: &Path, config: Config, programs: Arc<dyn Programs>, api: bool) -
 
 #[cfg(unix)]
 fn script(path: &Path, body: &str) {
-    use std::os::unix::fs::PermissionsExt as _;
-    std::fs::write(path, format!("#!/bin/sh\n{body}")).expect("write");
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+    // Written by a short-lived `sh`, so this process never holds it open
+    // for writing: a child another test thread forks meanwhile could keep
+    // that handle, and running the script would fail with ETXTBSY.
+    let mut child = std::process::Command::new("/bin/sh")
+        .args(["-c", "cat > \"$1\" && chmod 755 \"$1\"", "sh"])
+        .arg(path)
+        .stdin(std::process::Stdio::piped())
+        .spawn()
+        .expect("sh");
+    {
+        let mut stdin = child.stdin.take().expect("stdin");
+        stdin
+            .write_all(format!("#!/bin/sh\n{body}").as_bytes())
+            .expect("write");
+    }
+    assert!(
+        child.wait().expect("sh").success(),
+        "writing {}",
+        path.display()
+    );
 }
 
 /// A stand-in that logs its arguments, keeps the prompt, and answers

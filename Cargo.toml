@@ -62,7 +62,7 @@ portable-pty = "0.9.0"
 # Deleting in the file manager moves to the system trash (D-050).
 # Settings edit config.toml in place, keeping comments.
 toml_edit = "0.25.17"
-trash = { version = "5.2.9", default-features = false, features = ["coinit_apartmentthreaded"] }
+trash = { version = "5.3.0", default-features = false, features = ["coinit_apartmentthreaded", "freedesktop"] }
 # WASM status-line widgets (D-042, D-051): the component model with
 # cranelift; no parallel compilation (rayon), no GC, no profiling.
 wasmtime = { version = "50.0.1", default-features = false, features = ["async", "component-model", "cranelift", "runtime", "std"] }

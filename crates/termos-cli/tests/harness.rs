@@ -8,12 +8,10 @@
 
 mod common;
 
-use std::os::unix::fs::PermissionsExt as _;
 use std::path::Path;
 
 fn script(path: &Path, body: &str) {
-    std::fs::write(path, format!("#!/bin/sh\n{body}")).expect("write");
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+    common::write_script(path, &format!("#!/bin/sh\n{body}"));
 }
 
 const PLAN: &str = r#"{"summary": "Add a line", "tasks": [{"id": "t1", "kind": "coding", "title": "Write it", "prompt": "Add a line to notes.txt."}, {"id": "t2", "kind": "review", "title": "Check it", "prompt": "Check notes.txt.", "depends_on": ["t1"]}]}"#;

@@ -186,3 +186,6 @@ The harness uses worktrees too ([harness.md](harness.md)):
   root` to a short folder, or turn on git's `core.longpaths`.
 - **Ports are checked when a worktree is made.** A program that takes one
   of them later is not noticed.
+- **The workspace stays open** after a merge, archive or discard, its
+  programs running in a folder that is gone. Close it with
+  `workspace.kill` (prefix `&`).

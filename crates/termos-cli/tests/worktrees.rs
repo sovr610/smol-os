@@ -162,19 +162,16 @@ fn worktrees_are_made_merged_archived_and_restored() {
 #[cfg(unix)]
 #[test]
 fn pull_requests_go_through_gh_or_the_forge_page() {
-    use std::os::unix::fs::PermissionsExt as _;
     let bin = tempfile::tempdir().expect("tempdir");
     let calls = bin.path().join("calls");
     let gh = bin.path().join("gh");
-    std::fs::write(
+    common::write_script(
         &gh,
-        format!(
+        &format!(
             "#!/bin/sh\nprintf '%s|' \"$@\" > '{}'\necho https://github.com/owner/repo/pull/7\n",
             calls.display()
         ),
-    )
-    .expect("write");
-    std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+    );
     let path = std::env::join_paths(std::iter::once(bin.path().to_owned()).chain(
         std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
     ))
@@ -350,21 +347,18 @@ fn a_worktree_opens_as_a_workspace_with_its_ports() {
 #[cfg(unix)]
 #[test]
 fn review_comments_reach_the_agent() {
-    use std::os::unix::fs::PermissionsExt as _;
     use std::time::Duration;
     const T: Duration = Duration::from_secs(30);
     let bin = tempfile::tempdir().expect("tempdir");
     let heard = bin.path().join("heard");
     let claude = bin.path().join("claude");
-    std::fs::write(
+    common::write_script(
         &claude,
-        format!(
+        &format!(
             "#!/bin/sh\necho \"started: $*\" >> '{h}'\necho stand-in claude\nwhile IFS= read -r line; do echo \"heard: $line\" >> '{h}'; done\n",
             h = heard.display()
         ),
-    )
-    .expect("write");
-    std::fs::set_permissions(&claude, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+    );
     let path = std::env::join_paths(std::iter::once(bin.path().to_owned()).chain(
         std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
     ))

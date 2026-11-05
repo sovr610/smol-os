@@ -14,6 +14,29 @@ use std::time::{Duration, Instant};
 
 use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
 
+/// Writes an executable script without this process ever holding it open
+/// for writing. A child another test thread forks meanwhile could keep
+/// such a handle until it execs, and running the script then fails with
+/// "Text file busy" (ETXTBSY). A short-lived `sh` writes it instead.
+#[cfg(unix)]
+pub fn write_script(path: &Path, body: &str) {
+    let mut child = Command::new("/bin/sh")
+        .args(["-c", "cat > \"$1\" && chmod 755 \"$1\"", "sh"])
+        .arg(path)
+        .stdin(std::process::Stdio::piped())
+        .spawn()
+        .expect("sh");
+    {
+        let mut stdin = child.stdin.take().expect("stdin");
+        stdin.write_all(body.as_bytes()).expect("write");
+    }
+    assert!(
+        child.wait().expect("sh").success(),
+        "writing {}",
+        path.display()
+    );
+}
+
 pub const COLS: u16 = 80;
 pub const ROWS: u16 = 24;
 

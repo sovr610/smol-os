@@ -245,10 +245,10 @@ jobs:
         run: |
           termos=target/debug/termos
           py=$(command -v python3 || command -v python)
-          # The same stand-ins; the project is a repository now (D-113):
-          # the plan gets a branch, its edit a worktree of its own.
+          # The same stand-ins (Codex's, from the step above, still runs);
+          # the project is a repository now (D-113): the plan gets a
+          # branch, its edit a worktree of its own.
           "$py" .github/scripts/refusing-model.py 8770 "$RUNNER_TEMP/worktree-requests.jsonl" &
-          "$py" .github/scripts/refusing-model.py 8765 &
           sleep 2
           proj="$RUNNER_TEMP/repo"
           mkdir -p "$proj"
@@ -266,6 +266,7 @@ jobs:
           # Claude Code worked in the edit's own worktree, the review in
           # the plan's.
           grep "This is task t1 (coding)" "$RUNNER_TEMP/worktree-requests.jsonl" | grep -q 'plan-[0-9-]*[0-9a-f]*-t1'
+          termos="$GITHUB_WORKSPACE/target/debug/termos"
           cd "$proj"
           $termos worktree list | tee list.txt
           grep -c "^  plan-" list.txt | grep -qx 1

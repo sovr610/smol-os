@@ -1545,13 +1545,19 @@ impl Desktop {
             PaneKind::Term { pty, .. } => p.cwd.clone().or_else(|| pty.foreground_cwd()),
             PaneKind::App(_) => None,
         };
+        // Folders compared with links resolved (macOS's /var is
+        // /private/var).
+        let canon = |p: &std::path::Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_owned());
+        let dir = canon(dir);
         let running = in_workspace
             .into_iter()
             .find(|id| self.panes.get(id).is_some_and(is_agent))
             .or_else(|| {
                 self.panes
                     .iter()
-                    .find(|(_, p)| is_agent(p) && cwd_of(p).is_some_and(|c| c.starts_with(dir)))
+                    .find(|(_, p)| {
+                        is_agent(p) && cwd_of(p).is_some_and(|c| canon(&c).starts_with(&dir))
+                    })
                     .map(|(id, _)| *id)
             });
         if let Some(id) = running {

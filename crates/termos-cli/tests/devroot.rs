@@ -9,7 +9,6 @@
 
 mod common;
 
-use std::os::unix::fs::PermissionsExt as _;
 use std::path::Path;
 use std::process::Output;
 
@@ -24,8 +23,7 @@ fn ok(out: &Output, what: &str) -> String {
 }
 
 fn script(path: &Path, body: &str) {
-    std::fs::write(path, body).expect("write");
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+    common::write_script(path, body);
 }
 
 /// Why the bubblewrap way cannot run here, if it cannot.
