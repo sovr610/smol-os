@@ -656,6 +656,7 @@ fn run(cli: &Cli, paths: &Paths, config_path: &Path, t: &Target) -> anyhow::Resu
             | Cmd::Install(_)
             | Cmd::Update { .. }
             | Cmd::System { .. }
+            | Cmd::Password { .. }
             | Cmd::Play { .. },
         ) => Ok(ExitCode::SUCCESS),
     }

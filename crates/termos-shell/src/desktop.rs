@@ -395,7 +395,7 @@ struct ClientUi {
     wallpaper_regions: Vec<(Rect, Command)>,
     /// The link under the pointer, underlined (D-118): its pane and cells
     /// there.
-    link_hover: Option<(PaneId, Vec<(u16, u16, u16)>)>,
+    link_hover: Option<LinkCells>,
     /// Hint mode (D-118).
     hints: Option<crate::hints::Hints>,
     /// The search across panes (D-118).
@@ -565,6 +565,9 @@ impl std::fmt::Debug for Desktop {
             .finish_non_exhaustive()
     }
 }
+
+/// A link's pane and its cells there: `(row, first column, end column)`.
+type LinkCells = (PaneId, Vec<(u16, u16, u16)>);
 
 /// A terminal's default foreground and background: its real background
 /// when known, with a foreground that reads on it; xterm's otherwise.

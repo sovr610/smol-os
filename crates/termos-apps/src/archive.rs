@@ -110,8 +110,9 @@ pub fn list(path: &Path) -> Result<Vec<Member>, Error> {
                 .map_err(|e| Error::Format(e.to_string()))?;
             for i in 0..z.len() {
                 let f = z.by_index(i).map_err(|e| Error::Format(e.to_string()))?;
+                let name = f.name().map_err(|e| Error::Format(e.to_string()))?;
                 out.push(Member {
-                    path: clean(f.name()),
+                    path: clean(&name),
                     dir: f.is_dir(),
                     size: f.size(),
                 });
@@ -217,7 +218,7 @@ pub fn extract(
                 .map_err(|e| Error::Format(e.to_string()))?;
             for i in 0..z.len() {
                 let mut f = z.by_index(i).map_err(|e| Error::Format(e.to_string()))?;
-                let name = clean(f.name());
+                let name = clean(&f.name().map_err(|e| Error::Format(e.to_string()))?);
                 if !wanted(&name, only) {
                     continue;
                 }

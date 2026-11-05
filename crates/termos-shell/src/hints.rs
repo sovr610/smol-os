@@ -171,7 +171,7 @@ impl Hints {
             HintMode::Paste => &[" hints: paste "],
         };
         let width = |t: &str| u16::try_from(t.chars().count()).unwrap_or(u16::MAX);
-        if let Some(help) = help.iter().copied().find(|t| width(*t) < rect.w)
+        if let Some(help) = help.iter().copied().find(|t| width(t) < rect.w)
             && rect.h > 1
         {
             let w = width(help);

@@ -258,7 +258,7 @@ impl Desktop {
             return;
         };
         if ev.properties.get("ID_BUS").map(String::as_str) != Some("usb")
-            && ev.properties.get("ID_DRIVE_FLASH_SD").is_none()
+            && !ev.properties.contains_key("ID_DRIVE_FLASH_SD")
         {
             return;
         }

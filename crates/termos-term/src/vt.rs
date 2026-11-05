@@ -1363,7 +1363,8 @@ mod tests {
 
     #[test]
     fn view_rows_place_wide_characters_and_wraps() {
-        let mut vt = AlacrittyVt::new(6, 2, 0);
+        // 14 cells: three rows of six.
+        let mut vt = AlacrittyVt::new(6, 3, 0);
         vt.advance("界ab https://x".as_bytes());
         let rows = vt.view_rows();
         assert!(rows[0].wraps);

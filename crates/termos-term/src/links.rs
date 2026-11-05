@@ -565,10 +565,10 @@ pub fn file_url(url: &str) -> Option<(String, PathBuf)> {
     }
     let rest = &url[5..];
     let (host, path) = match rest.strip_prefix("//") {
-        Some(r) => match r.find('/') {
-            Some(i) => (&r[..i], &r[i..]),
-            None => return None,
-        },
+        Some(r) => {
+            let i = r.find('/')?;
+            (&r[..i], &r[i..])
+        }
         None => ("", rest),
     };
     let path = percent_decode(path.split(['?', '#']).next().unwrap_or(path));
@@ -693,7 +693,7 @@ mod tests {
 
     #[test]
     fn paths_take_their_line_and_column() {
-        let one = |text: &str| {
+        fn one(text: &str) -> (&str, &str, Option<u32>, Option<u32>) {
             let m = find_in_line(text)
                 .into_iter()
                 .find(|m| m.kind == Kind::Path)
@@ -704,7 +704,7 @@ mod tests {
                 m.line,
                 m.column,
             )
-        };
+        }
         assert_eq!(
             one("  --> src/main.rs:10:5"),
             ("src/main.rs", "src/main.rs:10:5", Some(10), Some(5))

@@ -111,7 +111,7 @@ impl Desktop {
         }
     }
 
-    fn hover_target(&mut self, m: &MouseEvent) -> Option<(PaneId, Vec<(u16, u16, u16)>)> {
+    fn hover_target(&mut self, m: &MouseEvent) -> Option<super::LinkCells> {
         let ctrl = m.mods.contains(Mods::CTRL);
         let console = self.ui.caps.term == CONSOLE_TERM;
         if !ctrl && !console {

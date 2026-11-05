@@ -795,7 +795,8 @@ async fn agent_windows_switch_accounts() {
     // The menu: AI agents → Accounts, the one in use marked.
     h.keys("C-b Enter");
     h.wait_text("AI agents").await;
-    h.keys("Down Down Down Down Right");
+    // New terminal, New floating terminal, Drop-down terminal, Apps, AI agents.
+    h.keys("Down Down Down Down Down Right");
     h.wait_text("Update Claude Code and Codex").await;
     let screen = h.screen();
     assert!(screen.contains("Accounts"), "{screen}");

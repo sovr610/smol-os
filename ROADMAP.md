@@ -1183,43 +1183,43 @@ Nothing M11a adds runs while idle: the shims run only when `claude` or `codex` s
 ---
 
 ## M13a — Links, hints, search and finished commands
-**Status:** 🚧 in progress: written, not yet built or tested (the session could not download crates) · Owner answers (D-118): the plan's: links open on the client's machine; a finished long command is loud for failures only; `u` for hints and `/` for search. Design: D-118, ARCHITECTURE.md §5.1, §6, §7 and §8; user guide [links.md](docs/links.md).
+**Status:** 🔍 ready for review: built and tested (`cargo xtask ci` green) · Owner answers (D-118): the plan's: links open on the client's machine; a finished long command is loud for failures only; `u` for hints and `/` for search. Design: D-118, ARCHITECTURE.md §5.1, §6, §7 and §8; user guide [links.md](docs/links.md).
 
 **Deliverables**
-- [ ] Programs' links (OSC 8) kept in the grid, sent to the outer terminal and opened with Ctrl+click; TermOS's own anchors and unsafe schemes left out.
-- [ ] Web and email addresses, paths with `:line`, git hashes and IP addresses found on screen; paths open in the editor at their line.
-- [ ] Hint mode: labels on every match in view, to open, copy or paste one.
-- [ ] Search across every pane's text, landing in copy mode at the match.
-- [ ] A long command that finishes in a pane nobody is looking at marks its tab and says so; `pane.notify-when-done` for the next one.
+- [x] Programs' links (OSC 8) kept in the grid, sent to the outer terminal and opened with Ctrl+click; TermOS's own anchors and unsafe schemes left out.
+- [x] Web and email addresses, paths with `:line`, git hashes and IP addresses found on screen; paths open in the editor at their line.
+- [x] Hint mode: labels on every match in view, to open, copy or paste one.
+- [x] Search across every pane's text, landing in copy mode at the match.
+- [x] A long command that finishes in a pane nobody is looking at marks its tab and says so; `pane.notify-when-done` for the next one.
 
 ---
 
 ## M13b — Layouts and workspace tools
-**Status:** 🚧 in progress: written, not yet built or tested (the session could not download crates) · Owner answers (D-119): TermOS's TOML; prefix `` ` `` for the drop-down; recordings of output only. Design: D-120, ARCHITECTURE.md §4, §6 and §8; user guide [layouts.md](docs/layouts.md).
+**Status:** 🔍 ready for review: built and tested (`cargo xtask ci` green) · Owner answers (D-119): TermOS's TOML; prefix `` ` `` for the drop-down; recordings of output only. Design: D-120, ARCHITECTURE.md §4, §6 and §8; user guide [layouts.md](docs/layouts.md).
 
 **Deliverables**
-- [ ] Layout files (user and project): open a workspace with its splits, folders and commands; save the current one as a layout.
-- [ ] A drop-down terminal one key away, kept running.
-- [ ] Typing into every pane of a workspace, or a chosen set, at once.
-- [ ] Saved commands with parameters, from the palette and `termos snippet`.
-- [ ] SSH hosts from `~/.ssh/config` in the menu and palette.
-- [ ] Recording a pane as asciinema, and `termos play`.
+- [x] Layout files (user and project): open a workspace with its splits, folders and commands; save the current one as a layout.
+- [x] A drop-down terminal one key away, kept running.
+- [x] Typing into every pane of a workspace, or a chosen set, at once.
+- [x] Saved commands with parameters, from the palette and `termos snippet`.
+- [x] SSH hosts from `~/.ssh/config` in the menu and palette.
+- [x] Recording a pane as asciinema, and `termos play`.
 
 ---
 
 ## M13c — Processes and files
-**Status:** 🚧 in progress: written, not yet built or tested (the session could not download crates) · Owner answers (D-121): a view of the monitor; bulk rename in the editor; zip, tar, tar.gz and tar.zst. Design: D-122, ARCHITECTURE.md §8 and §9; user guide [apps.md](docs/apps.md).
+**Status:** 🔍 ready for review: built and tested (`cargo xtask ci` green) · Owner answers (D-121): a view of the monitor; bulk rename in the editor; zip, tar, tar.gz and tar.zst. Design: D-122, ARCHITECTURE.md §8 and §9; user guide [apps.md](docs/apps.md).
 
 **Deliverables**
-- [ ] A process manager: filter, tree, a pane's own processes, listening ports (Linux); end, kill, pause and priority, each confirmed.
-- [ ] Files: marking several entries, bookmarks and a sidebar, two panes, search by name and inside files.
-- [ ] Archives browsed like folders, extracted and made.
-- [ ] A git status column, bulk rename through the editor with undo, a disk-usage view, open with.
+- [x] A process manager: filter, tree, a pane's own processes, listening ports (Linux); end, kill, pause and priority, each confirmed.
+- [x] Files: marking several entries, bookmarks and a sidebar, two panes, search by name and inside files.
+- [x] Archives browsed like folders, extracted and made.
+- [x] A git status column, bulk rename through the editor with undo, a disk-usage view, open with.
 
 ---
 
 ## M13d — The image as a computer
-**Status:** 🚧 in progress: written, not yet built or tested (the session could not download crates) · Owner answers (D-123): the system user's password; no lock in a terminal; AMD firmware in every x86_64 image; lock after 10 minutes, suspend after 20 on battery. Design: D-124, ARCHITECTURE.md §5.9 and §14; user guide [bare-metal.md](docs/bare-metal.md).
+**Status:** 🚧 in progress: built, and tested in a terminal (`cargo xtask ci` green); the image is not built or booted with it yet · Owner answers (D-123): the system user's password; no lock in a terminal; AMD firmware in every x86_64 image; lock after 10 minutes, suspend after 20 on battery. Design: D-124, ARCHITECTURE.md §5.9 and §14; user guide [bare-metal.md](docs/bare-metal.md).
 
 **Deliverables**
 - [ ] A password set at first boot; a lock screen on a key, after idle, on suspend and lid close, optionally at start; other virtual terminals closed to it.
@@ -1230,7 +1230,7 @@ Nothing M11a adds runs while idle: the shims run only when `claude` or `codex` s
 - [ ] GPT disks for x86_64 and aarch64-virt, partitions found by label, new ids per installed disk.
 - [ ] AMD graphics firmware.
 
-**Still to do after the build:** the QEMU tests the plan lists for the lock (keys sent with `sendkey` must not reach the desktop; wrong and right passwords), suspend and resume with S3, a USB stick added with `device_add`, and an installed disk's new ids. The GPT images boot in the existing UEFI and BIOS boot tests.
+**Still to do:** build the images with it (the `images` workflow, about an hour each) and boot them; then the QEMU tests the plan lists for the lock (keys sent with `sendkey` must not reach the desktop; wrong and right passwords), suspend and resume with S3, a USB stick added with `device_add`, and an installed disk's new ids. The GPT images boot in the existing UEFI and BIOS boot tests.
 
 ---
 

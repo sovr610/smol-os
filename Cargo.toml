@@ -46,7 +46,7 @@ flate2 = "1.1.10"
 # The dev rootfs: unpacking the image's layer (D-110).
 tar = { version = "0.4.46", default-features = false }
 # tar.zst archives in Files (D-122): a zstd decoder in Rust.
-ruzstd = { version = "0.8.3", default-features = false, features = ["std"] }
+ruzstd = { version = "0.9.1", default-features = false, features = ["std"] }
 # Gemini CLI's release bundle (D-112).
 zip = { version = "9.3.0", default-features = false, features = ["deflate-flate2"] }
 bitflags = "2.13.2"

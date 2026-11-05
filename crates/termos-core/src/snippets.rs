@@ -131,8 +131,9 @@ pub fn params(command: &str) -> Vec<Param> {
 }
 
 /// `command` with each parameter replaced by its value (by name), else its
-/// default, else nothing.
+/// default (a default given at one use counts for every use), else nothing.
 pub fn fill(command: &str, values: &[(String, String)]) -> String {
+    let known = params(command);
     pieces(command)
         .into_iter()
         .map(|p| match p {
@@ -142,6 +143,12 @@ pub fn fill(command: &str, values: &[(String, String)]) -> String {
                 .find(|(n, _)| *n == p.name)
                 .map(|(_, v)| v.clone())
                 .or(p.default)
+                .or_else(|| {
+                    known
+                        .iter()
+                        .find(|k| k.name == p.name)
+                        .and_then(|k| k.default.clone())
+                })
                 .unwrap_or_default(),
         })
         .collect()

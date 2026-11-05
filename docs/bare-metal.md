@@ -146,7 +146,7 @@ Check `/dev/sdX` twice: everything on it is replaced.
 
 ## Locking
 
-> Written, not yet built or tested (M13d, D-124).
+> New in M13d (D-124): tested in a terminal, not yet on a built image.
 
 The lock screen shows the time and a password field, and nothing of the
 desktop. Its password is the system user's (`termos`).
@@ -175,7 +175,7 @@ In a terminal TermOS does not lock: lock the computer as its system does.
 
 ## Power, battery and brightness
 
-> Written, not yet built or tested (M13d, D-124).
+> New in M13d (D-124): tested in a terminal, not yet on a built image.
 
 - **The Power menu** (◆ Menu → Power): Lock, Suspend, Restart, Shut down.
   Restart and Shut down ask first and save the sessions. Suspend locks,
@@ -205,7 +205,7 @@ What was tried on real machines is listed here as it is: so far only QEMU
 
 ## Time
 
-> Written, not yet built or tested (M13d, D-124).
+> New in M13d (D-124): tested in a terminal, not yet on a built image.
 
 - **The time zone:** Settings → Clock → Time zone (type to search), or
   `clock.zone Europe/Paris` in the palette. It starts at UTC.
@@ -215,7 +215,7 @@ What was tried on real machines is listed here as it is: so far only QEMU
 
 ## USB drives
 
-> Written, not yet built or tested (M13d, D-124).
+> New in M13d (D-124): tested in a terminal, not yet on a built image.
 
 Plug one in and a toast says so. In Files it is under the places (the
 sidebar, or `'`): Enter mounts it on `/media/LABEL` and goes there, `e`

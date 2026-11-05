@@ -104,8 +104,11 @@ impl Harness {
         self.desktop.handle_client(C, ClientMsg::Key(k));
     }
 
+    /// Runs a command as the test's client (prompts and searches are a
+    /// client's).
     fn run(&mut self, command: &str) {
-        self.desktop.run(command.parse().expect("a command"));
+        self.desktop
+            .run_as(Some(C), command.parse().expect("a command"));
     }
 
     fn screen(&mut self) -> String {

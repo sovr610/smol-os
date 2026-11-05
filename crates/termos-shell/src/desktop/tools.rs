@@ -879,7 +879,8 @@ mod tests {
         let root = t.root().expect("a tree");
         let mut out = vec![(PaneId(1), PaneSpec::default())];
         tree_panes(root, &mut out);
-        let got: Vec<(u64, Option<Split>, Option<usize>, Option<String>)> = out
+        type Row = (u64, Option<Split>, Option<usize>, Option<String>);
+        let got: Vec<Row> = out
             .iter()
             .map(|(p, s)| (p.0, s.split, s.of, s.size.clone()))
             .collect();

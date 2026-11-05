@@ -262,7 +262,7 @@ const SETTINGS: &[Setting] = &[
         "Lock and power",
         "lock",
         "after-minutes",
-        "Lock after (minutes)",
+        "Lock after (min)",
         "without input; 0 never (TermOS images)",
         Kind::Number {
             min: 0,
@@ -290,7 +290,7 @@ const SETTINGS: &[Setting] = &[
         "Lock and power",
         "power",
         "suspend-after-minutes",
-        "Suspend after (minutes)",
+        "Suspend after (min)",
         "on battery, without input; 0 never",
         Kind::Number {
             min: 0,
@@ -302,7 +302,7 @@ const SETTINGS: &[Setting] = &[
         "Lock and power",
         "power",
         "critical",
-        "Suspend at (battery %)",
+        "Suspend at battery %",
         "after a 30-second countdown; 0 never",
         Kind::Number {
             min: 0,

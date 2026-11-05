@@ -106,7 +106,7 @@ impl Power {
     }
 }
 
-fn read(dir: &Path, name: &str) -> Option<String> {
+fn field(dir: &Path, name: &str) -> Option<String> {
     std::fs::read_to_string(dir.join(name))
         .ok()
         .map(|s| s.trim().to_owned())
@@ -114,14 +114,14 @@ fn read(dir: &Path, name: &str) -> Option<String> {
 }
 
 fn number(dir: &Path, name: &str) -> Option<f64> {
-    read(dir, name)?.parse().ok()
+    field(dir, name)?.parse().ok()
 }
 
 /// One sysfs battery, `None` when it is absent or a device's (a mouse's
 /// or a headset's battery has `scope` `Device`).
 fn battery(dir: &Path, name: String) -> Option<Battery> {
-    if read(dir, "present").is_some_and(|p| p == "0")
-        || read(dir, "scope").is_some_and(|s| s.eq_ignore_ascii_case("device"))
+    if field(dir, "present").is_some_and(|p| p == "0")
+        || field(dir, "scope").is_some_and(|s| s.eq_ignore_ascii_case("device"))
     {
         return None;
     }
@@ -143,7 +143,7 @@ fn battery(dir: &Path, name: String) -> Option<Battery> {
         let (n, f) = energy?;
         (f > 0.0).then(|| n / f * 100.0)
     })?;
-    let charge = match read(dir, "status").as_deref() {
+    let charge = match field(dir, "status").as_deref() {
         Some("Charging") => Charge::Charging,
         Some("Discharging") => Charge::Discharging,
         Some("Full") => Charge::Full,
@@ -171,7 +171,7 @@ pub fn read_sysfs(dir: &Path) -> Power {
         .collect();
     entries.sort();
     for (name, path) in entries {
-        match read(&path, "type").as_deref() {
+        match field(&path, "type").as_deref() {
             Some("Battery") => {
                 if let Some(b) = battery(&path, name) {
                     power.batteries.push(b);
@@ -180,7 +180,7 @@ pub fn read_sysfs(dir: &Path) -> Power {
             // Mains power: a laptop's charger. USB supplies (USB-C chargers
             // on some laptops) count when online.
             Some("Mains" | "USB") => {
-                let online = read(&path, "online").is_some_and(|o| o == "1");
+                let online = field(&path, "online").is_some_and(|o| o == "1");
                 power.ac = Some(power.ac.unwrap_or(false) || online);
             }
             _ => {}
@@ -257,7 +257,7 @@ pub fn backlight(dir: &Path) -> Option<PathBuf> {
         .flatten()
         .map(|e| {
             let path = e.path();
-            let rank = match read(&path, "type").as_deref() {
+            let rank = match field(&path, "type").as_deref() {
                 Some("firmware") => 0,
                 Some("platform") => 1,
                 _ => 2,

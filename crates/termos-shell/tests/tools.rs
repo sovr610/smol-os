@@ -5,7 +5,7 @@
 
 mod common;
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::{Duration, Instant};
 
 use termos_core::config::Config;
@@ -81,8 +81,11 @@ impl Harness {
         }
     }
 
+    /// Runs a command as the test's client (prompts and searches are a
+    /// client's).
     fn run(&mut self, command: &str) {
-        self.desktop.run(command.parse().expect("a command"));
+        self.desktop
+            .run_as(Some(C), command.parse().expect("a command"));
     }
 
     fn type_text(&mut self, text: &str) {
@@ -177,7 +180,7 @@ async fn a_layout_opens_saves_and_opens_again_the_same() {
     assert_eq!(h.desktop.session().active().name, "dev");
     let tiled = h.tiled();
     assert_eq!(tiled.len(), 3, "{tiled:?}");
-    let (p1, r1) = tiled[0];
+    let (_, r1) = tiled[0];
     let (p2, r2) = tiled[1];
     let (p3, r3) = tiled[2];
     // Two on the right, one above the other, in about 30% of the width.
@@ -185,6 +188,9 @@ async fn a_layout_opens_saves_and_opens_again_the_same() {
     let share = f64::from(r2.w) / f64::from(r1.w + r2.w);
     assert!((0.25..0.35).contains(&share), "{share}");
     assert_eq!(h.desktop.focused(), Some(p3));
+    // Only Unix shells report their folder here.
+    #[cfg(not(unix))]
+    let _ = p2;
     #[cfg(unix)]
     {
         let cwd_of = |d: &Desktop, id: PaneId| {
@@ -192,14 +198,13 @@ async fn a_layout_opens_saves_and_opens_again_the_same() {
                 .into_iter()
                 .find(|p| p.id == id.0)
                 .and_then(|p| p.cwd)
-                .map(PathBuf::from)
+                .map(std::path::PathBuf::from)
         };
         let sub = std::fs::canonicalize(project.join("sub")).expect("exists");
         assert_eq!(
             cwd_of(&h.desktop, p2).map(|c| std::fs::canonicalize(c).expect("exists")),
             Some(sub)
         );
-        let _ = p1;
     }
 
     // Saved, then opened again: the same tree.
