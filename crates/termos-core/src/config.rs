@@ -75,6 +75,12 @@ pub struct Config {
     pub notifications: NotificationsConfig,
     /// Hint mode's labels (M13a, D-118).
     pub hints: HintsConfig,
+    /// The drop-down terminal (M13b, D-120).
+    pub quick: QuickConfig,
+    /// Pane recordings (M13b, D-120).
+    pub record: RecordConfig,
+    /// Saved commands (M13b, D-120).
+    pub snippets: Vec<crate::snippets::Snippet>,
     /// The coding harness (M11c, D-099).
     pub harness: HarnessConfig,
     /// A git worktree per task (M12a, D-113).
@@ -109,6 +115,9 @@ impl Default for Config {
             center: CenterConfig::default(),
             notifications: NotificationsConfig::default(),
             hints: HintsConfig::default(),
+            quick: QuickConfig::default(),
+            record: RecordConfig::default(),
+            snippets: Vec::new(),
             harness: HarnessConfig::default(),
             worktrees: WorktreesConfig::default(),
         }
@@ -387,6 +396,50 @@ impl Default for NotificationsConfig {
             long_command: 15,
         }
     }
+}
+
+/// The drop-down terminal (`[quick]`, D-120).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(default, deny_unknown_fields, rename_all = "kebab-case")]
+pub struct QuickConfig {
+    /// Its height, a share of the screen: `"40%"`.
+    #[serde(deserialize_with = "de_share")]
+    pub height: u8,
+    /// A key that opens and hides it without the prefix (none by default).
+    #[serde(deserialize_with = "de_opt_key")]
+    pub key: Option<KeyEvent>,
+}
+
+impl Default for QuickConfig {
+    fn default() -> Self {
+        Self {
+            height: 40,
+            key: None,
+        }
+    }
+}
+
+/// Pane recordings (`[record]`, D-120).
+#[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize)]
+#[serde(default, deny_unknown_fields, rename_all = "kebab-case")]
+pub struct RecordConfig {
+    /// Where recordings go (default `~/.local/state/termos/recordings`).
+    pub dir: Option<PathBuf>,
+}
+
+fn de_share<'de, D: Deserializer<'de>>(d: D) -> Result<u8, D::Error> {
+    let s = String::deserialize(d)?;
+    crate::layouts::parse_size(&s)
+        .map(|f| (f * 100.0).round().clamp(10.0, 100.0) as u8)
+        .ok_or_else(|| serde::de::Error::custom(format!("{s:?} is not a share like \"40%\"")))
+}
+
+fn de_opt_key<'de, D: Deserializer<'de>>(d: D) -> Result<Option<KeyEvent>, D::Error> {
+    let s = String::deserialize(d)?;
+    if s.trim().is_empty() || s.trim() == "none" {
+        return Ok(None);
+    }
+    s.parse().map(Some).map_err(serde::de::Error::custom)
 }
 
 /// Hint mode (`[hints]`, D-118).
@@ -736,7 +789,7 @@ pub fn windows_default_shell(
 }
 
 /// 1-based line and column of byte offset `pos` in `src`.
-fn line_col(src: &str, pos: usize) -> (usize, usize) {
+pub(crate) fn line_col(src: &str, pos: usize) -> (usize, usize) {
     let before = &src[..pos.min(src.len())];
     let line = before.matches('\n').count() + 1;
     let col = before.rfind('\n').map_or(before.chars().count(), |nl| {
@@ -800,6 +853,21 @@ long-command = 15        # seconds: a longer command that finishes out of sight 
 
 [hints]
 alphabet = "asdfghjkl"   # hint mode's labels (prefix u), the easiest letters first
+
+[quick]
+height = "40%"           # the drop-down terminal (prefix `), from the top
+# key = "F12"            # a key that opens it without the prefix
+
+[record]
+# dir = "~/recordings"   # pane recordings (prefix R); default ~/.local/state/termos/recordings
+
+# Saved commands, in the palette as "snippet: NAME". {param} and
+# {param:default} are asked for. Do not put secrets in them.
+# [[snippets]]
+# name = "Tail a service's log"
+# command = "journalctl -fu {service:termos}"
+# run = true             # press Enter after typing it
+# where = "pane"         # pane | new-pane | float
 
 [plugins]
 enabled = []             # plugin directory names under ~/.config/termos/plugins
@@ -1093,6 +1161,16 @@ position = "top"
             let src = format!("[hints]\nalphabet = {bad}\n");
             assert!(Config::parse(&src, Path::new("c.toml")).is_err(), "{bad}");
         }
+        let c = Config::parse(
+            "[quick]\nheight = \"25%\"\nkey = \"F12\"\n[record]\ndir = \"/r\"\n[[snippets]]\nname = \"a\"\ncommand = \"ls {dir:.}\"\n",
+            Path::new("c.toml"),
+        )
+        .expect("valid");
+        assert_eq!(c.quick.height, 25);
+        assert!(c.quick.key.is_some());
+        assert_eq!(c.record.dir, Some(PathBuf::from("/r")));
+        assert_eq!(c.snippets.len(), 1);
+        assert!(Config::parse("[quick]\nheight = \"lots\"\n", Path::new("c.toml")).is_err());
         let c = Config::parse("[notifications]\nsystem = false\n", Path::new("c.toml"))
             .expect("parses");
         assert!(!c.notifications.system);

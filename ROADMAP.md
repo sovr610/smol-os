@@ -40,7 +40,7 @@ questions (DECISIONS.md, "Open questions").
 | M12d | Hardening: pinned Actions, seccomp, a macOS sandbox, a network allowlist for agent CLIs (D-111) | ⏳ |
 | M12e | Harness v2, from T3 Code's design: long-lived two-way sessions with the CLIs, capability-based fallbacks, per-task checkpoints (proposed) | ⏳ |
 | M13a | Links, hints, search and finished commands: programs' links and paths clickable, hint mode, search across panes, alerts when a long command finishes (D-117, D-118) | 🚧 |
-| M13b | Layouts and workspace tools: layout files, a drop-down terminal, typing into several panes, saved commands, SSH hosts, pane recording (D-117) | ⏳ |
+| M13b | Layouts and workspace tools: layout files, a drop-down terminal, typing into several panes, saved commands, SSH hosts, pane recording (D-117, D-119, D-120) | 🚧 |
 | M13c | Processes and files: a process manager; bookmarks, two panes, search, archives, git status, bulk rename and disk usage in Files (D-117) | ⏳ |
 | M13d | The image as a computer: lock screen, power menu, battery, brightness and lid, clock and time zones, USB drives, GPT disks, AMD graphics (D-117) | ⏳ |
 | M13e | The image's hardware: several displays and hotplug, Bluetooth, sound (D-117) | ⏳ |
@@ -1195,7 +1195,7 @@ Nothing M11a adds runs while idle: the shims run only when `claude` or `codex` s
 ---
 
 ## M13b — Layouts and workspace tools
-**Status:** ⏳ proposed (D-117; plan: [docs/plans/m13-os.md](docs/plans/m13-os.md#m13b--layouts-and-workspace-tools)) · Ask first: the layout format (TermOS's TOML or Zellij's KDL); the drop-down terminal's key; whether recordings may include input.
+**Status:** 🚧 in progress: written, not yet built or tested (the session could not download crates) · Owner answers (D-119): TermOS's TOML; prefix `` ` `` for the drop-down; recordings of output only. Design: D-120, ARCHITECTURE.md §4, §6 and §8; user guide [layouts.md](docs/layouts.md).
 
 **Deliverables**
 - [ ] Layout files (user and project): open a workspace with its splits, folders and commands; save the current one as a layout.

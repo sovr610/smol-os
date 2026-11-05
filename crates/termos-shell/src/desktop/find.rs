@@ -175,7 +175,9 @@ impl Desktop {
         let scheme = termos_render::link::scheme(url).unwrap_or_default();
         if scheme == "file" {
             match links::file_url(url) {
-                Some((host, path)) if links::is_local_host(&host, links::local_host().as_deref()) => {
+                Some((host, path))
+                    if links::is_local_host(&host, links::local_host().as_deref()) =>
+                {
                     self.open_path(&path, None, None);
                 }
                 Some((host, _)) => {
@@ -242,7 +244,7 @@ impl Desktop {
     }
 
     /// `text` typed into `pane` as a paste.
-    fn paste_into(&mut self, pane: PaneId, text: &str) {
+    pub(super) fn paste_into(&mut self, pane: PaneId, text: &str) {
         let bytes = match self.panes.get(&pane) {
             Some(Pane {
                 kind: PaneKind::Term { vt, .. },
@@ -278,7 +280,11 @@ impl Desktop {
         match Hints::new(id, found, &alphabet) {
             Some(h) => self.ui.hints = Some(h),
             None => {
-                let what = if kind.is_empty() { "link or path" } else { kind };
+                let what = if kind.is_empty() {
+                    "link or path"
+                } else {
+                    kind
+                };
                 self.notify(Level::Info, format!("no {what} to label here"));
             }
         }

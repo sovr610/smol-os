@@ -115,3 +115,7 @@ inside TermOS. Outside, it says so.
 
 Names given with `tos title` (or Rename in a pane's menu) are not saved with
 the session yet.
+
+Layouts, saved commands and recordings have `termos` subcommands of their
+own (`termos layout`, `termos snippet`, `termos play`): see
+[layouts.md](layouts.md).

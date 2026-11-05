@@ -89,7 +89,7 @@ agents and models. A frontend is only a *client* of the server (D-007).
 | Crate | Responsibility | First milestone |
 | --- | --- | --- |
 | `termos-render` | `Grid`/`Cell`/colour, frame diffing, themes, capability detection, the terminal encoder, the software rasterizer (feature `raster`) | M1 |
-| `termos-core` | tokio event loop and frame scheduler, in-process bus, `Transport`, protocol, config, paths | M1 |
+| `termos-core` | tokio event loop and frame scheduler, in-process bus, `Transport`, protocol, config, paths; layout files, saved commands, SSH hosts and the recording format (D-120) | M1 |
 | `termos-term` | PTY spawning/resizing, `VtBackend` over alacritty_terminal, blitting VT cells into the grid | M1 |
 | `termos-wm` | Window tree, floating + tiling layouts, workspaces, z-order, hit testing, composition of window chrome | M1 |
 | `termos-shell` | `Desktop` state, the session server (socket, sessions, clients, control API), key tables, command palette, which-key, status bar, copy mode, notifications, tutorial, snapshots, plugin host | M1 |
@@ -263,6 +263,13 @@ Window = { id, title, source: Pty | App | Plugin | Agent, state: normal | minimi
 - **Tiling (D-024):** tmux-style panes separated by one-cell lines, sized by weights that respect each subtree's minimum extent. Presets are even-horizontal, even-vertical, main-vertical (master-stack), main-horizontal and tiled (grid). Splits that wouldn't fit are refused.
 - **Copy mode:** vi motions over the scrollback, selection, search, and yank to the paste buffer and the system clipboard (OSC 52). The mouse wheel and drag-select use it too. Where the shell marks its commands, `[`/`]` jump between prompts and `o` copies one command's output (D-116).
 - **Links and paths (D-118):** Ctrl+click (Ctrl+Shift over a program that reads the mouse) opens a program's link or what `termos_term::links` finds under the pointer in the rows in view: web and email addresses, paths that exist (with `:line[:col]`), git hashes, IP addresses. Holding Ctrl underlines it. Web and mail addresses open on the client's machine (`ServerMsg::Open`), or are copied on the console and over SSH; paths open in TermOS (`file.edit PATH:LINE[:COL]` at the line). Hint mode (`pane.hints`, prefix `u`) labels every match in view to open, copy or paste. The search across panes (`search.all`, prefix `/`) searches every terminal pane's history and screen on a thread and lands in copy mode at the match.
+- **Workspace tools (D-120):**
+  - **Layout files** (`termos_core::layouts`; `layout.open`, `layout.save`, `termos layout`) describe workspaces as panes split one from another. One function, `Desktop::build_workspace`, builds them, and worktree workspaces too.
+  - **The drop-down terminal** (`quick.toggle`, prefix `` ` ``) is one full-width float per session; hiding it minimizes it, and it moves to the workspace it is shown on.
+  - **Typing into several panes:** keys and pastes into a pane of the session's sync set (`workspace.sync`, prefix `S`; `pane.sync`) go to every pane in it, encoded per program.
+  - **Saved commands** (`[[snippets]]`) fill their parameters through status-line prompts and are pasted.
+  - **SSH hosts** from `~/.ssh/config` open `ssh HOST` panes.
+  - **Recordings** (`pane.record`, prefix `R`) write the pane's output as asciinema v2 (`termos_core::cast`); `termos play` plays one back.
 - **Attention (D-115, D-116):** a pane whose agent needs the user (its CLI's hook, or a program's OSC 9/99/777 notification) rings in the warn colour (`compose`'s per-pane ring style over the focus colour, and a float's border) and shows a `● needs you` badge; its tab gets `●`, and a toast, a notification-center entry and, where the terminal shows them, a system notification (`ServerMsg::Notify`) follow. A finished turn only marks its tab (`✓`) and the center. Input to the pane clears it; `agent.waiting` (prefix `j`) goes to the one waiting longest. A command that ran `[notifications] long-command` seconds and finishes where no client is looking marks its tab `✓`, or `✗` when it failed (`Need::Failed`), with a toast and a center entry; a failure also as a system notification (D-118). `pane.notify-when-done` asks for the next one whatever its length.
 - **PTY resize:** resizing a terminal window issues `TIOCSWINSZ`, which sends SIGWINCH to the child.
 - **Multiple clients:** when clients of different sizes attach, the session size follows `latest` (default), `smallest` or `largest`, as tmux's `window-size` does.
@@ -314,6 +321,7 @@ Window = { id, title, source: Pty | App | Plugin | Agent, state: normal | minimi
 - **Start (D-091):** `[ui] start = "desktop"` (the default) floats each new session's and workspace's first terminal over the wallpaper; `"terminal"` tiles it full screen. Restored sessions keep their saved layout.
 - **Graphics:** `[graphics] protocol = "auto" | "kitty" | "sixel" | "iterm2" | "blocks"`.
 - **Links and hints (D-118):** `[ui] links` (programs' links passed to the outer terminal), `[hints] alphabet`, `[notifications] long-command` (seconds; 0: off).
+- **Workspace tools (D-120):** `[quick] height` and `key`, `[record] dir`, `[[snippets]]`; layout files in `<config>/layouts/` and a project's `termos.toml` (`[layout.NAME]`, `[[snippets]]`).
 - **Clipboard:** `[clipboard] history` (entries kept in memory, default 50; 0 keeps none).
 - **Widgets:** `[widgets.<name>]` for WASM status-line widgets (§9, D-051).
 - **Agents (§11):** `[agents]` (providers, profiles, MCP servers, external agents) and `[secrets] store`; keys are named (`keyring:<name>`), never written.
@@ -322,7 +330,7 @@ Window = { id, title, source: Pty | App | Plugin | Agent, state: normal | minimi
 - **Selected rows** draw their text in the theme's `fg` (`ThemeColors::selected`): every preset's text colours are tested against their backgrounds, AAA for high contrast and AA otherwise.
 - **Session persistence (D-011, D-033):**
   - **Where:** snapshots go to `$XDG_STATE_HOME/termos/sessions/<server>/<session>.json`, with a versioned schema, mode 0600, written atomically.
-  - **What:** the layout of every workspace and, per pane, the directory, the foreground program, and optionally (`save-scrollback`) the text. Command lines are kept only for allowlisted programs.
+  - **What:** the layout of every workspace and, per pane, the directory, the foreground program, and optionally (`save-scrollback`) the text. Command lines are kept only for allowlisted programs. Which pane is the drop-down terminal (D-120).
   - **When:** debounced after structural changes and at shutdown. They are deleted when a session ends on purpose.
   - **Restore:** a fresh server restores them by policy, `always | ask | never` (default ask). Shells restart in their directories and allowlisted programs (`restore-programs`) are re-run. Agent CLIs come back in their account and folder continuing their conversation (`SavedAgent`, `restore-agents`, D-116): an agent window as `termos agent external --resume [--conversation ID]`, an agent run in a shell typed into the restored shell with `tos`.
 - **Shell integration (D-115, D-116):** bash, zsh, fish and PowerShell start with a built-in script (`termos_shell::integration`, written to `<data>/shell-integration/`) that loads the user's own configuration and then sets OSC 133 marks: `--rcfile` for bash, `ZDOTDIR` for zsh, `XDG_DATA_DIRS` (vendor configuration) for fish, `-NoExit -Command` for PowerShell. `[shell] integration = false` turns it off.
@@ -547,7 +555,7 @@ termos-ai holds all of it; the CLI hands the server a launcher for its windows (
   - config parsing (M2);
   - protocol decoding (`proto_decode`: frames and JSON-RPC);
   - capability replies (`caps_reply`), Sixel decoding (`sixel_decode`), the image interceptor (`apc_dcs_intercept`) and notifications and shell marks (`osc_signals`);
-  - link and path detection (`link_detect`);
+  - link and path detection (`link_detect`), layout files (`layout_parse`) and SSH configs (`ssh_config`);
   - markdown layout (`markdown_layout`);
   - provider event streams (`sse_parse`);
   - GGUF headers (`gguf_parse`), with the fit estimate over whatever they claim;

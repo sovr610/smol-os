@@ -51,6 +51,8 @@ pub struct StatusInfo<'a> {
     pub start_button: bool,
     /// The pointer's column when it is on the status line.
     pub pointer: Option<u16>,
+    /// Keys go to several panes at once (D-120).
+    pub sync: bool,
 }
 
 /// Clickable regions of the drawn status line.
@@ -182,6 +184,14 @@ pub fn draw(
     }
     if info.prefix {
         right.push((" PREFIX ".into(), theme.status_prefix));
+    }
+    if info.sync {
+        right.push((
+            " SYNC ".into(),
+            termos_render::cell::Style::new()
+                .fg(theme.colors.status_bg)
+                .bg(theme.colors.accent),
+        ));
     }
     if let Some((msg, level)) = info.message {
         let style = match level {

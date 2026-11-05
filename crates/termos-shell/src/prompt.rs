@@ -24,6 +24,12 @@ pub enum PromptKind {
     RenamePane(PaneId),
     RenameSession,
     Confirm(Confirmed),
+    /// A saved command's next parameter, with the values given so far
+    /// (D-120).
+    SnippetParam {
+        snippet: termos_core::snippets::Snippet,
+        values: Vec<(String, String)>,
+    },
 }
 
 /// What the prompt wants after a key.
@@ -72,6 +78,19 @@ impl Prompt {
             kind: PromptKind::Confirm(what),
             label: format!("{}? (y/n) ", question.into()),
             input: String::new(),
+        }
+    }
+
+    /// Asks for `param` of `snippet`, its default typed in already.
+    pub fn snippet_param(
+        snippet: termos_core::snippets::Snippet,
+        values: Vec<(String, String)>,
+        param: &termos_core::snippets::Param,
+    ) -> Self {
+        Self {
+            label: format!("({}) {}: ", snippet.name, param.name),
+            input: param.default.clone().unwrap_or_default(),
+            kind: PromptKind::SnippetParam { snippet, values },
         }
     }
 

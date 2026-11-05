@@ -1849,10 +1849,9 @@ impl Server {
                         e.desktop.reveal_for(client, &hit);
                     }
                 }
-                None => self.post_to_client(
-                    client,
-                    &format!("the session {} has ended", hit.session),
-                ),
+                None => {
+                    self.post_to_client(client, &format!("the session {} has ended", hit.session))
+                }
             },
             SessionRequest::WidgetClick { name, column } => {
                 #[cfg(feature = "wasm-widgets")]

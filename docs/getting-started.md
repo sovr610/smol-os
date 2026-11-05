@@ -108,6 +108,9 @@ key for each command.
 | `C-b ]` | Paste what you copied |
 | `C-b u` | Hints: labels on the links, paths and hashes in view, to open, copy or paste ([links.md](links.md)) |
 | `C-b /` | Search the text of every pane ([links.md](links.md#search-across-panes)) |
+| `` C-b ` `` | The drop-down terminal: show or hide ([layouts.md](layouts.md#the-drop-down-terminal)) |
+| `C-b S` | Type into every pane of the workspace at once; again to stop |
+| `C-b R` | Record the pane's output (asciinema); again to stop |
 | `C-b :` | Command palette (same as `Ctrl+Space`) |
 | `C-b N` | Notification center |
 | `C-b a` / `C-b A` | AI agent: a new conversation / resume one ([agents.md](agents.md)) |

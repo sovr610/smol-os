@@ -100,6 +100,9 @@ pub fn default_prefix_bindings() -> Vec<Binding> {
         b("y", C::CopyOutput),
         b("u", C::Hints(String::new())),
         b("/", C::SearchAll(false)),
+        b("`", C::QuickToggle),
+        b("S", C::WorkspaceSync),
+        b("R", C::PaneRecord),
         b("Enter", C::Menu),
         b(":", C::Palette),
         b("?", C::Keys),
@@ -169,6 +172,14 @@ impl KeyTables {
             repeat: false,
         });
         let mut root = default_root_bindings();
+        // The drop-down terminal without the prefix, when asked for (D-120).
+        if let Some(key) = config.quick.key {
+            root.push(Binding {
+                key,
+                command: Command::QuickToggle,
+                repeat: false,
+            });
+        }
         apply_overrides(&mut prefix, &config.keys.prefix, "prefix", &mut errors);
         apply_overrides(&mut root, &config.keys.root, "root", &mut errors);
         if root.iter().any(|b| b.key == config.prefix) {

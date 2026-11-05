@@ -512,7 +512,9 @@ fn run(tos: Tos) -> anyhow::Result<ExitCode> {
                 out.flush()?;
             }
         }
-        TosCmd::Notify { when_done: true, .. } => named("pane.notify-when-done")?,
+        TosCmd::Notify {
+            when_done: true, ..
+        } => named("pane.notify-when-done")?,
         TosCmd::Notify { level, text, .. } => {
             let level = match level {
                 Level::Info => "info",

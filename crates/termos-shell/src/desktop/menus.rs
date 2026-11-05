@@ -161,6 +161,7 @@ impl Desktop {
         let mut v = vec![
             Entry::item("New terminal", Command::Split(SplitHow::Auto)),
             Entry::item("New floating terminal", Command::NewFloat),
+            Entry::item("Drop-down terminal", Command::QuickToggle),
             Entry::Separator,
             Entry::submenu(
                 "Apps",
@@ -193,6 +194,7 @@ impl Desktop {
             Entry::submenu("Theme", themes).icon(Icon::Theme),
             Entry::submenu("Workspaces", workspaces).icon(Icon::Workspace),
             Entry::submenu("Sessions", sessions).icon(Icon::Session),
+            Entry::submenu("SSH", self.ssh_entries()).icon(Icon::Session),
             Entry::Separator,
             Entry::submenu(
                 "Help",
@@ -238,6 +240,22 @@ impl Desktop {
                 "Tell me when it finishes",
                 Command::NotifyWhenDone,
             ));
+            v.push(Entry::item(
+                if self.sync.contains(&pane) {
+                    "Stop typing here with the others"
+                } else {
+                    "Type here with the others"
+                },
+                Command::PaneSync,
+            ));
+            v.push(Entry::item(
+                if self.is_recording(pane) {
+                    "Stop recording"
+                } else {
+                    "Record this pane"
+                },
+                Command::PaneRecord,
+            ));
             v.push(Entry::Separator);
         }
         v.push(Entry::item("Split right", Command::Split(SplitHow::Right)));
@@ -279,6 +297,20 @@ impl Desktop {
         v.push(Entry::item("Close", Command::KillPane));
         menu::with_hints(&mut v, &|c| self.keys.key_for(c));
         v
+    }
+
+    /// The SSH submenu: the hosts of `~/.ssh/config`, the ones opened
+    /// lately first (D-120).
+    fn ssh_entries(&self) -> Vec<Entry> {
+        let hosts = self.ssh_hosts();
+        if hosts.is_empty() {
+            return vec![Entry::item("No hosts in ~/.ssh/config", Command::Menu).disabled()];
+        }
+        hosts
+            .into_iter()
+            .take(20)
+            .map(|h| Entry::item(h.clone(), Command::SshOpen(h)))
+            .collect()
     }
 
     /// The context menu of a floating window's title bar.

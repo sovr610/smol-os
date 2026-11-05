@@ -422,7 +422,8 @@ impl SearchBox {
         };
         let before = h.line[from..h.start].trim_start();
         let x = grid.put_str(x, y, before, style, inner.right());
-        let hit_style = style.attrs(termos_render::cell::Attrs::BOLD | termos_render::cell::Attrs::UNDERLINE);
+        let hit_style =
+            style.attrs(termos_render::cell::Attrs::BOLD | termos_render::cell::Attrs::UNDERLINE);
         let x = grid.put_str(x, y, &h.line[h.start..h.end], hit_style, inner.right());
         grid.put_str(x, y, &h.line[h.end..], style, inner.right());
     }
@@ -469,7 +470,10 @@ mod tests {
     #[test]
     fn a_leading_slash_is_a_regular_expression() {
         let panes = [pane(1, 80, &[(0, "took 12ms then 345ms")])];
-        assert_eq!(found("/[0-9]+ms", &panes), vec![(1, 0, 5, 4), (1, 0, 15, 5)]);
+        assert_eq!(
+            found("/[0-9]+ms", &panes),
+            vec![(1, 0, 5, 4), (1, 0, 15, 5)]
+        );
         assert!(parse("/(").is_err());
         assert!(parse("").expect("empty").is_none());
         assert!(parse("/").expect("empty").is_none());
@@ -506,7 +510,10 @@ mod tests {
         done_rx.recv().expect("the search finished");
         assert!(b.poll());
         assert_eq!(b.results.len(), 2);
-        assert_eq!(b.handle_key(KeyEvent::plain(KeyCode::Down)), SearchAction::None);
+        assert_eq!(
+            b.handle_key(KeyEvent::plain(KeyCode::Down)),
+            SearchAction::None
+        );
         assert_eq!(b.selected, 1);
         match b.handle_key(KeyEvent::plain(KeyCode::Enter)) {
             SearchAction::Go(h) => assert_eq!(h.col, 4),
@@ -518,7 +525,10 @@ mod tests {
         );
         b.start(|| {});
         assert!(b.results.is_empty());
-        assert_eq!(b.handle_key(KeyEvent::plain(KeyCode::Esc)), SearchAction::Close);
+        assert_eq!(
+            b.handle_key(KeyEvent::plain(KeyCode::Esc)),
+            SearchAction::Close
+        );
     }
 
     #[test]

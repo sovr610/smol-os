@@ -215,8 +215,8 @@ mod tests {
 
     #[test]
     fn the_bottom_match_gets_the_first_label() {
-        let h = Hints::new(PaneId(1), vec![m("top", 0, 0), m("bottom", 5, 0)], "as")
-            .expect("matches");
+        let h =
+            Hints::new(PaneId(1), vec![m("top", 0, 0), m("bottom", 5, 0)], "as").expect("matches");
         assert_eq!(h.marks[0].0, "s");
         assert_eq!(h.marks[1].0, "a");
         assert!(Hints::new(PaneId(1), Vec::new(), "as").is_none());
@@ -263,7 +263,11 @@ mod tests {
         g.put_str(0, 1, "https://b", Style::new(), 30);
         let area = g.area();
         h.draw(&mut g, area, &Theme::default());
-        assert!(g.row_text(0).starts_with("  sttps://a"), "{}", g.row_text(0));
+        assert!(
+            g.row_text(0).starts_with("  sttps://a"),
+            "{}",
+            g.row_text(0)
+        );
         assert!(g.row_text(1).starts_with("attps://b"), "{}", g.row_text(1));
         assert!(
             g.get(5, 0)

@@ -34,6 +34,10 @@ pub struct SessionSnapshot {
     /// Workspaces, layout trees, floats, focus and names.
     pub layout: Session,
     pub panes: Vec<PaneSnapshot>,
+    /// The drop-down terminal's pane, by its id in the saved layout
+    /// (D-120).
+    #[serde(default)]
+    pub quick: Option<u64>,
 }
 
 /// What a pane was.
@@ -477,6 +481,7 @@ mod tests {
                     ..pane(3)
                 },
             ],
+            quick: None,
         }
     }
 

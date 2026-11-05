@@ -140,6 +140,23 @@ pub enum Command {
     /// Say when the focused pane's next command finishes, however long it
     /// takes (D-118).
     NotifyWhenDone,
+    /// Open a layout: `NAME [DIR]` (D-120).
+    LayoutOpen(String),
+    /// Save the active workspace as a layout.
+    LayoutSave(String),
+    /// Show or hide the drop-down terminal.
+    QuickToggle,
+    /// Type into every terminal pane of the workspace at once, or stop.
+    WorkspaceSync,
+    /// Add the focused pane to the panes typed into at once, or take it
+    /// out.
+    PaneSync,
+    /// Type a saved command (by name).
+    SnippetRun(String),
+    /// A pane running `ssh HOST`.
+    SshOpen(String),
+    /// Start or stop recording the focused pane.
+    PaneRecord,
     /// The package manager app (D-110).
     PackagesOpen,
     /// `termos pkg ARGS` in a window: "install devroot gcc" (D-110).
@@ -449,6 +466,33 @@ pub const COMMANDS: &[CommandInfo] = &[
         "Tell me when this pane's command finishes",
     ),
     CommandInfo {
+        name: "layout.open",
+        description: "Open a layout: its workspaces, panes and commands",
+        arg: Some("dev"),
+    },
+    CommandInfo {
+        name: "layout.save",
+        description: "Save this workspace as a layout",
+        arg: Some("dev"),
+    },
+    info("quick.toggle", "Drop-down terminal: show or hide"),
+    info(
+        "workspace.sync",
+        "Type into every pane of this workspace at once",
+    ),
+    info("pane.sync", "Type into this pane with the others, or stop"),
+    CommandInfo {
+        name: "snippet.run",
+        description: "Type a saved command",
+        arg: Some("deploy"),
+    },
+    CommandInfo {
+        name: "ssh.open",
+        description: "SSH to a host in a new pane",
+        arg: Some("example.org"),
+    },
+    info("pane.record", "Record this pane, or stop recording"),
+    CommandInfo {
         name: "file.open",
         description: "Open a file",
         arg: Some("notes.txt"),
@@ -582,6 +626,23 @@ impl FromStr for Command {
                 ));
             }
             return Ok(Command::HarnessBest(rest.to_owned()));
+        }
+        // A layout's name and folder, and a snippet's name, are the rest
+        // of the line (D-120).
+        for name in ["layout.open", "snippet.run"] {
+            if let Some(rest) = s.trim_start().strip_prefix(name)
+                && (rest.is_empty() || rest.starts_with(char::is_whitespace))
+            {
+                let rest = rest.trim().to_owned();
+                if rest.is_empty() {
+                    return Err(CommandError(format!("`{name}` needs a name")));
+                }
+                return Ok(if name == "layout.open" {
+                    Command::LayoutOpen(rest)
+                } else {
+                    Command::SnippetRun(rest)
+                });
+            }
         }
         // A goal is the rest of the line too (D-100).
         if let Some(rest) = s.trim_start().strip_prefix("harness.open")
@@ -755,6 +816,22 @@ impl FromStr for Command {
                 ))),
             },
             "pane.notify-when-done" => no_arg(Command::NotifyWhenDone),
+            "layout.save" => match arg {
+                Some(a) if termos_core::layouts::valid_name(a) => Ok(Command::LayoutSave(a.to_owned())),
+                Some(a) => Err(CommandError(format!(
+                    "`layout.save`: `{a}` is not a name (letters, digits, - _ .)"
+                ))),
+                None => Err(CommandError("`layout.save` needs a name".into())),
+            },
+            "quick.toggle" => no_arg(Command::QuickToggle),
+            "workspace.sync" => no_arg(Command::WorkspaceSync),
+            "pane.sync" => no_arg(Command::PaneSync),
+            "ssh.open" => match arg {
+                Some(a) if termos_core::ssh_config::valid_host(a) => Ok(Command::SshOpen(a.to_owned())),
+                Some(a) => Err(CommandError(format!("`ssh.open`: `{a}` is not a host"))),
+                None => Err(CommandError("`ssh.open` needs a host".into())),
+            },
+            "pane.record" => no_arg(Command::PaneRecord),
             "network.open" => no_arg(Command::NetworkOpen),
             "update.open" => no_arg(Command::UpdateOpen),
             "settings.open" => no_arg(Command::SettingsOpen),
@@ -883,6 +960,14 @@ impl fmt::Display for Command {
             Command::SearchAll(false) => f.write_str("search.all"),
             Command::SearchAll(true) => f.write_str("search.all --all-sessions"),
             Command::NotifyWhenDone => f.write_str("pane.notify-when-done"),
+            Command::LayoutOpen(a) => write!(f, "layout.open {a}"),
+            Command::LayoutSave(a) => write!(f, "layout.save {a}"),
+            Command::QuickToggle => f.write_str("quick.toggle"),
+            Command::WorkspaceSync => f.write_str("workspace.sync"),
+            Command::PaneSync => f.write_str("pane.sync"),
+            Command::SnippetRun(a) => write!(f, "snippet.run {a}"),
+            Command::SshOpen(a) => write!(f, "ssh.open {a}"),
+            Command::PaneRecord => f.write_str("pane.record"),
             Command::PackagesOpen => f.write_str("packages.open"),
             Command::PkgRun(a) => write!(f, "pkg.run {a}"),
             Command::DevrootCreate => f.write_str("devroot.create"),
@@ -915,6 +1000,9 @@ impl Command {
             Command::SessionSwitch(name) => format!("{base} {name}"),
             Command::Hints(k) if !k.is_empty() => format!("{base}: {k}"),
             Command::SearchAll(true) => format!("{base}, in every session"),
+            Command::LayoutOpen(n) => format!("{base}: {n}"),
+            Command::SnippetRun(n) => format!("snippet: {n}"),
+            Command::SshOpen(h) => format!("ssh {h}"),
             _ => base.to_owned(),
         }
     }

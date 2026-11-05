@@ -585,7 +585,11 @@ impl VtBackend for AlacrittyVt {
                         out.cells.push((col, 1));
                         continue;
                     }
-                    let width = if c.flags.contains(Flags::WIDE_CHAR) { 2 } else { 1 };
+                    let width = if c.flags.contains(Flags::WIDE_CHAR) {
+                        2
+                    } else {
+                        1
+                    };
                     out.text.push(c.c);
                     out.cells.push((col, width));
                     for extra in c.zerowidth().into_iter().flatten() {
@@ -1350,7 +1354,10 @@ mod tests {
         assert_eq!(vt.link_at(1, 0).as_deref(), Some("https://example.com/a"));
         assert_eq!(vt.link_at(6, 0), None);
         let rows = vt.view_rows();
-        assert_eq!(rows[0].links, vec![(0, 4, "https://example.com/a".to_owned())]);
+        assert_eq!(
+            rows[0].links,
+            vec![(0, 4, "https://example.com/a".to_owned())]
+        );
         assert!(rows[0].text.starts_with("docs bad img"));
     }
 

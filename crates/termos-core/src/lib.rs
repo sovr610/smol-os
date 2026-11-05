@@ -17,22 +17,29 @@
 //! - [`paths`]: XDG directories. [`log`]: file logging.
 //! - [`app`]: the in-process [`app::App`] trait for windows drawn by Rust
 //!   code with ratatui widgets.
+//! - [`layouts`], [`snippets`], [`ssh_config`] and [`cast`]: layout files,
+//!   saved commands, the SSH hosts the menus offer and pane recordings
+//!   (D-120).
 //!
 //! The server event loop lives with the desktop state in `termos-shell`;
 //! see `ARCHITECTURE.md` §3 and §7.
 
 pub mod app;
+pub mod cast;
 pub mod clipboard;
 pub mod config;
 pub mod ids;
 pub mod input;
 pub mod journal;
+pub mod layouts;
 pub mod local;
 pub mod log;
 pub mod models_endpoint;
 pub mod paths;
 pub mod proto;
 pub mod secret_env;
+pub mod snippets;
+pub mod ssh_config;
 pub mod transport;
 pub mod watch;
 pub mod widgets;

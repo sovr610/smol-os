@@ -498,6 +498,33 @@ impl Layout {
         self.root = Some(root.normalize());
     }
 
+    /// Gives `pane` `fraction` (0 to 1) of the room it shares with the
+    /// child before it in its split, as a layout file's `size = "35%"`
+    /// does (D-120). Whether it could: a pane first in its split, or not
+    /// tiled, keeps its size.
+    pub fn set_share(&mut self, pane: PaneId, fraction: f64) -> bool {
+        let Some(root) = self.root.as_mut() else {
+            return false;
+        };
+        let Some(path) = root.path_to(pane) else {
+            return false;
+        };
+        let Some((&last, parent)) = path.split_last() else {
+            return false;
+        };
+        let Some(Node::Split { children, .. }) = root.at_path_mut(parent) else {
+            return false;
+        };
+        if last == 0 || last >= children.len() {
+            return false;
+        }
+        let f = fraction.clamp(0.05, 0.95);
+        let both = children[last - 1].1 + children[last].1;
+        children[last - 1].1 = both * (1.0 - f);
+        children[last].1 = both * f;
+        true
+    }
+
     /// Whether splitting `target` in `dir` leaves both halves at least one
     /// cell (plus the separator). Without a target, checks the whole area.
     pub fn split_fits(&self, target: Option<PaneId>, dir: Dir, area: Rect) -> bool {
@@ -849,6 +876,19 @@ fn build_preset(preset: Preset, panes: &[PaneId]) -> Option<Node> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_share_divides_the_room_with_the_child_before() {
+        let mut l = Layout::single(PaneId(1));
+        l.split(Some(PaneId(1)), PaneId(2), Dir::Horizontal);
+        assert!(l.set_share(PaneId(2), 0.25));
+        let g = l.geometry(Rect::new(0, 0, 81, 10));
+        let w1 = g.rect_of(PaneId(1)).map(|r| r.w).unwrap_or(0);
+        let w2 = g.rect_of(PaneId(2)).map(|r| r.w).unwrap_or(0);
+        assert_eq!((w1, w2), (60, 20));
+        assert!(!l.set_share(PaneId(1), 0.5), "first in its split");
+        assert!(!l.set_share(PaneId(9), 0.5));
+    }
     use proptest::prelude::*;
 
     const AREA: Rect = Rect::new(0, 0, 80, 24);

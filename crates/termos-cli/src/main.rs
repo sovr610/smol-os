@@ -21,6 +21,7 @@ mod install;
 #[cfg(all(target_os = "linux", feature = "kms"))]
 mod kms;
 mod launcher;
+mod layout_cmd;
 mod models;
 mod opener;
 mod pkg_cmd;
@@ -204,6 +205,27 @@ enum Cmd {
         wait: bool,
         #[command(subcommand)]
         action: accounts_cmd::AccountCmd,
+    },
+    /// Layout files: a project's workspaces, splits, folders and
+    /// commands in one file (D-120).
+    Layout {
+        #[command(subcommand)]
+        action: layout_cmd::LayoutCmd,
+    },
+    /// Saved commands (`[[snippets]]`): list them, or type one.
+    Snippet {
+        #[command(subcommand)]
+        action: layout_cmd::SnippetCmd,
+    },
+    /// Play a pane recording (`.cast`, prefix R) back in this terminal.
+    Play {
+        file: PathBuf,
+        /// Faster (2) or slower (0.5) than recorded.
+        #[arg(long, default_value_t = 1.0)]
+        speed: f64,
+        /// Pauses longer than this many seconds are cut to it.
+        #[arg(long, value_name = "SECS")]
+        idle_limit: Option<f64>,
     },
     /// A git worktree per task: its own branch, folder, ports and
     /// workspace; reviewed, then merged, opened as a pull request or
@@ -467,6 +489,11 @@ fn run_cli(args: impl IntoIterator<Item = String>) -> anyhow::Result<ExitCode> {
             worktree_cmd::worktree_command(action, &paths, &config_path),
         ),
         Some(Cmd::Audit { action }) => agents::audit_command(action, &paths),
+        Some(Cmd::Play {
+            file,
+            speed,
+            idle_limit,
+        }) => layout_cmd::play_command(file, *speed, *idle_limit),
         Some(Cmd::Sandbox { action }) => agents::sandbox_command(action, &paths),
         Some(Cmd::Model { action }) => models::model_command(action, &paths, &config_path),
         Some(Cmd::Models { action }) => models::models_command(action, &paths, &config_path),
@@ -593,6 +620,8 @@ fn run(cli: &Cli, paths: &Paths, config_path: &Path, t: &Target) -> anyhow::Resu
             }
         }
         Some(Cmd::Server) => run_server(paths, config_path, t),
+        Some(Cmd::Layout { action }) => layout_cmd::layout_command(action, paths, config_path, t),
+        Some(Cmd::Snippet { action }) => layout_cmd::snippet_command(action, config_path, t),
         Some(
             Cmd::Config { .. }
             | Cmd::Debug { .. }
@@ -616,7 +645,8 @@ fn run(cli: &Cli, paths: &Paths, config_path: &Path, t: &Target) -> anyhow::Resu
             | Cmd::Models { .. }
             | Cmd::Install(_)
             | Cmd::Update { .. }
-            | Cmd::System { .. },
+            | Cmd::System { .. }
+            | Cmd::Play { .. },
         ) => Ok(ExitCode::SUCCESS),
     }
 }

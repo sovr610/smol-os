@@ -148,9 +148,8 @@ static EMAIL: LazyLock<Regex> = LazyLock::new(|| {
 static HASH: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\b[0-9a-f]{7,40}\b").expect("a valid pattern"));
 
-static IPV4: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b").expect("a valid pattern")
-});
+static IPV4: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b").expect("a valid pattern"));
 
 static IPV6: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"[0-9A-Fa-f:.]*:[0-9A-Fa-f:.]*").expect("a valid pattern"));
@@ -381,7 +380,9 @@ fn existing(
     if exists(&direct) {
         return Some(direct);
     }
-    let rest = text.strip_prefix("a/").or_else(|| text.strip_prefix("b/"))?;
+    let rest = text
+        .strip_prefix("a/")
+        .or_else(|| text.strip_prefix("b/"))?;
     let stripped = resolve(rest, base)?;
     exists(&stripped).then_some(stripped)
 }

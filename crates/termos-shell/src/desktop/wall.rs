@@ -103,7 +103,7 @@ impl Desktop {
     }
 
     /// `~` and paths relative to the config file's folder.
-    fn config_relative(&self, path: &std::path::Path) -> PathBuf {
+    pub(super) fn config_relative(&self, path: &std::path::Path) -> PathBuf {
         let text = path.to_string_lossy();
         if text == "~" || text.starts_with("~/") || text.starts_with("~\\") {
             return self.resolve_path(&text);

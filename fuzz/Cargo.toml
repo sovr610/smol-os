@@ -144,3 +144,17 @@ path = "fuzz_targets/link_detect.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "layout_parse"
+path = "fuzz_targets/layout_parse.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "ssh_config"
+path = "fuzz_targets/ssh_config.rs"
+test = false
+doc = false
+bench = false

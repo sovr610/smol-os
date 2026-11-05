@@ -54,6 +54,7 @@ use crate::whichkey;
 mod attend;
 mod find;
 mod menus;
+mod tools;
 mod wall;
 
 /// What a pane shows.
@@ -532,6 +533,14 @@ pub struct Desktop {
     /// (`pane.notify-when-done`), with when a pane without shell
     /// integration counts as done: 5 s after its last output (D-118).
     armed: BTreeMap<PaneId, Option<Instant>>,
+    /// The drop-down terminal, and the pane that had the focus before it
+    /// showed (D-120).
+    quick: Option<PaneId>,
+    quick_back: Option<PaneId>,
+    /// Panes typed into at once (`workspace.sync`, `pane.sync`).
+    sync: std::collections::BTreeSet<PaneId>,
+    /// Panes being recorded.
+    recordings: BTreeMap<PaneId, tools::Recording>,
 }
 
 impl std::fmt::Debug for Desktop {
@@ -674,6 +683,10 @@ impl Desktop {
             path_cache: std::collections::HashMap::new(),
             search_wake: None,
             armed: BTreeMap::new(),
+            quick: None,
+            quick_back: None,
+            sync: std::collections::BTreeSet::new(),
+            recordings: BTreeMap::new(),
             config,
         };
         if d.config.status.clock {
@@ -813,6 +826,8 @@ impl Desktop {
                 Relaunch::Shell => {}
             }
         }
+        // The drop-down terminal is one again (D-120).
+        d.quick = snap.quick.and_then(|old| map.get(&PaneId(old)).copied());
         if !layout.remap_panes(|old| map.get(&old).copied()) {
             return Err(io::Error::other("the snapshot has no panes to restore"));
         }
@@ -879,6 +894,7 @@ impl Desktop {
             saved_at: snapshot::now_secs(),
             layout: self.session.clone(),
             panes,
+            quick: self.quick.map(|p| p.0),
         }
     }
 
@@ -1693,31 +1709,35 @@ impl Desktop {
                 return;
             }
         };
-        let mut ws = Workspace::new(layout.name.clone(), first);
-        // Named after the worktree for good (found by that name again).
-        ws.auto_name = false;
-        if let Ok(shell) = self.spawn_term(dir.clone(), half)
-            && !ws.add_split(shell, SplitHow::Right, area)
-        {
-            self.close_pane(shell);
-        }
-        for cmd in &layout.servers {
-            let Ok(id) = self.spawn_term(dir.clone(), (area.w / 2, area.h / 2)) else {
-                continue;
-            };
-            if ws.add_split(id, SplitHow::Down, area) {
-                // Typed into a shell, so it can be run again after it stops.
-                let _ = self.send_text(Some(id), &format!("{cmd}\r"));
-            } else {
-                self.close_pane(id);
-                self.notify(
-                    Level::Warn,
-                    format!("no room for `{cmd}`; start it yourself"),
-                );
-            }
-        }
-        ws.set_focus(first);
-        self.session.add(ws);
+        // The built-in `worktree` layout (D-120): the agent, a shell on
+        // its right, each server below the one before. Commands are typed
+        // into shells, so they can be run again after they stop.
+        let mut panes = vec![
+            termos_core::layouts::PaneSpec {
+                focus: true,
+                ..Default::default()
+            },
+            termos_core::layouts::PaneSpec {
+                split: Some(termos_core::layouts::Split::Right),
+                ..Default::default()
+            },
+        ];
+        panes.extend(
+            layout
+                .servers
+                .iter()
+                .map(|cmd| termos_core::layouts::PaneSpec {
+                    split: Some(termos_core::layouts::Split::Down),
+                    command: Some(cmd.clone()),
+                    ..Default::default()
+                }),
+        );
+        let spec = termos_core::layouts::WorkspaceSpec {
+            name: Some(layout.name.clone()),
+            cwd: None,
+            pane: panes,
+        };
+        self.build_workspace(&spec, &layout.path, &layout.name, Some(first));
     }
 
     /// A review's comments for the agent of a worktree (D-114): pasted into
@@ -2006,7 +2026,19 @@ impl Desktop {
         }
         self.ui.drag = None;
         self.armed.remove(&id);
-        for ui in self.clients.values_mut().chain(std::iter::once(&mut self.ui)) {
+        self.sync.remove(&id);
+        self.stop_recording(id);
+        if self.quick == Some(id) {
+            self.quick = None;
+        }
+        if self.quick_back == Some(id) {
+            self.quick_back = None;
+        }
+        for ui in self
+            .clients
+            .values_mut()
+            .chain(std::iter::once(&mut self.ui))
+        {
             if ui.hints.as_ref().is_some_and(|h| h.pane == id) {
                 ui.hints = None;
             }
@@ -2364,6 +2396,7 @@ impl Desktop {
             };
             if let Some(b) = bytes {
                 self.write_to_pane(id, b);
+                self.sync_paste(id, text);
             } else if let Some(Pane {
                 kind: PaneKind::App(app),
                 ..
@@ -2489,6 +2522,8 @@ impl Desktop {
                     down.push((key, id));
                 }
                 self.write_to_pane(id, bytes);
+                // Typed into several panes at once (D-120).
+                self.sync_key(id, k, kind, alternates);
                 None
             }
             Some(Pane {
@@ -2635,6 +2670,9 @@ impl Desktop {
                 self.requests.push(SessionRequest::RestoreSaved {
                     from_question: true,
                 });
+            }
+            PromptKind::SnippetParam { snippet, values } => {
+                self.snippet_answer(snippet, values, text);
             }
         }
         self.dirty = true;
@@ -3056,6 +3094,14 @@ impl Desktop {
             Command::Hints(kind) => self.start_hints(&kind),
             Command::SearchAll(all) => self.start_search(all),
             Command::NotifyWhenDone => self.arm_when_done(),
+            Command::LayoutOpen(arg) => self.open_layout(&arg),
+            Command::LayoutSave(name) => self.save_layout(&name),
+            Command::QuickToggle => self.toggle_quick(),
+            Command::WorkspaceSync => self.toggle_workspace_sync(),
+            Command::PaneSync => self.toggle_pane_sync(),
+            Command::SnippetRun(name) => self.run_snippet(&name),
+            Command::SshOpen(host) => self.open_ssh(&host),
+            Command::PaneRecord => self.toggle_record(),
             Command::WorktreeReview(name) => {
                 // A review of it already open comes forward instead.
                 let open = (!name.is_empty())
@@ -3127,7 +3173,9 @@ impl Desktop {
                 let path = self.resolve_path(file);
                 let (program, mut args) = self.edit_command();
                 let editor = if args.first().is_some_and(|a| a == "edit")
-                    && self.termos_exe().is_some_and(|e| e.as_os_str() == program.as_str())
+                    && self
+                        .termos_exe()
+                        .is_some_and(|e| e.as_os_str() == program.as_str())
                 {
                     // `termos edit` starts TermOS's Neovim or Helix.
                     if self.config.dev.editor == termos_core::config::EditorChoice::Helix {
@@ -3272,7 +3320,11 @@ impl Desktop {
                 | Command::ImageOpen(_)
                 | Command::MarkdownOpen(_)
                 | Command::FileOpen(_)
-                | Command::FileEdit(_) => continue,
+                | Command::FileEdit(_)
+                | Command::LayoutOpen(_)
+                | Command::LayoutSave(_)
+                | Command::SnippetRun(_)
+                | Command::SshOpen(_) => continue,
                 // `task <name>` is typed; build, run and test are listed.
                 Command::Task(ref t) if !matches!(t.as_str(), "build" | "run" | "test") => continue,
                 _ => {}
@@ -3289,6 +3341,25 @@ impl Desktop {
                 label: cmd.description(),
                 command: cmd.to_string(),
                 hint: self.keys.key_for(&cmd).unwrap_or_default(),
+            });
+        }
+        // Layouts, saved commands and SSH hosts by name (D-120).
+        let named: Vec<Command> = self
+            .layout_names()
+            .into_iter()
+            .map(Command::LayoutOpen)
+            .chain(
+                self.all_snippets()
+                    .into_iter()
+                    .map(|s| Command::SnippetRun(s.name)),
+            )
+            .chain(self.ssh_hosts().into_iter().map(Command::SshOpen))
+            .collect();
+        for cmd in named {
+            items.push(PaletteItem {
+                label: cmd.description(),
+                command: cmd.to_string(),
+                hint: String::new(),
             });
         }
         for b in ThemeBase::ALL {
@@ -3858,6 +3929,9 @@ impl Desktop {
                 if self.armed.contains_key(&id) {
                     self.armed_output(id);
                 }
+                if self.recordings.contains_key(&id) {
+                    self.record_output(id, &bytes);
+                }
                 for f in finished {
                     self.command_finished(id, f);
                 }
@@ -4066,6 +4140,7 @@ impl Desktop {
             .iter()
             .copied()
             .chain(placement.floats.iter().map(|f| (f.pane, f.inner)));
+        let mut resized = Vec::new();
         for (id, rect) in rects {
             let Some(pane) = self.panes.get_mut(&id) else {
                 continue;
@@ -4083,7 +4158,11 @@ impl Desktop {
                 if let Err(e) = pty.resize(cols, rows, self.cell_px) {
                     tracing::warn!("resize of pane {id} failed: {e}");
                 }
+                resized.push((id, cols, rows));
             }
+        }
+        for (id, cols, rows) in resized {
+            self.record_resize(id, cols, rows);
         }
     }
 
@@ -4129,6 +4208,8 @@ impl Desktop {
             .active()
             .minimized()
             .into_iter()
+            // The hidden drop-down terminal is not a minimized window.
+            .filter(|p| !self.is_quick(*p))
             .map(|p| {
                 (
                     p,
@@ -4160,6 +4241,7 @@ impl Desktop {
                 .map(|p| (p.label.as_str(), p.input.as_str())),
             start_button: true,
             pointer: self.status_pointer(),
+            sync: !self.sync.is_empty(),
         }
     }
 
@@ -4295,6 +4377,10 @@ impl Desktop {
                 .map(|p| p.id)
                 .collect();
             let ring_style = Style::new().fg(theme.colors.warn);
+            // Panes typed into at once are ringed in the accent (D-120).
+            let synced = self.sync.clone();
+            let sync_style = Style::new().fg(theme.colors.accent);
+            let recording: Vec<PaneId> = self.recordings.keys().copied().collect();
             compose(
                 grid,
                 &placement,
@@ -4302,7 +4388,12 @@ impl Desktop {
                 theme,
                 &opts,
                 &|p| titles.get(&p).cloned().unwrap_or_default(),
-                &|p| waiting.contains(&p).then_some(ring_style),
+                &|p| {
+                    waiting
+                        .contains(&p)
+                        .then_some(ring_style)
+                        .or_else(|| (synced.len() > 1 && synced.contains(&p)).then_some(sync_style))
+                },
                 &mut |id, rect, g| {
                     let Some(pane) = panes.get_mut(&id) else {
                         return;
@@ -4316,8 +4407,7 @@ impl Desktop {
                             }
                             // The link under the pointer, and hint mode's
                             // labels (D-118).
-                            if let Some((_, cells)) =
-                                link_hover.as_ref().filter(|(p, _)| *p == id)
+                            if let Some((_, cells)) = link_hover.as_ref().filter(|(p, _)| *p == id)
                             {
                                 for &(row, x0, x1) in cells {
                                     if row < rect.h && x0 < rect.w {
@@ -4403,6 +4493,14 @@ impl Desktop {
                     // A badge at the top right of a pane that waits for
                     // the user (D-115): it shows where a ring cannot (a
                     // pane alone in its workspace).
+                    if recording.contains(&id) {
+                        let label = " \u{25cf} REC ";
+                        let style = Style::new()
+                            .fg(theme.colors.status_bg)
+                            .bg(theme.colors.error)
+                            .attrs(termos_render::cell::Attrs::BOLD);
+                        g.put_str(rect.x, rect.y, label, style, rect.right());
+                    }
                     if needs_you {
                         let label = " \u{25cf} needs you ";
                         let w = u16::try_from(label.chars().count()).unwrap_or(u16::MAX);

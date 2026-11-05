@@ -271,10 +271,9 @@ fn ctrl_click_opens_a_link_on_the_clients_machine() {
         &bin.path().join(opener),
         &format!("#!/bin/sh\nprintf '%s' \"$1\" > '{}'\n", opened.display()),
     );
-    let path = std::env::join_paths(
-        std::iter::once(bin.path().to_owned())
-            .chain(std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())),
-    )
+    let path = std::env::join_paths(std::iter::once(bin.path().to_owned()).chain(
+        std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
+    ))
     .expect("a PATH");
     let env = common::Env::with_vars("", vec![("PATH", std::path::PathBuf::from(path))]);
     let mut t = Termos::start_in(env);
@@ -282,7 +281,8 @@ fn ctrl_click_opens_a_link_on_the_clients_machine() {
     // The address is whole only in the output.
     t.send(b"printf '%s\\n' 'https://example.com/do''cs'\r");
     let screen = t.wait_for("the address", T, |s| {
-        s.lines().any(|l| l.trim_end() == "https://example.com/docs")
+        s.lines()
+            .any(|l| l.trim_end() == "https://example.com/docs")
     });
     let y = screen
         .lines()
@@ -309,4 +309,3 @@ fn ctrl_click_opens_a_link_on_the_clients_machine() {
     t.send(b"\x02d");
     t.wait_exit(T);
 }
-

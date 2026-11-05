@@ -242,7 +242,9 @@ impl Desktop {
             || "a command".to_owned(),
             |c| format!("`{}`", attention::short(c, COMMAND_CHARS)),
         );
-        let after = ran.map(|d| format!(" after {}", took(d))).unwrap_or_default();
+        let after = ran
+            .map(|d| format!(" after {}", took(d)))
+            .unwrap_or_default();
         let failed = exit.is_some_and(|e| e != 0);
         let text = match exit {
             Some(code) if code != 0 => format!("{what} in {place} failed ({code}){after}"),

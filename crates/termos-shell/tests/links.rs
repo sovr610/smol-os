@@ -165,7 +165,8 @@ async fn ctrl_click_and_hints_open_and_copy_links() {
         common::echo_split("https://example.com/a", "bc")
     ));
     h.wait_for("the address", |s, _| {
-        s.lines().any(|l| l.trim_end().ends_with("https://example.com/abc"))
+        s.lines()
+            .any(|l| l.trim_end().ends_with("https://example.com/abc"))
     })
     .await;
     // The output's address, not the command line's.
@@ -253,7 +254,10 @@ async fn the_search_lands_on_the_match_in_copy_mode() {
     assert_eq!(panes.len(), 3);
     for (i, id) in panes.iter().enumerate() {
         h.desktop
-            .send_text(Some(*id), &format!("{}\n", common::echo_split("word", &format!("-{i}x"))))
+            .send_text(
+                Some(*id),
+                &format!("{}\n", common::echo_split("word", &format!("-{i}x"))),
+            )
             .expect("a terminal");
     }
     h.wait_for("every pane's output", |s, _| {
@@ -310,8 +314,7 @@ async fn long_commands_say_so_where_no_one_looks() {
         Caps::default(),
     );
     h.wait_for("a prompt", |s, _| {
-        s.lines()
-            .any(|l| l.trim_end().ends_with(['$', '#']))
+        s.lines().any(|l| l.trim_end().ends_with(['$', '#']))
     })
     .await;
     let ends = |text: &str, d: &Desktop| d.toast().is_some_and(|t| t.contains(text));
@@ -326,7 +329,9 @@ async fn long_commands_say_so_where_no_one_looks() {
     let status = screen.lines().last().unwrap_or_default().to_owned();
     assert!(status.contains('\u{2713}'), "{status}");
     assert!(
-        !h.outbox.iter().any(|m| matches!(m, ServerMsg::Notify { .. })),
+        !h.outbox
+            .iter()
+            .any(|m| matches!(m, ServerMsg::Notify { .. })),
         "a success is quiet"
     );
     // Seen: the tick goes.
@@ -370,7 +375,8 @@ async fn without_integration_quiet_means_done() {
     h.type_text("echo started\n");
     let started = Instant::now();
     h.wait_for("the quiet pane", |_, d| {
-        d.toast().is_some_and(|t| t.contains("has been quiet for 5s"))
+        d.toast()
+            .is_some_and(|t| t.contains("has been quiet for 5s"))
     })
     .await;
     assert!(started.elapsed() >= Duration::from_secs(4));

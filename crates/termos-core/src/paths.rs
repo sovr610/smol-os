@@ -131,6 +131,21 @@ impl Paths {
     pub fn plugins_dir(&self) -> PathBuf {
         self.config_dir.join("plugins")
     }
+
+    /// The user's layout files, `NAME.toml` each (D-120).
+    pub fn layouts_dir(&self) -> PathBuf {
+        self.config_dir.join("layouts")
+    }
+
+    /// Pane recordings (asciinema `.cast` files, D-120).
+    pub fn recordings_dir(&self) -> PathBuf {
+        self.state_dir.join("recordings")
+    }
+
+    /// The SSH hosts opened lately, newest first (D-120).
+    pub fn ssh_recent_file(&self) -> PathBuf {
+        self.state_dir.join("ssh-recent")
+    }
 }
 
 /// FNV-1a, 64 bits: a hash that never changes between Rust versions (so

@@ -1423,6 +1423,57 @@ rewrite history.
 
 ---
 
+## D-119: M13b owner answers: TermOS's TOML layouts, prefix ` for the drop-down, recordings of output only
+- **Status:** Accepted · 2026-11-05
+- **Context:** M13b's "Ask first" questions (D-117, docs/plans/m13-os.md).
+- **Decision:** the plan's answers, chosen by the owner:
+  - **Layout files** are TermOS's own TOML, like the rest of its settings, not Zellij's KDL.
+  - **The drop-down terminal** opens with prefix `` ` ``; `[quick] key` can add a key without the prefix, none by default.
+  - **Recordings** hold output only, never input. Echoed input is output, and the docs say so.
+- **Alternatives:** KDL (compatible with Zellij, but a second format and parser); F12 without the prefix (taken from every program); input recorded behind a setting (passwords typed at prompts would land in files).
+
+---
+
+## D-120: Layouts and workspace tools
+- **Status:** Accepted · 2026-11-05
+- **Context:** M13b (D-117) with D-119's answers.
+- **Decision:**
+  - **Layout files (`termos_core::layouts`):**
+    - **Where:** `layouts/NAME.toml` in the config folder (its tables at the top), or `[layout.NAME]` in a project's `termos.toml` found from the folder up; the project's comes first. Names are letters, digits, `-`, `_` and `.`.
+    - **The format:** `workspace` (a tab name, or `[[workspace]]` tables for several), `cwd`, and `[[pane]]`s. Each pane after the first is split from the one before, or from `of` (1-based), with `split = right | down | float`, `size = "N%"` (its share of the room it splits with that pane), `command`, `exec`, `cwd`, `name` and `focus`.
+    - **Checks:** TOML errors carry the file, line and column; others name the pane (a split first pane, an `of` that names no pane before, a bad size, `exec` without a command, two focused panes). At most 16 workspaces and 32 panes each. Fuzzed as `layout_parse` (parsed layouts write out and read back the same).
+    - **Opening (`layout.open NAME [DIR]`, `termos layout open`):** one function (`Desktop::build_workspace`) builds every workspace, and worktree workspaces (D-114) use it too as the built-in `worktree` layout, so they cannot drift apart. Commands are typed into the pane's shell; `exec` runs one through the shell as the pane's program. The share comes from the new `termos_wm::layout::Layout::set_share`.
+    - **Saving (`layout.save NAME`, `termos layout save`):** the active workspace's tiling tree becomes panes split one from another, in the order they reopen (each split's children after its first are split from the one before, with the share of the room left), then its floats. Folders relative to the first pane's, names, the focus, and the programs on `[session] restore-programs` as commands; other programs are named in a comment only, as snapshots do (D-033), and app windows become shells.
+    - `termos layout list|edit` read and edit the files.
+  - **The drop-down terminal (`quick.toggle`, prefix `` ` ``):** one shell per session, a float as wide as the screen and `[quick] height` (default 40%) tall from the top.
+    - **Hiding** minimizes it (left out of the status line's minimized windows) and gives the focus back to the pane that had it.
+    - **Showing** it on another workspace moves it there.
+    - **Saved:** sessions save which pane it is (`SessionSnapshot::quick`).
+    - **Animation:** it opens with the floats' animation, not a slide (a new animation was not worth it).
+  - **Typing into several panes:** one set of panes per session. `workspace.sync` (prefix `S`) fills it with the workspace's terminal panes, or empties it; `pane.sync` adds or removes the focused pane.
+    - **What goes to them:** keys and pastes into a pane of the set go to the others too, each encoded for its own program's modes, through `write_to_pane` (which also answers a waiting pane). Mouse events and app windows never.
+    - **What shows:** a `SYNC` badge and an accent ring on the set's panes.
+  - **Saved commands (`termos_core::snippets`):** `[[snippets]]` in the config and in a project's `termos.toml` (`name`, `command`, `run`, `where = pane | new-pane | float`).
+    - **Parameters:** `{param}` and `{param:default}` are asked for one at a time in the status-line prompt (`PromptKind::SnippetParam`), the default typed in; `{{` and `}}` are braces.
+    - **Typing:** the line is pasted (bracketed where the program asked), then Enter with `run`.
+    - **The palette** lists `snippet: NAME`; `termos snippet list|run NAME [k=v…]` types into the calling pane through `pane.send-text`.
+  - **SSH hosts (`termos_core::ssh_config`):** `Host` names in `~/.ssh/config` and its `Include`s (globbed, at most 8 deep, each file once), leaving out patterns and `Match` blocks.
+    - **Where:** an SSH submenu in the TermOS menu and `ssh.open HOST` in the palette, recent hosts first (`<state>/ssh-recent`).
+    - **Running:** each runs the user's own `ssh HOST` in a new pane, the host checked first: no option, no spaces. Fuzzed as `ssh_config`.
+  - **Recording (`pane.record`, prefix `R`, `termos_core::cast`):** asciinema v2.
+    - **What is written:** a header, `[t, "o", text]` for output (a UTF-8 sequence cut between reads waits for its end) and `[t, "r", "COLSxROWS"]` for resizes.
+    - **Where:** in `[record] dir` or `<state>/recordings/`, the folder 0700 and the file 0600.
+    - **While it runs:** `● REC` on the pane; the toast names the file when it stops.
+    - **Playing:** `termos play FILE [--speed N] [--idle-limit S]` plays one to its terminal at the recorded times.
+  - **Keys:** prefix `` ` `` (`quick.toggle`), `S` (`workspace.sync`) and `R` (`pane.record`). The pane menu has "Type here with the others" and "Record this pane", and the TermOS menu has "Drop-down terminal" and SSH.
+- **Alternatives:**
+  - **Saving layouts as snapshots' JSON:** exact, but not a file people write.
+  - **A slide-in animation:** deferred.
+  - **Sync per workspace:** one set per session is simpler and covers `pane.sync` across workspaces.
+  - **Snippets' parameters in a form window:** the prompt is what renames already use.
+
+---
+
 ## Open questions (the owner will be asked before the milestone that needs each one)
 
 | ID | Question | Needed by | Current lean |
