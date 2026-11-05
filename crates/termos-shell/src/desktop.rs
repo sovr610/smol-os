@@ -90,6 +90,37 @@ pub struct AgentWindow {
     pub account: Option<String>,
 }
 
+/// An agent CLI's arguments to start with `prompt` as its first message
+/// (empty: it has no such argument).
+fn first_prompt_args(preset: &str, prompt: &str) -> Vec<String> {
+    match preset {
+        "claude" | "codex" => vec![prompt.to_owned()],
+        "gemini" => vec!["--prompt-interactive".to_owned(), prompt.to_owned()],
+        _ => Vec::new(),
+    }
+}
+
+/// `termos agent external` for `preset`, and the window's title.
+fn agent_window_args(
+    preset: &str,
+    account: Option<&str>,
+    resume_from: Option<&str>,
+) -> (Vec<String>, String) {
+    let mut args = vec!["agent".to_owned(), "external".to_owned()];
+    if let Some(a) = account {
+        args.extend(["--account".to_owned(), a.to_owned()]);
+    }
+    if let Some(from) = resume_from {
+        args.extend(["--resume-from".to_owned(), from.to_owned()]);
+    }
+    args.push(preset.to_owned());
+    let title = match account {
+        Some(a) if a != "default" => format!("agent: {preset} ({a})"),
+        _ => format!("agent: {preset}"),
+    };
+    (args, title)
+}
+
 impl Pane {
     /// A short name: the one given, else the foreground program (Linux),
     /// else the title, else the app title.
@@ -1046,6 +1077,17 @@ impl Desktop {
             ("TERMOS_PANE".into(), id.to_string()),
         ];
         spec.env.extend(self.opts.pane_env.iter().cloned());
+        // A pane in a worktree gets its name, branch and ports (D-114).
+        if let (Some(launcher), Some(dir)) = (self.opts.launcher.clone(), spec.cwd.clone()) {
+            let ctx = termos_core::app::LaunchContext {
+                config: &self.config,
+                paths: &self.opts.paths,
+                cwd: Some(&dir),
+                socket: self.opts.server_socket.as_deref(),
+                session: &self.session.name,
+            };
+            spec.env.extend(launcher.worktree_env(&dir, &ctx));
+        }
         let pty = PtyPane::spawn(id, &spec, self.pty_tx.clone())?;
         let mut vt: Box<dyn VtBackend> = Box::new(AlacrittyVt::new(w, h, self.config.scrollback));
         vt.set_default_colors(self.term_colors.0, self.term_colors.1);
@@ -1231,13 +1273,23 @@ impl Desktop {
         kind: termos_core::app::LaunchKind,
         arg: &str,
     ) -> Result<Box<dyn App>, String> {
-        let Some(launcher) = self.opts.launcher.clone() else {
-            return Err("AI agents are not part of this build".into());
-        };
         let cwd = self
             .focused_cwd()
             .or_else(|| self.opts.cwd.clone())
             .or_else(|| std::env::current_dir().ok());
+        self.launcher_app_in(kind, arg, cwd)
+    }
+
+    /// [`Desktop::launcher_app`] for the folder `cwd`.
+    fn launcher_app_in(
+        &self,
+        kind: termos_core::app::LaunchKind,
+        arg: &str,
+        cwd: Option<PathBuf>,
+    ) -> Result<Box<dyn App>, String> {
+        let Some(launcher) = self.opts.launcher.clone() else {
+            return Err("AI agents are not part of this build".into());
+        };
         let ctx = termos_core::app::LaunchContext {
             config: &self.config,
             paths: &self.opts.paths,
@@ -1350,18 +1402,8 @@ impl Desktop {
         area: Rect,
         cwd: Option<PathBuf>,
     ) -> Option<PaneId> {
-        let mut args = vec!["agent", "external"];
-        if let Some(a) = &account {
-            args.extend(["--account", a]);
-        }
-        if let Some(from) = resume_from {
-            args.extend(["--resume-from", from]);
-        }
-        args.push(preset);
-        let title = match &account {
-            Some(a) if a != "default" => format!("agent: {preset} ({a})"),
-            _ => format!("agent: {preset}"),
-        };
+        let (args, title) = agent_window_args(preset, account.as_deref(), resume_from);
+        let args: Vec<&str> = args.iter().map(String::as_str).collect();
         let id = self.open_termos_window_in(&args, &title, area, cwd)?;
         if let Some(p) = self.panes.get_mut(&id) {
             p.agent = Some(AgentWindow {
@@ -1370,6 +1412,211 @@ impl Desktop {
             });
         }
         Some(id)
+    }
+
+    /// An agent CLI as the account in use, in a tiled pane in `cwd` (a
+    /// worktree's first pane).
+    fn spawn_agent_pane(
+        &mut self,
+        preset: &str,
+        cwd: Option<PathBuf>,
+        size: (u16, u16),
+        prompt: Option<&str>,
+    ) -> io::Result<PaneId> {
+        let account = self
+            .agent_accounts()
+            .into_iter()
+            .find(|a| a.cli == preset && a.active)
+            .map(|a| a.name);
+        let exe = self
+            .termos_exe()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no termos program"))?;
+        let (mut args, title) = agent_window_args(preset, account.as_deref(), None);
+        if let Some(p) = prompt {
+            args.extend(first_prompt_args(preset, p));
+        }
+        let id = self.spawn_pane(cwd, size, Some((exe.display().to_string(), args)))?;
+        if let Some(p) = self.panes.get_mut(&id) {
+            p.title = title;
+            p.agent = Some(AgentWindow {
+                preset: preset.to_owned(),
+                account,
+            });
+        }
+        Ok(id)
+    }
+
+    /// `worktree.open NAME`: the worktree as a workspace of its own, named
+    /// after it: its agent on the left, a shell on the right, its servers
+    /// below the shell, each in its folder with its ports (D-114). A
+    /// worktree already open is selected.
+    fn open_worktree(&mut self, name: &str, area: Rect) {
+        self.open_worktree_with(name, area, None);
+    }
+
+    /// [`Desktop::open_worktree`], its agent starting with `prompt`.
+    fn open_worktree_with(&mut self, name: &str, area: Rect, prompt: Option<&str>) {
+        let Some((launcher, cwd)) = self.launch_context() else {
+            self.notify(Level::Error, "worktrees are not part of this build");
+            return;
+        };
+        let ctx = termos_core::app::LaunchContext {
+            config: &self.config,
+            paths: &self.opts.paths,
+            cwd: cwd.as_deref(),
+            socket: self.opts.server_socket.as_deref(),
+            session: &self.session.name,
+        };
+        let layout = match launcher.worktree(name, &ctx) {
+            Ok(l) => l,
+            Err(e) => {
+                self.notify(Level::Error, e);
+                return;
+            }
+        };
+        if let Some(idx) = self
+            .session
+            .workspaces
+            .iter()
+            .position(|w| w.name == layout.name)
+        {
+            self.session.select(idx);
+            return;
+        }
+        let dir = Some(layout.path.clone());
+        let half = (area.w / 2, area.h);
+        let first = match layout.agent.as_deref() {
+            // TermOS's own agent: a window, working in the worktree.
+            Some("termos") => self
+                .launcher_app_in(termos_core::app::LaunchKind::Agent, "", dir.clone())
+                .map(|app| self.open_app(app))
+                .map_err(io::Error::other),
+            Some(preset) => self.spawn_agent_pane(preset, dir.clone(), half, prompt),
+            None => self.spawn_term(dir.clone(), half),
+        };
+        let first = match first {
+            Ok(id) => id,
+            Err(e) => {
+                self.notify(Level::Error, format!("cannot open {}: {e}", layout.name));
+                return;
+            }
+        };
+        let mut ws = Workspace::new(layout.name.clone(), first);
+        // Named after the worktree for good (found by that name again).
+        ws.auto_name = false;
+        if let Ok(shell) = self.spawn_term(dir.clone(), half)
+            && !ws.add_split(shell, SplitHow::Right, area)
+        {
+            self.close_pane(shell);
+        }
+        for cmd in &layout.servers {
+            let Ok(id) = self.spawn_term(dir.clone(), (area.w / 2, area.h / 2)) else {
+                continue;
+            };
+            if ws.add_split(id, SplitHow::Down, area) {
+                // Typed into a shell, so it can be run again after it stops.
+                let _ = self.send_text(Some(id), &format!("{cmd}\r"));
+            } else {
+                self.close_pane(id);
+                self.notify(
+                    Level::Warn,
+                    format!("no room for `{cmd}`; start it yourself"),
+                );
+            }
+        }
+        ws.set_focus(first);
+        self.session.add(ws);
+    }
+
+    /// A review's comments for the agent of a worktree (D-114): pasted into
+    /// its agent pane and sent, or, with none running, the first prompt of
+    /// a new one there (in the worktree's workspace, opened if need be).
+    fn tell_agent(&mut self, worktree: &str, dir: &std::path::Path, text: &str) {
+        let area = self.layout_area();
+        let in_workspace: Vec<PaneId> = self
+            .session
+            .workspaces
+            .iter()
+            .filter(|w| w.name == worktree)
+            .flat_map(Workspace::panes)
+            .collect();
+        let is_agent = |p: &Pane| p.agent.is_some() && matches!(p.kind, PaneKind::Term { .. });
+        let cwd_of = |p: &Pane| match &p.kind {
+            PaneKind::Term { pty, .. } => p.cwd.clone().or_else(|| pty.foreground_cwd()),
+            PaneKind::App(_) => None,
+        };
+        let running = in_workspace
+            .into_iter()
+            .find(|id| self.panes.get(id).is_some_and(is_agent))
+            .or_else(|| {
+                self.panes
+                    .iter()
+                    .find(|(_, p)| is_agent(p) && cwd_of(p).is_some_and(|c| c.starts_with(dir)))
+                    .map(|(id, _)| *id)
+            });
+        if let Some(id) = running {
+            let bytes = match self.panes.get(&id).map(|p| &p.kind) {
+                Some(PaneKind::Term { vt, .. }) => encode_paste(text, &vt.modes()),
+                _ => return,
+            };
+            self.write_to_pane(id, bytes);
+            self.write_to_pane(id, b"\r".to_vec());
+            if let Some(w) = self.session.find(id) {
+                self.session.select(w);
+                self.session.active_mut().set_focus(id);
+            }
+            self.notify(
+                Level::Info,
+                format!("sent the review to {worktree}'s agent"),
+            );
+            return;
+        }
+        // None running: one with the comments as its first message.
+        let agent = self.launch_context().and_then(|(launcher, cwd)| {
+            let ctx = termos_core::app::LaunchContext {
+                config: &self.config,
+                paths: &self.opts.paths,
+                cwd: cwd.as_deref(),
+                socket: self.opts.server_socket.as_deref(),
+                session: &self.session.name,
+            };
+            launcher.worktree(worktree, &ctx).ok()?.agent
+        });
+        let Some(preset) = agent.filter(|a| !first_prompt_args(a, "").is_empty()) else {
+            self.copy_text(text.to_owned(), ClipSource::App("review".into()));
+            self.notify(
+                Level::Info,
+                "no agent CLI for this worktree: the comments are on the clipboard to paste",
+            );
+            return;
+        };
+        if let Some(w) = self
+            .session
+            .workspaces
+            .iter()
+            .position(|w| w.name == worktree)
+        {
+            self.session.select(w);
+            match self.spawn_agent_pane(
+                &preset,
+                Some(dir.to_owned()),
+                (area.w / 2, area.h),
+                Some(text),
+            ) {
+                Ok(id) => {
+                    if !self
+                        .session
+                        .active_mut()
+                        .add_split(id, SplitHow::Auto, area)
+                    {
+                        self.session.active_mut().add_float(id, area);
+                    }
+                }
+                Err(e) => self.notify(Level::Error, format!("cannot start {preset}: {e}")),
+            }
+        } else {
+            self.open_worktree_with(worktree, area, Some(text));
+        }
     }
 
     /// `agent.swap ACCOUNT`: the focused agent window continues its
@@ -2086,6 +2333,15 @@ impl Desktop {
                 self.close_pane(id);
                 self.on_paste(&text);
             }
+            AppEffect::TellAgent {
+                worktree,
+                dir,
+                text,
+            } => {
+                // The review is done; the agent's pane is what to watch now.
+                self.close_pane(id);
+                self.tell_agent(&worktree, &dir, &text);
+            }
         }
     }
 
@@ -2477,6 +2733,41 @@ impl Desktop {
             }
             Command::DevrootEnter => {
                 self.open_termos_window(&["devroot", "enter"], "dev rootfs", area);
+            }
+            Command::WorktreeNew(title) => {
+                let mut args = vec!["worktree", "new", "--open"];
+                if !title.is_empty() {
+                    args.extend(["--title", title.as_str()]);
+                }
+                self.open_termos_window(&args, "new worktree", area);
+            }
+            Command::WorktreeOpen(name) => self.open_worktree(&name, area),
+            Command::WorktreeReview(name) => {
+                // A review of it already open comes forward instead.
+                let open = (!name.is_empty())
+                    .then(|| format!("worktree.review {name}"))
+                    .and_then(|want| {
+                        self.panes.iter().find_map(|(id, p)| match &p.kind {
+                            PaneKind::App(app)
+                                if app.reopen().as_deref() == Some(want.as_str()) =>
+                            {
+                                Some(*id)
+                            }
+                            _ => None,
+                        })
+                    });
+                match open.and_then(|id| Some((id, self.session.find(id)?))) {
+                    Some((id, w)) => {
+                        self.session.select(w);
+                        self.session.active_mut().set_focus(id);
+                    }
+                    None => self.launch(termos_core::app::LaunchKind::WorktreeReview, &name),
+                }
+            }
+            Command::WorktreeRun(rest) => {
+                let mut args = vec!["worktree", "--wait"];
+                args.extend(rest.split_whitespace());
+                self.open_termos_window(&args, &format!("worktree {rest}"), area);
             }
             Command::AgentExternal(name) => self.open_external_agent(&name, area),
             Command::AgentInstall(name) => {

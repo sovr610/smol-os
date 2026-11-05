@@ -127,38 +127,42 @@ pub(crate) fn worktree_command(
             no_setup,
             open,
         } => {
-            let repo = Repo::find(&cwd)?;
-            let wt = store.create(
-                &repo,
-                &NewWorktree {
-                    name: name.clone(),
-                    from: from.clone(),
-                    branch: branch.clone(),
-                    title: title.clone().unwrap_or_default(),
-                    origin: String::new(),
-                    ports: !no_ports,
-                },
-            )?;
-            println!(
-                "termos: worktree {} on {} (from {}) in {}",
-                wt.name,
-                wt.branch,
-                short(&wt.base),
-                wt.path.display()
-            );
-            if let Some((first, count)) = wt.ports {
+            let made = (|| -> anyhow::Result<()> {
+                let repo = Repo::find(&cwd)?;
+                let wt = store.create(
+                    &repo,
+                    &NewWorktree {
+                        name: name.clone(),
+                        from: from.clone(),
+                        branch: branch.clone(),
+                        title: title.clone().unwrap_or_default(),
+                        origin: String::new(),
+                        ports: !no_ports,
+                    },
+                )?;
                 println!(
-                    "termos: ports {first}-{} (PORT={first})",
-                    first + count.saturating_sub(1)
+                    "termos: worktree {} on {} (from {}) in {}",
+                    wt.name,
+                    wt.branch,
+                    short(&wt.base),
+                    wt.path.display()
                 );
-            }
-            if !no_setup {
-                set_up(&store, &wt)?;
-            }
-            if *open {
-                open_in_termos(&wt)?;
-            }
-            Ok(ExitCode::SUCCESS)
+                if let Some((first, count)) = wt.ports {
+                    println!(
+                        "termos: ports {first}-{} (PORT={first})",
+                        first + count.saturating_sub(1)
+                    );
+                }
+                if !no_setup {
+                    set_up(&store, &wt)?;
+                }
+                if *open {
+                    open_in_termos(&wt)?;
+                }
+                Ok(())
+            })();
+            // Made for a TermOS window: keep it open on a problem.
+            crate::agents::pause(*open && made.is_err(), made.map(|()| ExitCode::SUCCESS))
         }
         WorktreeCmd::List { all, everywhere } => {
             list(&store, &cwd, *all, *everywhere)?;

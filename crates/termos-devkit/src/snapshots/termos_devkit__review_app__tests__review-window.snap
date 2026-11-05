@@ -1,0 +1,18 @@
+---
+source: crates/termos-devkit/src/review_app.rs
+expression: "render(&mut a, 100, 14)"
+---
+ fix-login  termos/fix-login → main  ports 20010-20019   1 commit, changes not committed, +3 -1
+ [Send to agent] [Commit] [Merge] [Pull request] [Archive] [Discard] [Open]
+M src/login.rs             +1 -1 │ diff --git a/src/login.rs b/src/login.rs
+? notes.md                 +2 -0 │ --- a/src/login.rs
+                                 │ +++ b/src/login.rs
+                                 │ @@ -1,3 +1,3 @@
+                                 │    1    1   fn login() {
+                                 │    2      -     check(user)
+                                 │         2 +     check(user, password)
+                                 │    3    3   }
+                                 │
+                                 │
+
+ ↑↓ move · Tab files/diff · c comment · s send to agent · C commit · m merge · p pull request · d d

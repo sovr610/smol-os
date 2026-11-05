@@ -41,6 +41,14 @@ pub enum AppEffect {
     /// Close the app's window, then paste text into the pane that gets
     /// the focus (as if typed with bracketed paste).
     PasteAndClose(String),
+    /// Text for the agent working in a worktree (`dir`): typed into its
+    /// agent pane as its next message, or, with none running, given to a
+    /// new one there as its first (D-114).
+    TellAgent {
+        worktree: String,
+        dir: std::path::PathBuf,
+        text: String,
+    },
 }
 
 /// An image an app shows. The desktop draws it for each client the best
@@ -184,6 +192,36 @@ pub trait Launcher: Send + Sync {
     ) -> Result<String, String> {
         Err(format!("{cli} has no accounts here"))
     }
+
+    /// The worktree `name` (empty: the one `ctx.cwd` is in) as a workspace
+    /// is laid out (D-114).
+    fn worktree(&self, name: &str, _ctx: &LaunchContext<'_>) -> Result<WorktreeLayout, String> {
+        let _ = name;
+        Err("worktrees are not part of this build".into())
+    }
+
+    /// What a new pane in `dir` gets when `dir` is in a worktree: its
+    /// name, branch and ports (D-114). Empty elsewhere.
+    fn worktree_env(
+        &self,
+        _dir: &std::path::Path,
+        _ctx: &LaunchContext<'_>,
+    ) -> Vec<(String, String)> {
+        Vec::new()
+    }
+}
+
+/// A worktree opened as a workspace (D-114).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorktreeLayout {
+    pub name: String,
+    pub path: std::path::PathBuf,
+    /// The agent in its first pane: an agent CLI (`claude`, `codex`,
+    /// `gemini`, run as the account in use) or `termos` (TermOS's agent);
+    /// `None`: no agent pane.
+    pub agent: Option<String>,
+    /// Commands each started in a shell pane of their own.
+    pub servers: Vec<String>,
 }
 
 /// An account of an agent CLI (Claude Code, Codex), for the menus.
@@ -226,6 +264,8 @@ pub enum LaunchKind {
     /// The package manager: mise, the dev rootfs, the host, Podman
     /// (`packages.open`, D-110).
     Packages,
+    /// A worktree's review window (`worktree.review [name]`, D-114).
+    WorktreeReview,
 }
 
 /// What the desktop knows when it opens a launched window.

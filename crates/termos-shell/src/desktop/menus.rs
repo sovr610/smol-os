@@ -51,6 +51,14 @@ impl Desktop {
     pub(super) fn start_entries(&self) -> Vec<Entry> {
         let mut agents = vec![
             Entry::item("Harness: plan a goal", Command::HarnessOpen(String::new())),
+            Entry::item(
+                "New worktree for a task",
+                Command::WorktreeNew(String::new()),
+            ),
+            Entry::item(
+                "Review this worktree",
+                Command::WorktreeReview(String::new()),
+            ),
             Entry::item("New conversation", Command::AgentOpen(String::new())),
             Entry::item("Resume a conversation", Command::AgentResume(String::new())),
             Entry::item("Audit logs", Command::AuditOpen(String::new())),

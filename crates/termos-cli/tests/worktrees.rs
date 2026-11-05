@@ -280,3 +280,185 @@ fn pull_requests_go_through_gh_or_the_forge_page() {
         "{out}"
     );
 }
+
+/// In the desktop: a worktree opens as a workspace named after it, its
+/// server started and every pane there given its ports; its review window
+/// lists what changed.
+#[cfg(unix)]
+#[test]
+fn a_worktree_opens_as_a_workspace_with_its_ports() {
+    use std::time::Duration;
+    const T: Duration = Duration::from_secs(30);
+    let env = common::Env::new(&format!("{CONFIG}agent = \"none\"\n"));
+    let root = project(&env);
+    std::fs::write(
+        root.join("termos.toml"),
+        "[worktree]\nservers = \"echo serving-on-$PORT\"\n",
+    )
+    .expect("write");
+    git(&root, &["commit", "-qam", "servers"]);
+    run(&env, &root, &["worktree", "new", "wt1", "--no-setup"]);
+    let port = run(&env, &root, &["worktree", "env", "wt1"])
+        .lines()
+        .find_map(|l| l.strip_prefix("PORT=").map(str::to_owned))
+        .expect("PORT");
+
+    let t = common::Termos::start_in(std::sync::Arc::clone(&env));
+    t.wait_ready();
+    assert!(
+        env.run(&["msg", "worktree.open", r#"{"arg": "wt1"}"#])
+            .status
+            .success()
+    );
+    t.wait_for("its server, with its port", T, |s| {
+        s.contains(&format!("serving-on-{port}")) && s.contains("wt1")
+    });
+    // The shell beside it has the ports too.
+    t.send(b"echo shell-port-$TERMOS_PORT_0\r");
+    t.wait_for("the shell's port", T, |s| {
+        s.contains(&format!("shell-port-{port}"))
+    });
+    // Opening it again selects it rather than making another.
+    assert!(
+        env.run(&["msg", "worktree.open", r#"{"arg": "wt1"}"#])
+            .status
+            .success()
+    );
+    let tabs = t.screen().lines().last().unwrap_or_default().to_owned();
+    assert_eq!(tabs.matches("wt1").count(), 1, "{tabs}");
+
+    // A change, then its review.
+    let wt = run(&env, &root, &["worktree", "status", "wt1"])
+        .lines()
+        .nth(1)
+        .expect("its folder")
+        .trim()
+        .to_owned();
+    std::fs::write(PathBuf::from(wt).join("a.txt"), "one\nreviewed\n").expect("write");
+    assert!(
+        env.run(&["msg", "worktree.review", r#"{"arg": "wt1"}"#])
+            .status
+            .success()
+    );
+    t.wait_for("the review window", T, |s| {
+        s.contains("Review: wt1") && s.contains("M a.txt") && s.contains("+ reviewed")
+    });
+}
+
+/// Review comments reach the worktree's agent: typed into its pane while
+/// it runs, else its first message when a new one starts there.
+#[cfg(unix)]
+#[test]
+fn review_comments_reach_the_agent() {
+    use std::os::unix::fs::PermissionsExt as _;
+    use std::time::Duration;
+    const T: Duration = Duration::from_secs(30);
+    let bin = tempfile::tempdir().expect("tempdir");
+    let heard = bin.path().join("heard");
+    let claude = bin.path().join("claude");
+    std::fs::write(
+        &claude,
+        format!(
+            "#!/bin/sh\necho \"started: $*\" >> '{h}'\necho stand-in claude\nwhile IFS= read -r line; do echo \"heard: $line\" >> '{h}'; done\n",
+            h = heard.display()
+        ),
+    )
+    .expect("write");
+    std::fs::set_permissions(&claude, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+    let path = std::env::join_paths(std::iter::once(bin.path().to_owned()).chain(
+        std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
+    ))
+    .expect("PATH");
+    let env = common::Env::with_vars(
+        &format!("{CONFIG}agent = \"claude\"\n[agents.skills]\ninstall = false\n"),
+        vec![("PATH", path.into())],
+    );
+    let root = project(&env);
+    run(&env, &root, &["worktree", "new", "wt2", "--no-setup"]);
+    let wt = run(&env, &root, &["worktree", "status", "wt2"])
+        .lines()
+        .nth(1)
+        .expect("its folder")
+        .trim()
+        .to_owned();
+    std::fs::write(PathBuf::from(&wt).join("a.txt"), "one\nchanged\n").expect("write");
+    let log = || std::fs::read_to_string(&heard).unwrap_or_default();
+    let wait = |what: &str, ok: &dyn Fn(&str) -> bool| {
+        let end = std::time::Instant::now() + T;
+        while !ok(&log()) {
+            assert!(
+                std::time::Instant::now() < end,
+                "timed out waiting for {what}: {}",
+                log()
+            );
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    };
+
+    let t = common::Termos::start_in(std::sync::Arc::clone(&env));
+    t.wait_ready();
+    assert!(
+        env.run(&["msg", "worktree.open", r#"{"arg": "wt2"}"#])
+            .status
+            .success()
+    );
+    t.wait_for("the agent", T, |s| s.contains("stand-in claude"));
+    wait("the agent's start", &|l| l.starts_with("started: "));
+
+    // A comment on the changed file, sent: typed into the running agent.
+    let comment = |t: &common::Termos, text: &str| {
+        assert!(
+            env.run(&["msg", "worktree.review", r#"{"arg": "wt2"}"#])
+                .status
+                .success()
+        );
+        t.wait_for("the review", T, |s| {
+            s.contains("Review: wt2") && s.contains("M a.txt")
+        });
+        t.send(b"c");
+
+        t.wait_for("the comment line", T, |s| s.contains("Comment on a.txt"));
+        t.send(text.as_bytes());
+        t.send(b"\r");
+        t.wait_for("the comment", T, |s| s.contains("[Send to agent (1)]"));
+        t.send(b"s");
+    };
+    comment(&t, "please keep it short");
+    t.wait_for("the review closed", T, |s| !s.contains("Review: wt2"));
+    wait("the comment in the agent", &|l| {
+        l.contains("heard: Review comments on your changes in this worktree (branch termos/wt2):")
+            && l.contains("heard: - a.txt: please keep it short")
+    });
+
+    // No agent running: a new one there starts with them.
+    let panes = env.run(&["msg", "pane.list"]);
+    let list: serde_json::Value = serde_json::from_slice(&panes.stdout).expect("json");
+    let agent = list
+        .as_array()
+        .into_iter()
+        .flatten()
+        .chain(
+            list.get("panes")
+                .and_then(|p| p.as_array())
+                .into_iter()
+                .flatten(),
+        )
+        .find(|p| {
+            p["title"]
+                .as_str()
+                .is_some_and(|t| t.starts_with("agent: claude"))
+        })
+        .and_then(|p| p["id"].as_u64())
+        .unwrap_or_else(|| panic!("no agent pane in {list}"));
+    assert!(
+        env.run(&["msg", "pane.kill", &format!(r#"{{"pane": {agent}}}"#)])
+            .status
+            .success()
+    );
+    comment(&t, "and add a test");
+    wait("a new agent with them", &|l| {
+        l.rsplit("started: ").next().is_some_and(|last| {
+            last.starts_with("Review comments") && last.contains("- a.txt: and add a test")
+        })
+    });
+}

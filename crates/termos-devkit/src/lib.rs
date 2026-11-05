@@ -17,8 +17,8 @@
 //! - [`devroot`]: the dev rootfs, Debian 13 entered without root (D-110);
 //! - [`packages`], [`packages_app`]: packages from mise, the dev rootfs,
 //!   the host and Podman, and the package manager app (D-110);
-//! - [`worktrees`]: a git worktree per task, with its ports and setup
-//!   (D-114).
+//! - [`worktrees`], [`review_app`]: a git worktree per task, with its
+//!   ports and setup, and its review window (D-114).
 
 pub mod accounts;
 pub mod check;
@@ -31,6 +31,7 @@ pub mod langs;
 pub mod mise;
 pub mod packages;
 pub mod packages_app;
+pub mod review_app;
 pub mod skills;
 pub mod tasks;
 pub mod templates;

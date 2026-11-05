@@ -142,7 +142,11 @@ fn command_icon(c: &Command) -> Option<Icon> {
         Command::Task(t) if t == "build" => Icon::Build,
         Command::Task(t) if t == "test" => Icon::Test,
         Command::Task(_) => Icon::Run,
-        Command::GitOpen => Icon::Git,
+        Command::GitOpen
+        | Command::WorktreeNew(_)
+        | Command::WorktreeOpen(_)
+        | Command::WorktreeReview(_)
+        | Command::WorktreeRun(_) => Icon::Git,
         Command::ClipboardOpen => Icon::Clipboard,
         Command::AgentOpen(_)
         | Command::AgentResume(_)

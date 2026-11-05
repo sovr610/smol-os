@@ -130,6 +130,16 @@ pub enum Command {
     DevrootCreate,
     /// A shell in the dev rootfs, in the focused pane's folder.
     DevrootEnter,
+    /// A new git worktree for the task in the argument, opened as a
+    /// workspace (D-114).
+    WorktreeNew(String),
+    /// A worktree as a workspace: its agent, a shell, its servers (empty:
+    /// the focused pane's).
+    WorktreeOpen(String),
+    /// The review window of a worktree (empty: the focused pane's).
+    WorktreeReview(String),
+    /// `termos worktree ARGS` in a window: "merge fix-login".
+    WorktreeRun(String),
 }
 
 /// Static description of a command name.
@@ -328,6 +338,33 @@ pub const COMMANDS: &[CommandInfo] = &[
         "harness.open",
         "Harness: plan a goal over Claude Code, Codex and API models",
     ),
+    info(
+        "worktree.new",
+        "Worktree: a new branch and folder for a task, as a workspace",
+    ),
+    CommandInfo {
+        name: "worktree.new",
+        description: "Worktree for this task",
+        arg: Some("fix the login form"),
+    },
+    info(
+        "worktree.open",
+        "Worktree: open as a workspace (agent, shell, servers)",
+    ),
+    CommandInfo {
+        name: "worktree.open",
+        description: "Worktree: open this one as a workspace",
+        arg: Some("fix-login"),
+    },
+    info(
+        "worktree.review",
+        "Worktree: review its changes, answer its agent, merge",
+    ),
+    CommandInfo {
+        name: "worktree.run",
+        description: "Worktree: `termos worktree` in a window",
+        arg: Some("list --all"),
+    },
     CommandInfo {
         name: "harness.open",
         description: "Harness: plan this goal",
@@ -475,6 +512,21 @@ impl FromStr for Command {
             }
             return Ok(Command::PkgRun(args));
         }
+        // A worktree's title, or `termos worktree`'s arguments (D-114).
+        for name in ["worktree.new", "worktree.run"] {
+            if let Some(rest) = s.trim_start().strip_prefix(name)
+                && (rest.is_empty() || rest.starts_with(char::is_whitespace))
+            {
+                let rest = rest.split_whitespace().collect::<Vec<_>>().join(" ");
+                return match name {
+                    "worktree.new" => Ok(Command::WorktreeNew(rest)),
+                    _ if rest.is_empty() => Err(CommandError(
+                        "`worktree.run` needs `termos worktree`'s arguments".into(),
+                    )),
+                    _ => Ok(Command::WorktreeRun(rest)),
+                };
+            }
+        }
         // A goal is the rest of the line too (D-100).
         if let Some(rest) = s.trim_start().strip_prefix("harness.open")
             && (rest.is_empty() || rest.starts_with(char::is_whitespace))
@@ -602,6 +654,8 @@ impl FromStr for Command {
             "packages.open" => no_arg(Command::PackagesOpen),
             "devroot.create" => no_arg(Command::DevrootCreate),
             "devroot.enter" => no_arg(Command::DevrootEnter),
+            "worktree.open" => Ok(Command::WorktreeOpen(arg.unwrap_or("").to_owned())),
+            "worktree.review" => Ok(Command::WorktreeReview(arg.unwrap_or("").to_owned())),
             "agent.open" => Ok(Command::AgentOpen(arg.unwrap_or("").to_owned())),
             "agent.resume" => Ok(Command::AgentResume(arg.unwrap_or("").to_owned())),
             "agent.external" => match arg {
@@ -746,6 +800,13 @@ impl fmt::Display for Command {
             Command::PkgRun(a) => write!(f, "pkg.run {a}"),
             Command::DevrootCreate => f.write_str("devroot.create"),
             Command::DevrootEnter => f.write_str("devroot.enter"),
+            Command::WorktreeNew(t) if t.is_empty() => f.write_str("worktree.new"),
+            Command::WorktreeNew(t) => write!(f, "worktree.new {t}"),
+            Command::WorktreeOpen(n) if n.is_empty() => f.write_str("worktree.open"),
+            Command::WorktreeOpen(n) => write!(f, "worktree.open {n}"),
+            Command::WorktreeReview(n) if n.is_empty() => f.write_str("worktree.review"),
+            Command::WorktreeReview(n) => write!(f, "worktree.review {n}"),
+            Command::WorktreeRun(a) => write!(f, "worktree.run {a}"),
         }
     }
 }
@@ -813,6 +874,28 @@ mod tests {
             ))
         );
         assert!("pkg.run".parse::<Command>().is_err());
+        for (text, cmd) in [
+            ("worktree.new", Command::WorktreeNew(String::new())),
+            (
+                "worktree.new fix  the login",
+                Command::WorktreeNew("fix the login".into()),
+            ),
+            ("worktree.open", Command::WorktreeOpen(String::new())),
+            ("worktree.open fix", Command::WorktreeOpen("fix".into())),
+            ("worktree.review fix", Command::WorktreeReview("fix".into())),
+            (
+                "worktree.run merge fix",
+                Command::WorktreeRun("merge fix".into()),
+            ),
+        ] {
+            assert_eq!(text.parse::<Command>(), Ok(cmd.clone()), "{text}");
+            assert_eq!(
+                cmd.to_string(),
+                text.split_whitespace().collect::<Vec<_>>().join(" ")
+            );
+        }
+        assert!("worktree.run".parse::<Command>().is_err());
+        assert!("worktree.open a b".parse::<Command>().is_err());
         assert_eq!(
             "packages.open".parse::<Command>(),
             Ok(Command::PackagesOpen)
