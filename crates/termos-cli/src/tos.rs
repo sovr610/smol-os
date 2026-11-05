@@ -197,6 +197,12 @@ fn target() -> anyhow::Result<Target> {
     })
 }
 
+/// Runs a desktop command in the TermOS session this runs in, on its
+/// pane.
+pub(crate) fn run_here(command: &str) -> anyhow::Result<()> {
+    on_pane(&target()?, command)
+}
+
 /// Runs a desktop command on the pane this runs in.
 fn on_pane(t: &Target, command: &str) -> anyhow::Result<()> {
     let mut params = json!({ "command": command, "session": t.session });

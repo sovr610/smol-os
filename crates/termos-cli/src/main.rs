@@ -32,6 +32,7 @@ mod tos;
 mod tryboot;
 mod update;
 mod wifi;
+mod worktree_cmd;
 
 use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
@@ -201,6 +202,16 @@ enum Cmd {
         wait: bool,
         #[command(subcommand)]
         action: accounts_cmd::AccountCmd,
+    },
+    /// A git worktree per task: its own branch, folder, ports and
+    /// workspace; reviewed, then merged, opened as a pull request or
+    /// discarded.
+    Worktree {
+        /// Wait for Enter when it ends (TermOS's windows).
+        #[arg(long)]
+        wait: bool,
+        #[command(subcommand)]
+        action: worktree_cmd::WorktreeCmd,
     },
     /// TermOS's MCP server, for Claude Code and Codex CLI.
     Mcp {
@@ -449,6 +460,10 @@ fn run_cli(args: impl IntoIterator<Item = String>) -> anyhow::Result<ExitCode> {
             *wait,
             accounts_cmd::account_command(action, &paths, &config_path),
         ),
+        Some(Cmd::Worktree { wait, action }) => agents::pause(
+            *wait,
+            worktree_cmd::worktree_command(action, &paths, &config_path),
+        ),
         Some(Cmd::Audit { action }) => agents::audit_command(action, &paths),
         Some(Cmd::Sandbox { action }) => agents::sandbox_command(action, &paths),
         Some(Cmd::Model { action }) => models::model_command(action, &paths, &config_path),
@@ -592,6 +607,7 @@ fn run(cli: &Cli, paths: &Paths, config_path: &Path, t: &Target) -> anyhow::Resu
             | Cmd::Skills { .. }
             | Cmd::Harness { .. }
             | Cmd::Account { .. }
+            | Cmd::Worktree { .. }
             | Cmd::Audit { .. }
             | Cmd::Sandbox { .. }
             | Cmd::Model { .. }

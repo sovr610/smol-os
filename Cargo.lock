@@ -5531,6 +5531,7 @@ name = "termos-devkit"
 version = "0.0.0"
 dependencies = [
  "flate2",
+ "globset",
  "insta",
  "ratatui-core",
  "rustix",

@@ -16,7 +16,9 @@
 //! - [`skills`]: TermOS's skills for the coding CLIs (D-098);
 //! - [`devroot`]: the dev rootfs, Debian 13 entered without root (D-110);
 //! - [`packages`], [`packages_app`]: packages from mise, the dev rootfs,
-//!   the host and Podman, and the package manager app (D-110).
+//!   the host and Podman, and the package manager app (D-110);
+//! - [`worktrees`]: a git worktree per task, with its ports and setup
+//!   (D-114).
 
 pub mod accounts;
 pub mod check;
@@ -32,3 +34,4 @@ pub mod packages_app;
 pub mod skills;
 pub mod tasks;
 pub mod templates;
+pub mod worktrees;

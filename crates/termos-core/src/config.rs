@@ -19,11 +19,13 @@ pub mod agents;
 pub mod harness;
 pub mod kms;
 pub mod models;
+pub mod worktrees;
 
 pub use agents::{AgentsConfig, SecretsConfig};
 pub use harness::HarnessConfig;
 pub use kms::KmsConfig;
 pub use models::ModelsConfig;
+pub use worktrees::WorktreesConfig;
 
 /// The whole configuration. Every field has a default, so an empty or
 /// missing file is valid.
@@ -68,6 +70,8 @@ pub struct Config {
     pub center: CenterConfig,
     /// The coding harness (M11c, D-099).
     pub harness: HarnessConfig,
+    /// A git worktree per task (M12a, D-113).
+    pub worktrees: WorktreesConfig,
 }
 
 impl Default for Config {
@@ -97,6 +101,7 @@ impl Default for Config {
             kms: KmsConfig::default(),
             center: CenterConfig::default(),
             harness: HarnessConfig::default(),
+            worktrees: WorktreesConfig::default(),
         }
     }
 }
@@ -734,6 +739,16 @@ history = true                # keep conversations (mode 0600) to resume them
 # models = { frontier = "…", balanced = "…", fast = "…" }   # docs/model-guide.md
 # [harness.routes]
 # coding = "balanced"           # planning/review: frontier; search/small-edits/docs: fast
+
+# A git worktree per task (docs/worktrees.md): its own branch, folder, ports
+# and workspace of panes. A project's setup is `[worktree]` in its termos.toml.
+# [worktrees]
+# root = "~/worktrees"          # default: worktrees in TermOS's data folder
+# branch-prefix = "termos/"
+# port-range = [20000, 29999]   # handed out in blocks
+# ports = 10                    # per worktree: PORT, TERMOS_PORT_0 ... _9
+# agent = "auto"                # auto | claude | codex | gemini | termos | none
+# archive-merged = true         # remove the folder and branch after a merge
 
 # TermOS's skills, which teach Claude Code, Codex and the other coding CLIs
 # to use TermOS (`termos skills status`). TermOS installs and updates them.

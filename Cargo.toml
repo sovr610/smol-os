@@ -121,6 +121,7 @@ similar = "3.2.1"
 # `search_code`: ripgrep's own crates.
 grep = "0.4.1"
 ignore = "0.4.34"
+globset = { version = "0.4.21", default-features = false }
 shlex = "2.0.1"
 # Redacting key-shaped text from audit records.
 regex = { version = "1.13.1", default-features = false, features = ["std", "perf", "unicode-perl"] }
