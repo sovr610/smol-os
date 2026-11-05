@@ -266,6 +266,9 @@ pub enum LaunchKind {
     Packages,
     /// A worktree's review window (`worktree.review [name]`, D-114).
     WorktreeReview,
+    /// The harness running a best-of-N: "SPEC PROMPT" (`harness.best`,
+    /// D-114).
+    HarnessBest,
 }
 
 /// What the desktop knows when it opens a launched window.

@@ -799,11 +799,11 @@ fn edits_run_at_once_in_worktrees_and_land_on_the_plans_branch() {
         v.notes
     );
     let store = termos_devkit::worktrees::Store::new(&data, &Default::default());
+    // Nothing else is left behind, archived or not.
     let left: Vec<String> = store
         .list()
         .expect("list")
         .into_iter()
-        .filter(|w| w.active())
         .map(|w| w.name)
         .collect();
     assert_eq!(left, std::slice::from_ref(&tree.name));
@@ -876,4 +876,121 @@ fn a_conflicting_edit_runs_again_on_top() {
     let tree = v.worktree.expect("worktree");
     let a = std::fs::read_to_string(tree.path.join("a.txt")).expect("a");
     assert_eq!(a, format!("one\n{}\nthree\n", again[0]));
+}
+
+/// Best-of-N (D-114): one prompt to Claude Code twice and Codex once, each
+/// in a worktree of its own; their changes committed and the project's
+/// tests run on each; one kept, the others' worktrees gone.
+#[cfg(unix)]
+#[test]
+fn best_of_n_runs_each_attempt_apart_tests_them_and_keeps_one() {
+    use termos_harness::runner::best;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let bin = dir.path().join("bin");
+    std::fs::create_dir_all(bin.join("answers")).expect("bin");
+    stand_in(&bin, "claude", &[]);
+    stand_in(&bin, "codex", &[]);
+    let answers = bin.join("answers");
+    std::fs::write(
+        answers.join("claude-default"),
+        claude_result("changed it", false),
+    )
+    .expect("w");
+    std::fs::write(answers.join("codex-default"), codex_result("changed it")).expect("w");
+    // Each attempt writes what its worktree's name says; only a2 passes.
+    let edit = "case \"$(basename \"$PWD\")\" in *-a2) echo good > a.txt;; *-a1) echo bad > a.txt;; *) printf 'bad\\nworse\\n' > a.txt;; esac\n";
+    script(&bin.join("do-claude-default"), edit);
+    script(&bin.join("do-codex-default"), edit);
+    let cfg = config("");
+    let spec = best::parse_spec("claude:2,codex", &cfg).expect("spec");
+    let ctx = context(
+        dir.path(),
+        cfg,
+        Arc::new(StandIns { bin: bin.clone() }),
+        false,
+    );
+    repository(
+        &ctx.project,
+        &[
+            ("a.txt", "start\n"),
+            ("termos.toml", "[tasks]\ntest = \"grep -q good a.txt\"\n"),
+        ],
+    );
+    let data = paths(dir.path()).data_dir;
+    let h = Harness::start(ctx).expect("start");
+    h.best("make a.txt good", spec);
+    let v = wait(&h, "the attempts", |v| {
+        matches!(v.phase, Phase::Finished { .. })
+    });
+    assert!(v.best);
+    assert_eq!(v.phase, Phase::Finished { failed: 0 }, "{:#?}", v.tasks);
+    /// An attempt as the test sees it: id, backend, tests, changes.
+    type Seen = (
+        String,
+        Option<String>,
+        Option<bool>,
+        Option<(u32, u32, usize)>,
+    );
+    let seen: Vec<Seen> = v
+        .tasks
+        .iter()
+        .map(|t| {
+            (
+                t.task.id.clone(),
+                t.backend.clone(),
+                t.check.as_ref().map(|c| c.passed),
+                t.changes,
+            )
+        })
+        .collect();
+    assert_eq!(
+        seen,
+        [
+            (
+                "a1".into(),
+                Some("claude".into()),
+                Some(false),
+                Some((1, 1, 1))
+            ),
+            (
+                "a2".into(),
+                Some("claude".into()),
+                Some(true),
+                Some((1, 1, 1))
+            ),
+            (
+                "a3".into(),
+                Some("codex".into()),
+                Some(false),
+                Some((2, 1, 1))
+            ),
+        ]
+    );
+    assert!(
+        v.tasks[0]
+            .check
+            .as_ref()
+            .is_some_and(|c| c.command == "grep -q good a.txt")
+    );
+    let names: Vec<String> = v.tasks.iter().filter_map(|t| t.worktree.clone()).collect();
+    assert_eq!(names.len(), 3);
+    h.keep(1);
+    let v = wait(&h, "the one kept", |v| {
+        v.kept.is_some() || !v.notes.is_empty()
+    });
+    assert_eq!(v.kept, Some(1), "{:?}", v.notes);
+    let store = termos_devkit::worktrees::Store::new(&data, &Default::default());
+    let left: Vec<String> = store
+        .list()
+        .expect("list")
+        .into_iter()
+        .map(|w| w.name)
+        .collect();
+    assert_eq!(left, std::slice::from_ref(&names[1]));
+    let kept = store.get(None, &names[1]).expect("kept");
+    assert_eq!(
+        std::fs::read_to_string(kept.path.join("a.txt")).expect("a"),
+        "good\n"
+    );
+    assert!(kept.origin.starts_with("best:"));
 }

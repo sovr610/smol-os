@@ -107,8 +107,11 @@ enum Button {
     StopAll,
     New,
     Copy,
-    /// The plan's worktree in the review window (D-113).
+    /// The plan's worktree, or the selected attempt's, in the review
+    /// window (D-113, D-114).
     Review,
+    /// Best-of-N: keep the selected attempt, discard the others.
+    Keep,
     Save,
     Cancel,
     Task(usize),
@@ -231,6 +234,16 @@ impl HarnessApp {
             app.h.plan(goal);
             app.focus = Focus::Tasks;
         }
+        app
+    }
+
+    /// The window over `h`, running `prompt` as a best-of-N over `spec`
+    /// (D-114).
+    pub fn open_best(h: Harness, prompt: &str, spec: Vec<(String, usize)>) -> Self {
+        let mut app = Self::open(h, "");
+        app.goal = Field::with(prompt.trim());
+        app.h.best(prompt, spec);
+        app.focus = Focus::Tasks;
         app
     }
 
@@ -372,8 +385,38 @@ impl HarnessApp {
                 }
             }
             Button::Review => {
-                if let Some(w) = &self.view.worktree {
-                    return AppEffect::Command(format!("worktree.review {}", w.name));
+                let name = if self.view.best {
+                    self.view.tasks.get(i).and_then(|t| t.worktree.clone())
+                } else {
+                    self.view.worktree.as_ref().map(|w| w.name.clone())
+                };
+                match name {
+                    Some(n) => return AppEffect::Command(format!("worktree.review {n}")),
+                    None if self.view.best => {
+                        self.say(
+                            "This attempt has no worktree (it failed, or was not kept)",
+                            true,
+                        );
+                    }
+                    None => {}
+                }
+            }
+            Button::Keep => {
+                let ok = self.view.best
+                    && self.view.kept.is_none()
+                    && matches!(self.view.phase, Phase::Finished { .. })
+                    && self.view.tasks.get(i).is_some_and(|t| t.worktree.is_some());
+                if ok {
+                    self.h.keep(i);
+                    self.say(
+                        format!(
+                            "Keeping {}; the other attempts' worktrees go. R reviews it.",
+                            self.view.tasks[i].task.id
+                        ),
+                        false,
+                    );
+                } else {
+                    self.say("Keep an attempt that finished with changes", true);
                 }
             }
             Button::Task(n) => {
@@ -691,7 +734,23 @@ impl HarnessApp {
                 glyph,
                 tui_style(if sel { base } else { Style::new().fg(colour) }),
             );
-            let tail = format!("{}  {}", fit(&who, 26), time);
+            let mut tail = format!("{}  {}", fit(&who, 26), time);
+            if self.view.best {
+                // What each attempt did, side by side (D-114).
+                let mut parts = Vec::new();
+                if let Some((a, r, f)) = t.changes {
+                    parts.push(format!("+{a} -{r} {f}f"));
+                }
+                if let Some(ch) = &t.check {
+                    parts.push(if ch.passed { "tests ✓" } else { "tests ✗" }.to_owned());
+                }
+                if self.view.kept == Some(i) {
+                    parts.push("★ kept".to_owned());
+                }
+                if !parts.is_empty() {
+                    tail = format!("{}  {tail}", parts.join("  "));
+                }
+            }
             let tw = tail.width() as u16;
             let used = line.width() as u16 + 3;
             if used + tw < r.width {
@@ -736,7 +795,8 @@ impl HarnessApp {
                         "and each goes to the backend that suits it: Claude Code or Codex under your plans first,",
                         "API models by your settings or when a plan's limit is reached.",
                         "",
-                        "Tasks that change files run one at a time; the others run alongside.",
+                        "In a git repository each task that changes files works in a worktree of its own, at once,",
+                        "and the result lands on a branch to review; elsewhere they run one at a time.",
                         "`termos harness status` shows where each kind goes.",
                     ] {
                         push_wrapped(&mut lines, s, muted);
@@ -806,6 +866,29 @@ impl HarnessApp {
                 push_wrapped(&mut lines, &who, text);
                 for tried in &t.tried {
                     push_wrapped(&mut lines, &format!("✗ {tried}"), Style::new().fg(c.warn));
+                }
+                if let Some((a, r, f)) = t.changes {
+                    lines.push((String::new(), text));
+                    lines.push(head("Changes"));
+                    let at = t
+                        .worktree
+                        .as_deref()
+                        .map(|w| format!(" · worktree {w} (R reviews it)"))
+                        .unwrap_or_default();
+                    push_wrapped(
+                        &mut lines,
+                        &format!("+{a} -{r} in {f} file{}{at}", if f == 1 { "" } else { "s" }),
+                        text,
+                    );
+                }
+                if let Some(ch) = &t.check {
+                    lines.push((String::new(), text));
+                    lines.push(head(&format!(
+                        "Tests {}: {}",
+                        if ch.passed { "passed" } else { "failed" },
+                        ch.command
+                    )));
+                    push_wrapped(&mut lines, &ch.output, muted);
                 }
                 lines.push((String::new(), text));
                 lines.push(head("Prompt"));
@@ -877,6 +960,16 @@ impl HarnessApp {
                 ("Stop task s", Button::Stop),
                 ("Stop all S", Button::StopAll),
             ],
+            (Phase::Finished { .. }, _) if self.view.best && self.view.kept.is_none() => &[
+                ("Keep ⏎", Button::Keep),
+                ("Review R", Button::Review),
+                ("New n", Button::New),
+            ],
+            (Phase::Finished { .. }, _) if self.view.best => &[
+                ("Review R", Button::Review),
+                ("New n", Button::New),
+                ("Copy answer c", Button::Copy),
+            ],
             (Phase::Finished { .. }, _) if self.view.worktree.is_some() => &[
                 ("Review the result R", Button::Review),
                 ("New n", Button::New),
@@ -908,6 +1001,12 @@ impl HarnessApp {
 impl HarnessApp {
     /// Where the result is, for the status line: " · on termos/plan-…".
     fn result_on(&self) -> String {
+        if self.view.best {
+            return match self.view.kept.and_then(|k| self.view.tasks.get(k)) {
+                Some(t) => format!(" · kept {} (R reviews it)", t.task.id),
+                None => " · ⏎ keeps the selected attempt, R reviews it".to_owned(),
+            };
+        }
         self.view
             .worktree
             .as_ref()
@@ -1027,6 +1126,11 @@ impl App for HarnessApp {
             KeyCode::Char('n') => return self.act(Button::New),
             KeyCode::Char('c') => return self.act(Button::Copy),
             KeyCode::Char('R') => return self.act(Button::Review),
+            KeyCode::Enter
+                if self.view.best && matches!(self.view.phase, Phase::Finished { .. }) =>
+            {
+                return self.act(Button::Keep);
+            }
             KeyCode::Enter if matches!(self.view.phase, Phase::Idle | Phase::Failed(_)) => {
                 return self.act(Button::Plan);
             }

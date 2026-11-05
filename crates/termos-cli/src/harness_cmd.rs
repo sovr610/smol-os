@@ -51,6 +51,19 @@ pub(crate) enum HarnessCmd {
         #[arg(trailing_var_arg = true)]
         goal: Vec<String>,
     },
+    /// Best-of-N: one prompt to several backends at once, each in a
+    /// worktree of its own; their changes and the project's tests side by
+    /// side (D-114).
+    Best {
+        /// The backends and how many attempts each: `claude:2,codex:1`.
+        #[arg(long = "with", value_name = "BACKENDS")]
+        with: String,
+        /// The project folder (default: the current one).
+        #[arg(long, value_name = "DIR")]
+        project: Option<PathBuf>,
+        #[arg(required = true, trailing_var_arg = true)]
+        prompt: Vec<String>,
+    },
     /// The backends, their accounts and models, and where each kind of
     /// task goes.
     Status {
@@ -253,6 +266,26 @@ pub(crate) fn harness_command(
 ) -> anyhow::Result<ExitCode> {
     match action {
         HarnessCmd::Status { project } => status(paths, config_path, project.as_ref()),
+        HarnessCmd::Best {
+            with,
+            project,
+            prompt,
+        } => {
+            let (h, rx) = start(paths, config_path, project.as_ref())?;
+            let spec = termos_harness::runner::best::parse_spec(with, h.config())
+                .map_err(anyhow::Error::msg)?;
+            h.best(&prompt.join(" "), spec);
+            // Under way before the printer looks for its end.
+            follow(&h, &rx, |v| v.phase != Phase::Idle);
+            let code = run_to_end(&h, &rx)?;
+            let v = h
+                .view
+                .lock()
+                .map(|v| v.clone())
+                .map_err(|_| anyhow::anyhow!("the run is gone"))?;
+            print_attempts(&v);
+            Ok(code)
+        }
         HarnessCmd::Plan {
             json,
             project,
@@ -340,6 +373,37 @@ fn start(
             }
         })?;
     Ok((h, rx))
+}
+
+/// The attempts of a best-of-N side by side, and how to keep one.
+fn print_attempts(v: &RunView) {
+    println!();
+    println!("Attempts:");
+    for t in &v.tasks {
+        let changes = t
+            .changes
+            .map(|(a, r, f)| format!("+{a} -{r} in {f} file{}", if f == 1 { "" } else { "s" }))
+            .unwrap_or_else(|| "no changes".into());
+        let tests = match &t.check {
+            Some(c) if c.passed => "tests passed",
+            Some(_) => "tests failed",
+            None => "no test task",
+        };
+        println!(
+            "  {:<3} {:<34} {:<22} {:<13} {}",
+            t.task.id,
+            t.by.as_deref().unwrap_or(&t.task.title),
+            changes,
+            tests,
+            t.worktree.as_deref().unwrap_or("(no worktree)")
+        );
+    }
+    println!();
+    println!(
+        "Keep the one you want: look at it (`termos worktree status NAME`, or `worktree.review NAME` in TermOS), \
+         merge it or open a pull request (`termos worktree merge NAME`, `termos worktree pr NAME`), \
+         and discard the others (`termos worktree discard NAME --yes`). In TermOS's harness window, ⏎ keeps one."
+    );
 }
 
 /// Prints the run as it goes; exits non-zero when a task did not finish.

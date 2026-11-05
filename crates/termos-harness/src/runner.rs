@@ -46,6 +46,8 @@ use crate::events::{self, Tokens};
 use crate::plan::{self, Plan, Task};
 use crate::route::{self, Availability, Backend, Choice, Route};
 
+pub mod best;
+
 /// Everything the harness works with.
 #[derive(Clone)]
 pub struct Context {
@@ -114,6 +116,21 @@ pub struct TaskView {
     pub session: Option<String>,
     pub started: Option<Instant>,
     pub finished: Option<Instant>,
+    /// Its worktree (best-of-N attempts, D-114).
+    pub worktree: Option<String>,
+    /// What it changed: lines added, removed, files.
+    pub changes: Option<(u32, u32, usize)>,
+    /// The project's tests, run in its worktree.
+    pub check: Option<Check>,
+}
+
+/// The project's test task, run on an attempt (best-of-N).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Check {
+    pub passed: bool,
+    pub command: String,
+    /// The end of what it printed.
+    pub output: String,
 }
 
 impl TaskView {
@@ -133,6 +150,9 @@ impl TaskView {
             session: None,
             started: None,
             finished: None,
+            worktree: None,
+            changes: None,
+            check: None,
         }
     }
 
@@ -191,6 +211,10 @@ pub struct RunView {
     pub notes: Vec<String>,
     /// The plan's worktree, where its result is (D-113).
     pub worktree: Option<PlanTree>,
+    /// Best-of-N: the tasks are attempts at one prompt (D-114).
+    pub best: bool,
+    /// The attempt kept; the others' worktrees are gone.
+    pub kept: Option<usize>,
     /// Bumped on every change.
     pub generation: u64,
 }
@@ -216,6 +240,8 @@ impl RunView {
             raw_plan: None,
             notes: Vec::new(),
             worktree: None,
+            best: false,
+            kept: None,
             generation: 0,
         }
     }
@@ -244,6 +270,10 @@ enum Command {
     Plan(String),
     Run,
     Stop(Option<String>),
+    /// One prompt to several backends (D-114).
+    Best(String, Vec<(String, usize)>),
+    /// Keep one attempt; the others go.
+    Keep(usize),
 }
 
 /// The window's (or the command line's) end of the harness.
@@ -381,6 +411,17 @@ impl Harness {
     /// Runs the plan under review.
     pub fn run(&self) {
         let _ = self.tx.send(Command::Run);
+    }
+
+    /// Best-of-N: `prompt` to each backend of `spec` ([`best::parse_spec`]),
+    /// each in a worktree of its own (D-114).
+    pub fn best(&self, prompt: &str, spec: Vec<(String, usize)>) {
+        let _ = self.tx.send(Command::Best(prompt.trim().to_owned(), spec));
+    }
+
+    /// Keeps attempt `index` of a best-of-N run; the others' worktrees go.
+    pub fn keep(&self, index: usize) {
+        let _ = self.tx.send(Command::Keep(index));
     }
 
     /// Stops one task (`Some(id)`) or the whole run.
@@ -580,6 +621,15 @@ async fn worker(ctx: Arc<Context>, shared: Shared, mut rx: mpsc::UnboundedReceiv
                     execute(&ctx, &shared, &mut rx).await;
                 }
             }
+            Command::Best(prompt, spec) => {
+                let busy = shared
+                    .read(|v| matches!(v.phase, Phase::Running | Phase::Planning(_)))
+                    .unwrap_or(true);
+                if !busy && !prompt.is_empty() {
+                    best::run(&ctx, &shared, &mut rx, prompt, spec).await;
+                }
+            }
+            Command::Keep(i) => best::keep(&ctx, &shared, i).await,
             Command::Stop(_) => {}
         }
     }
@@ -1117,7 +1167,7 @@ async fn run_in_tree(
         let gone = wt.clone();
         let tidy = trees.store.clone();
         let _ = blocking(move || {
-            tidy.discard(&gone)?;
+            let gone = tidy.discard(&gone)?;
             tidy.forget(&gone)
         })
         .await;
@@ -1409,7 +1459,7 @@ async fn execute(ctx: &Arc<Context>, shared: &Shared, rx: &mut mpsc::UnboundedRe
                     }
                 }
                 // Planning or running again waits for this run.
-                Some(Command::Plan(_) | Command::Run) => {}
+                Some(Command::Plan(_) | Command::Run | Command::Best(..) | Command::Keep(_)) => {}
             },
         }
     }

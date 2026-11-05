@@ -2742,6 +2742,9 @@ impl Desktop {
                 self.open_termos_window(&args, "new worktree", area);
             }
             Command::WorktreeOpen(name) => self.open_worktree(&name, area),
+            Command::HarnessBest(arg) => {
+                self.launch(termos_core::app::LaunchKind::HarnessBest, &arg);
+            }
             Command::WorktreeReview(name) => {
                 // A review of it already open comes forward instead.
                 let open = (!name.is_empty())

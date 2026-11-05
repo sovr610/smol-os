@@ -185,3 +185,109 @@ printf '%s\n' '{msg}'
     assert!(calls.contains("--permission-mode acceptEdits"), "{calls}");
     assert!(calls.contains("--sandbox read-only"), "{calls}");
 }
+
+/// `termos harness best` (D-114): Claude Code and Codex stand-ins answer
+/// one prompt, each in a worktree of its own; the project's tests run on
+/// each; the attempts are listed side by side with their worktrees.
+#[test]
+fn best_of_n_lists_attempts_side_by_side() {
+    let bin = tempfile::tempdir().expect("tempdir");
+    let claude_done = serde_json::json!({"type": "result", "subtype": "success", "is_error": false,
+        "result": "Wrote it.", "usage": {"input_tokens": 3, "output_tokens": 2}});
+    script(
+        &bin.path().join("claude"),
+        &format!("cat > /dev/null\necho good > a.txt\nprintf '%s\\n' '{claude_done}'\n"),
+    );
+    let codex_done = serde_json::json!({"type": "item.completed", "item": {"type": "agent_message", "text": "Wrote it too."}});
+    script(
+        &bin.path().join("codex"),
+        &format!("cat > /dev/null\necho bad > a.txt\nprintf '%s\\n' '{codex_done}'\n"),
+    );
+    let path = std::env::join_paths(std::iter::once(bin.path().to_owned()).chain(
+        std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
+    ))
+    .expect("PATH");
+    let env = common::Env::with_vars("", vec![("PATH", path.into())]);
+    let project = env.path().join("project");
+    std::fs::create_dir_all(&project).expect("project");
+    let git = |args: &[&str]| {
+        let ok = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&project)
+            .args(args)
+            .status()
+            .expect("git")
+            .success();
+        assert!(ok, "git {args:?}");
+    };
+    git(&["init", "-q", "-b", "main"]);
+    git(&["config", "user.name", "Fixture"]);
+    git(&["config", "user.email", "fixture@example.com"]);
+    std::fs::write(project.join("a.txt"), "start\n").expect("w");
+    std::fs::write(
+        project.join("termos.toml"),
+        "[tasks]\ntest = \"grep -q good a.txt\"\n",
+    )
+    .expect("w");
+    git(&["add", "-A"]);
+    git(&["commit", "-q", "-m", "first"]);
+    let p = project.display().to_string();
+
+    let out = env.run(&[
+        "harness",
+        "best",
+        "--with",
+        "claude",
+        "--project",
+        &p,
+        "write",
+        "it",
+    ]);
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("at least two"));
+
+    let out = env.run(&[
+        "harness",
+        "best",
+        "--with",
+        "claude,codex",
+        "--project",
+        &p,
+        "make",
+        "a.txt",
+        "good",
+    ]);
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success(),
+        "{text}{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let row = |id: &str| {
+        text.lines()
+            .find(|l| l.trim_start().starts_with(&format!("{id} ")))
+            .unwrap_or_else(|| panic!("no {id} in:\n{text}"))
+            .to_owned()
+    };
+    let (a1, a2) = (row("a1"), row("a2"));
+    assert!(
+        a1.contains("Claude Code") && a1.contains("tests passed") && a1.contains("best-"),
+        "{a1}"
+    );
+    assert!(
+        a2.contains("Codex CLI") && a2.contains("tests failed") && a2.contains("+1 -1 in 1 file"),
+        "{a2}"
+    );
+    assert!(text.contains("2 of 2 tasks done"), "{text}");
+    // The attempts are worktrees, as `termos worktree` sees them.
+    let list = env.run_in(&project, &["worktree", "list"]);
+    let list = String::from_utf8_lossy(&list.stdout);
+    assert_eq!(
+        list.lines()
+            .filter(|l| l.trim_start().starts_with("best-"))
+            .count(),
+        2,
+        "{list}"
+    );
+    assert!(list.contains("1 commit"), "{list}");
+}

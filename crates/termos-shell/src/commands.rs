@@ -115,6 +115,8 @@ pub enum Command {
     UsageOpen,
     /// The coding harness, planning a goal if given (D-100).
     HarnessOpen(String),
+    /// Best-of-N in the harness: "claude:2,codex:1 the prompt" (D-114).
+    HarnessBest(String),
     /// Continue the focused agent window's conversation as another
     /// account (D-097).
     AgentSwap(String),
@@ -371,6 +373,11 @@ pub const COMMANDS: &[CommandInfo] = &[
         arg: Some("add a --verbose flag"),
     },
     CommandInfo {
+        name: "harness.best",
+        description: "Best of N: one prompt to several backends, compared",
+        arg: Some("claude:2,codex:1 add retries"),
+    },
+    CommandInfo {
         name: "account.add",
         description: "Add a Claude Code, Codex or Gemini CLI account",
         arg: Some("claude"),
@@ -526,6 +533,19 @@ impl FromStr for Command {
                     _ => Ok(Command::WorktreeRun(rest)),
                 };
             }
+        }
+        // Best-of-N: the backends, then the prompt (D-114).
+        if let Some(rest) = s.trim_start().strip_prefix("harness.best")
+            && (rest.is_empty() || rest.starts_with(char::is_whitespace))
+        {
+            let rest = rest.trim();
+            if rest.split_whitespace().count() < 2 {
+                return Err(CommandError(
+                    "`harness.best` needs the backends and a prompt: claude:2,codex:1 add retries"
+                        .into(),
+                ));
+            }
+            return Ok(Command::HarnessBest(rest.to_owned()));
         }
         // A goal is the rest of the line too (D-100).
         if let Some(rest) = s.trim_start().strip_prefix("harness.open")
@@ -792,6 +812,7 @@ impl fmt::Display for Command {
             Command::UsageOpen => f.write_str("usage.open"),
             Command::HarnessOpen(g) if g.is_empty() => f.write_str("harness.open"),
             Command::HarnessOpen(g) => write!(f, "harness.open {g}"),
+            Command::HarnessBest(a) => write!(f, "harness.best {a}"),
             Command::AgentSwap(a) => write!(f, "agent.swap {a}"),
             Command::AuditOpen(id) if id.is_empty() => f.write_str("audit.open"),
             Command::AuditOpen(id) => write!(f, "audit.open {id}"),
@@ -895,6 +916,11 @@ mod tests {
             );
         }
         assert!("worktree.run".parse::<Command>().is_err());
+        assert_eq!(
+            "harness.best claude:2,codex add retries".parse::<Command>(),
+            Ok(Command::HarnessBest("claude:2,codex add retries".into()))
+        );
+        assert!("harness.best claude:2".parse::<Command>().is_err());
         assert!("worktree.open a b".parse::<Command>().is_err());
         assert_eq!(
             "packages.open".parse::<Command>(),

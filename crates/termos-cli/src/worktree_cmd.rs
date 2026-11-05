@@ -336,6 +336,18 @@ fn list(store: &Store, cwd: &Path, all: bool, everywhere: bool) -> anyhow::Resul
         return Ok(());
     }
     let here = store.containing(cwd).map(|w| w.name);
+    let name_w = shown
+        .iter()
+        .map(|w| w.name.len())
+        .max()
+        .unwrap_or(0)
+        .max(12);
+    let branch_w = shown
+        .iter()
+        .map(|w| w.branch.len())
+        .max()
+        .unwrap_or(0)
+        .max(12);
     let mut last_repo: Option<PathBuf> = None;
     for w in shown {
         if (repo.is_none() || everywhere) && last_repo.as_ref() != Some(&w.repo) {
@@ -376,7 +388,7 @@ fn list(store: &Store, cwd: &Path, all: bool, everywhere: bool) -> anyhow::Resul
             w.state.name().to_owned()
         };
         println!(
-            "{mark} {:<20} {:<28} {:<12} {}{}",
+            "{mark} {:<name_w$} {:<branch_w$} {:<11} {}{}",
             w.name,
             w.branch,
             w.ports_text(),
