@@ -1319,7 +1319,7 @@ rewrite history.
     - foot and rxvt: OSC 777;
     - any other terminal, and anything inside tmux: nothing.
   - **Hooks (`termos_devkit::cli_agents::with_hooks`, `termos-cli/src/agent_hooks.rs`):**
-    - **What is registered:** `termos agent event --cli NAME` (10-second timeout where the CLI counts seconds) for these events:
+    - **What is registered:** `termos agent event --cli NAME` (a 10-second timeout for Claude Code, 3 s for Codex, which allows its `SessionEnd` hooks no more) for these events:
       - Claude Code's `SessionStart`, `SessionEnd`, `UserPromptSubmit`, `PermissionRequest`, `Notification`, `Stop` and `StopFailure`, in the account's `settings.json`;
       - Codex's `SessionStart`, `SessionEnd`, `UserPromptSubmit`, `PermissionRequest` and `Stop`, in `$CODEX_HOME/hooks.json`. Codex asks the user to trust them once; TermOS says so and never writes the trust itself;
       - Gemini CLI's `SessionStart`, `SessionEnd`, `BeforeAgent`, `Notification` and `AfterAgent`, in its `settings.json`.

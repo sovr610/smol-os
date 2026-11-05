@@ -1127,6 +1127,14 @@ Nothing M11a adds runs while idle: the shims run only when `claude` or `codex` s
 - Real shells on a real desktop (`termos-shell/tests/attention.rs`): bash 5 after a `.bashrc` whose own `PROMPT_COMMAND` reads `$?`, zsh after a `.zshrc`, fish 3 (CI installs zsh and fish and requires them on Linux); PowerShell with a native program's exit code on Windows.
 - The desktop: needs-you toast, tab badge, pane badge and system notification once per wait; the jump across workspaces; typing clears it; a finished turn's tick without a toast, cleared when seen; a program's OSC 9; a hand-printed block copied with `pane.copy-output`; an agent saved in a snapshot and typed into the restored shell.
 - The binary: `termos agent hooks` adds and removes the hooks in all three CLIs' files, keeping other settings, and writes through an account's linked `settings.json`; `termos agent event` outside TermOS does nothing; a hook's JSON piped to it in a pane marks the pane until answered; `tos read --command` in bash; `termos agent external --resume --conversation` continues the reported conversation, else the folder's latest.
+- The real CLIs (Agent CLIs workflow, Linux x86_64 and arm64, macOS, Windows): Claude Code reports started, working, done and ended through TermOS's hooks; Codex, with its hooks trusted for the run, started, working and ended (the stand-in model refuses, so no turn finishes); `TERMOS_HOOK_LOG` records what reached TermOS.
+
+**What CI found**
+- Ubuntu's global `/etc/zsh/zshrc` runs `compinit`, which stopped at a question about insecure directories on the runners: the zsh test's `.zshenv` sets `skip_global_compinit` (and so checks that the user's `.zshenv` still loads).
+- On Windows the CLIs' folders come from `USERPROFILE`: the hooks test now sets it, after writing to the runner's real profile once (and removing it again).
+- macOS names a workspace after the test program, which cut the toast short: the test checks its start, and the system notification's whole text.
+- Codex allows its `SessionEnd` hooks 3 s and warns about more: TermOS registers 3 s for Codex.
+- An account's `settings.json` can be a link to the main one: the hooks are written through the link (found by the accounts tests locally).
 
 ---
 ---

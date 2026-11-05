@@ -1049,9 +1049,12 @@ pub fn with_hooks(tool: Tool, existing: &str, termos: &Path) -> Result<String, A
         "type": "command",
         "command": hook_command(termos, tool),
     });
-    // Claude Code and Codex count seconds; TermOS answers at once.
-    if tool != Tool::Gemini {
-        hook["timeout"] = Value::from(10);
+    // Claude Code and Codex count seconds; TermOS answers at once. Codex
+    // allows its SessionEnd hooks 3 s, and warns about more.
+    match tool {
+        Tool::Claude => hook["timeout"] = Value::from(10),
+        Tool::Codex => hook["timeout"] = Value::from(3),
+        Tool::Gemini => {}
     }
     for event in hook_events(tool) {
         let list = hooks

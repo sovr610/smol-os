@@ -393,8 +393,10 @@ async fn needs_you_is_loud_and_done_is_quiet() {
         status.contains("0:") && status.contains('\u{25cf}'),
         "{status}"
     );
+    // The toast; a long workspace name (macOS names it after the test
+    // program) cuts its end, which the system notification carries whole.
     assert!(
-        screen.contains("claude in 0:") && screen.contains("needs you: wants to use Bash"),
+        screen.contains("claude in 0:") && screen.contains("needs you"),
         "the toast:\n{screen}"
     );
     assert!(
