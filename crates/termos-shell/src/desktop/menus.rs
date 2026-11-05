@@ -174,6 +174,7 @@ impl Desktop {
                     Entry::item("Network", Command::NetworkOpen),
                     Entry::item("Updates", Command::UpdateOpen),
                     Entry::item("Settings", Command::SettingsOpen),
+                    Entry::item("Gallery", Command::GalleryOpen),
                 ],
             )
             .icon(Icon::Apps),

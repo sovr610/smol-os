@@ -1,0 +1,215 @@
+name: Packages
+
+# Publishing a release to the package channels (D-125, D-126): Homebrew,
+# Scoop, winget, the AUR and Nix. Each job fills its manifest from the
+# release's SHA256SUMS, installs it on a clean runner, and then publishes
+# it, but only where the owner's secret for that channel exists: until
+# then the job tests and stops (docs/releasing.md lists the secrets).
+# The .deb and .rpm are part of the release itself (release.yml).
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "The release to package (v0.2.0)"
+        required: true
+  pull_request:
+    paths:
+      - "flake.nix"
+      - "flake.lock"
+      - "packaging/**"
+      - ".github/workflows/packages.yml"
+      - ".github/scripts/render-packaging.sh"
+
+permissions:
+  contents: read
+
+env:
+  TAG: ${{ github.event.release.tag_name || inputs.tag }}
+
+jobs:
+  render:
+    name: Manifests
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - uses: actions/checkout@v5
+      - id: v
+        run: echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+      - name: Fill in the manifests
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern SHA256SUMS --dir dl
+          ./.github/scripts/render-packaging.sh "${TAG#v}" dl/SHA256SUMS out
+      - uses: actions/upload-artifact@v4
+        with:
+          name: manifests
+          path: out/
+
+  homebrew:
+    name: Homebrew
+    needs: render
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: manifests
+          path: out
+      - name: Install from a local tap
+        run: |
+          brew tap-new --no-git termos/local
+          cp out/homebrew/termos.rb "$(brew --repository termos/local)/Formula/termos.rb"
+          brew install termos/local/termos
+          termos --version
+          brew test termos/local/termos
+      - name: Publish to sovr610/homebrew-termos
+        env:
+          TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          if [ -z "$TOKEN" ]; then
+            echo "::notice::no HOMEBREW_TAP_TOKEN secret: the formula is tested, not published"
+            exit 0
+          fi
+          git clone "https://x-access-token:$TOKEN@github.com/sovr610/homebrew-termos.git" tap
+          mkdir -p tap/Formula
+          cp out/homebrew/termos.rb tap/Formula/termos.rb
+          cd tap
+          git config user.name "TermOS release"
+          git config user.email "release@termos.invalid"
+          git add Formula/termos.rb
+          git commit -m "termos ${TAG#v}" && git push
+
+  scoop:
+    name: Scoop
+    needs: render
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: manifests
+          path: out
+      - name: Install with Scoop
+        shell: pwsh
+        run: |
+          Set-ExecutionPolicy RemoteSigned -Scope CurrentUser -Force
+          Invoke-RestMethod -Uri https://get.scoop.sh -OutFile install-scoop.ps1
+          .\install-scoop.ps1 -RunAsAdmin
+          $env:PATH = "$env:USERPROFILE\scoop\shims;$env:PATH"
+          scoop install .\out\scoop\termos.json
+          termos --version
+      - name: Publish to sovr610/scoop-termos
+        shell: bash
+        env:
+          TOKEN: ${{ secrets.SCOOP_BUCKET_TOKEN }}
+        run: |
+          if [ -z "$TOKEN" ]; then
+            echo "::notice::no SCOOP_BUCKET_TOKEN secret: the manifest is tested, not published"
+            exit 0
+          fi
+          git clone "https://x-access-token:$TOKEN@github.com/sovr610/scoop-termos.git" bucket
+          mkdir -p bucket/bucket
+          cp out/scoop/termos.json bucket/bucket/termos.json
+          cd bucket
+          git config user.name "TermOS release"
+          git config user.email "release@termos.invalid"
+          git add bucket/termos.json
+          git commit -m "termos ${TAG#v}" && git push
+
+  winget:
+    name: winget
+    needs: render
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: manifests
+          path: out
+      - name: Validate and install the manifest
+        shell: pwsh
+        run: |
+          if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
+            Write-Output "::notice::this runner has no winget: the manifest is not tested here"
+            exit 0
+          }
+          winget validate --manifest out\winget
+          winget settings --enable LocalManifestFiles
+          winget install --manifest out\winget --accept-package-agreements --accept-source-agreements --disable-interactivity
+      - name: Open a pull request to microsoft/winget-pkgs
+        shell: pwsh
+        env:
+          TOKEN: ${{ secrets.WINGET_TOKEN }}
+        run: |
+          if (-not $env:TOKEN) {
+            Write-Output "::notice::no WINGET_TOKEN secret: the manifest is not submitted"
+            exit 0
+          }
+          Invoke-WebRequest https://aka.ms/wingetcreate/latest -OutFile wingetcreate.exe
+          .\wingetcreate.exe submit --token $env:TOKEN out\winget
+
+  aur:
+    name: AUR
+    needs: render
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    container: archlinux:latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: manifests
+          path: out
+      - name: Build and install the package
+        run: |
+          pacman -Syu --noconfirm --needed base-devel git openssh
+          useradd -m builder
+          cp -r out/aur /home/builder/termos-bin
+          chown -R builder /home/builder/termos-bin
+          cd /home/builder/termos-bin
+          su builder -c "makepkg --printsrcinfo > .SRCINFO && makepkg --noconfirm"
+          pacman -U --noconfirm termos-bin-*.pkg.tar.zst
+          termos --version
+      - name: Publish to the AUR
+        env:
+          KEY: ${{ secrets.AUR_SSH_KEY }}
+        run: |
+          if [ -z "$KEY" ]; then
+            echo "::notice::no AUR_SSH_KEY secret: the package is tested, not published"
+            exit 0
+          fi
+          mkdir -p -m 0700 ~/.ssh
+          (umask 077 && printf '%s\n' "$KEY" > ~/.ssh/aur)
+          ssh-keyscan aur.archlinux.org >> ~/.ssh/known_hosts
+          export GIT_SSH_COMMAND="ssh -i $HOME/.ssh/aur"
+          git clone ssh://aur@aur.archlinux.org/termos-bin.git aur-repo
+          cp /home/builder/termos-bin/PKGBUILD /home/builder/termos-bin/.SRCINFO aur-repo/
+          cd aur-repo
+          git config user.name "TermOS release"
+          git config user.email "release@termos.invalid"
+          git add PKGBUILD .SRCINFO
+          git commit -m "termos ${TAG#v}" && git push
+
+  nix:
+    name: Nix (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-latest]
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.sha || env.TAG }}
+      - uses: cachix/install-nix-action@v31
+      - name: Build the flake
+        run: |
+          nix build .#termos -L
+          ./result/bin/termos --version
+          test -f result/share/man/man1/termos.1.gz

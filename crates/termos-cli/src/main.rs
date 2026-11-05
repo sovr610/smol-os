@@ -15,6 +15,7 @@ mod agents;
 mod client;
 mod coding_agents;
 mod devroot_cmd;
+mod gallery_cmd;
 mod harness_cmd;
 mod images;
 mod install;
@@ -286,6 +287,24 @@ enum Cmd {
         #[command(subcommand)]
         action: update::UpdateCmd,
     },
+    /// Themes, layouts and widgets from the signed gallery (D-126).
+    Gallery {
+        #[command(subcommand)]
+        action: gallery_cmd::GalleryCmd,
+    },
+    /// Move TermOS's settings to another machine: export them to an
+    /// archive, import one (D-126).
+    Settings {
+        #[command(subcommand)]
+        action: gallery_cmd::SettingsCmd,
+    },
+    /// Shell completions, printed for the packages (bash, zsh, fish,
+    /// powershell, elvish).
+    #[command(hide = true)]
+    Completions { shell: clap_complete::Shell },
+    /// The man page (roff), printed for the packages.
+    #[command(hide = true)]
+    Man,
     /// On a TermOS image: the lock screen's password (the user's system
     /// password, D-124).
     Password {
@@ -510,6 +529,24 @@ fn run_cli(args: impl IntoIterator<Item = String>) -> anyhow::Result<ExitCode> {
         Some(Cmd::Update { action }) => update::update_command(action, &paths),
         Some(Cmd::System { action }) => update::system_command(action, &config_path),
         Some(Cmd::Password { remove }) => password::password_command(*remove),
+        Some(Cmd::Gallery { action }) => gallery_cmd::gallery_command(action, &paths, &config_path),
+        Some(Cmd::Settings { action }) => {
+            gallery_cmd::settings_command(action, &paths, &config_path)
+        }
+        Some(Cmd::Completions { shell }) => {
+            use clap::CommandFactory as _;
+            use std::io::Write as _;
+            // Into memory first: clap_complete panics on a closed pipe.
+            let mut out = Vec::new();
+            clap_complete::generate(*shell, &mut Cli::command(), "termos", &mut out);
+            std::io::stdout().write_all(&out)?;
+            Ok(ExitCode::SUCCESS)
+        }
+        Some(Cmd::Man) => {
+            use clap::CommandFactory as _;
+            clap_mangen::Man::new(Cli::command()).render(&mut std::io::stdout())?;
+            Ok(ExitCode::SUCCESS)
+        }
         Some(Cmd::Debug {
             what: DebugCmd::Caps { raw },
         }) => debug_caps(*raw),
@@ -657,6 +694,10 @@ fn run(cli: &Cli, paths: &Paths, config_path: &Path, t: &Target) -> anyhow::Resu
             | Cmd::Update { .. }
             | Cmd::System { .. }
             | Cmd::Password { .. }
+            | Cmd::Gallery { .. }
+            | Cmd::Settings { .. }
+            | Cmd::Completions { .. }
+            | Cmd::Man
             | Cmd::Play { .. },
         ) => Ok(ExitCode::SUCCESS),
     }

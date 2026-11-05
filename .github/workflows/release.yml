@@ -171,6 +171,90 @@ jobs:
           path: out/
           if-no-files-found: error
 
+  # Debian, Ubuntu and Fedora packages (D-126), from the Linux builds
+  # above: the binary, the shell completions and the man page. Each is
+  # installed on a clean system and run before the release takes it.
+  linux-packages:
+    name: .deb and .rpm
+    needs: [version, linux]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-linux-*-gnu
+          path: dl
+          merge-multiple: true
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deb,cargo-generate-rpm
+      - name: Package
+        env:
+          V: ${{ needs.version.outputs.version }}
+        run: |
+          # Package versions take no `-rehearsal`: a rehearsal is ~rehearsal.
+          pv=$(echo "$V" | sed 's/-/~/')
+          for arch in x86_64 aarch64; do
+            tar -C dl -xzf "dl/termos-$V-linux-$arch.tar.gz"
+            mkdir -p "target/$arch-unknown-linux-gnu/release"
+            cp "dl/termos-$V-linux-$arch/termos" "target/$arch-unknown-linux-gnu/release/termos"
+          done
+          # The completions and the man page are the same on every
+          # machine: made once, by the x86_64 build.
+          t=target/x86_64-unknown-linux-gnu/release/termos
+          mkdir -p target/assets
+          "$t" completions bash > target/assets/termos.bash
+          "$t" completions zsh > target/assets/_termos
+          "$t" completions fish > target/assets/termos.fish
+          "$t" man | gzip -9n > target/assets/termos.1.gz
+          mkdir -p out
+          for arch in x86_64 aarch64; do
+            cargo deb -p termos-cli --no-build --no-strip --target "$arch-unknown-linux-gnu" \
+              --deb-version "$pv" -o out/
+            cargo generate-rpm -p crates/termos-cli --target "$arch-unknown-linux-gnu" \
+              --set-metadata "version = \"$pv\"" -o out/
+          done
+          ls -l out
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-packages-linux
+          path: out/
+          if-no-files-found: error
+
+  linux-packages-test:
+    name: Install the ${{ matrix.kind }} on ${{ matrix.image }} (${{ matrix.runner }})
+    needs: linux-packages
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: ubuntu-24.04, image: "ubuntu:24.04", kind: deb, arch: amd64 }
+          - { runner: ubuntu-24.04, image: "debian:12", kind: deb, arch: amd64 }
+          - { runner: ubuntu-24.04-arm, image: "ubuntu:24.04", kind: deb, arch: arm64 }
+          - { runner: ubuntu-24.04, image: "fedora:41", kind: rpm, arch: x86_64 }
+          - { runner: ubuntu-24.04-arm, image: "fedora:41", kind: rpm, arch: aarch64 }
+    container: ${{ matrix.image }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-packages-linux
+          path: pkg
+      - name: Install and run
+        shell: sh
+        run: |
+          if [ "${{ matrix.kind }}" = deb ]; then
+            apt-get update -qq
+            apt-get install -y -qq ./pkg/termos_*_${{ matrix.arch }}.deb
+          else
+            dnf install -y -q ./pkg/termos-*.${{ matrix.arch }}.rpm
+          fi
+          termos --version
+          termos completions bash > /dev/null
+          test -f /usr/share/man/man1/termos.1.gz
+
   images:
     name: Image (${{ matrix.target }})
     needs: version
@@ -241,7 +325,7 @@ jobs:
 
   publish:
     name: Draft release
-    needs: [version, linux, macos, windows, images]
+    needs: [version, linux, macos, windows, linux-packages, linux-packages-test, images]
     # A rehearsal without images skips that job; everything else must pass.
     if: ${{ !failure() && !cancelled() }}
     runs-on: ubuntu-24.04
@@ -280,6 +364,7 @@ jobs:
           \`gh attestation verify <file> --repo ${{ github.repository }}\`.
 
           - **In a terminal:** \`termos-$V-<system>\` (Linux: glibc 2.31+ or the static \`-musl\` build; macOS; Windows).
+          - **Debian, Ubuntu, Fedora:** the \`.deb\` and \`.rpm\` for your machine (\`apt install ./termos_…deb\`, \`dnf install ./termos-…rpm\`); Homebrew, Scoop, winget, the AUR and Nix follow once this release is published (docs/installing.md).
           - **On a PC:** \`termos-$V-x86_64.iso\` (try it, then \`termos install\`), or the disk image \`.img.zst\`.
           - **Arm machines and Raspberry Pis:** the \`.img.zst\` for the board, written to a disk or SD card.
           - **Updates:** \`termos update install\` on a TermOS machine fetches its \`.raucb\` bundle.

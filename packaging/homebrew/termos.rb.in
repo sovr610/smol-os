@@ -1,0 +1,41 @@
+# Homebrew formula for TermOS (D-126). The `packages` workflow fills in
+# the version and checksums from a release and pushes the result to the
+# tap `sovr610/homebrew-termos`; do not edit the tap's copy by hand.
+class Termos < Formula
+  desc "Terminal-first desktop: windows, AI agents and local models in any terminal"
+  homepage "https://github.com/sovr610/smol-os"
+  version "@VERSION@"
+  license "GPL-3.0-or-later"
+
+  on_macos do
+    on_arm do
+      url "https://github.com/sovr610/smol-os/releases/download/v@VERSION@/termos-@VERSION@-macos-arm64.tar.gz"
+      sha256 "@SHA_MACOS_ARM64@"
+    end
+    on_intel do
+      url "https://github.com/sovr610/smol-os/releases/download/v@VERSION@/termos-@VERSION@-macos-x86_64.tar.gz"
+      sha256 "@SHA_MACOS_X86_64@"
+    end
+  end
+
+  on_linux do
+    on_arm do
+      url "https://github.com/sovr610/smol-os/releases/download/v@VERSION@/termos-@VERSION@-linux-aarch64.tar.gz"
+      sha256 "@SHA_LINUX_AARCH64@"
+    end
+    on_intel do
+      url "https://github.com/sovr610/smol-os/releases/download/v@VERSION@/termos-@VERSION@-linux-x86_64.tar.gz"
+      sha256 "@SHA_LINUX_X86_64@"
+    end
+  end
+
+  def install
+    bin.install "termos"
+    generate_completions_from_executable(bin/"termos", "completions")
+    (man1/"termos.1").write Utils.safe_popen_read(bin/"termos", "man")
+  end
+
+  test do
+    assert_match version.to_s, shell_output("#{bin}/termos --version")
+  end
+end

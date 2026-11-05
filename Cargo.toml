@@ -51,6 +51,9 @@ ruzstd = { version = "0.9.1", default-features = false, features = ["std"] }
 zip = { version = "9.3.0", default-features = false, features = ["deflate-flate2"] }
 bitflags = "2.13.2"
 clap = { version = "4.6.7", features = ["derive"] }
+# Shell completions and the man page for the packages (D-126).
+clap_complete = "4.6.11"
+clap_mangen = "0.3.3"
 compact_str = "0.10.0"
 crossterm = "0.29.0"
 jiff = "0.2.38"
@@ -90,6 +93,8 @@ serde_json = "1.0.154"
 sha2 = "0.10.9"
 # The lock screen's password check against /etc/shadow (sha512crypt, D-124).
 sha-crypt = { version = "0.6.0", features = ["getrandom"] }
+# The gallery's signed index (D-126).
+ed25519-dalek = "3.0.0"
 thiserror = "2.0.21"
 tokio = { version = "1.54.1", features = ["rt", "macros", "sync", "time", "signal", "net", "io-util", "process"] }
 toml = "1.1.8"

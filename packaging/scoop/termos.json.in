@@ -1,0 +1,26 @@
+{
+    "version": "@VERSION@",
+    "description": "Terminal-first desktop: windows, AI agents and local models in any terminal",
+    "homepage": "https://github.com/sovr610/smol-os",
+    "license": "GPL-3.0-or-later",
+    "architecture": {
+        "64bit": {
+            "url": "https://github.com/sovr610/smol-os/releases/download/v@VERSION@/termos-@VERSION@-windows-x86_64.zip",
+            "hash": "@SHA_WINDOWS_X86_64@",
+            "extract_dir": "termos-@VERSION@-windows-x86_64"
+        }
+    },
+    "bin": "termos.exe",
+    "checkver": "github",
+    "autoupdate": {
+        "architecture": {
+            "64bit": {
+                "url": "https://github.com/sovr610/smol-os/releases/download/v$version/termos-$version-windows-x86_64.zip",
+                "extract_dir": "termos-$version-windows-x86_64"
+            }
+        },
+        "hash": {
+            "url": "$baseurl/SHA256SUMS"
+        }
+    }
+}

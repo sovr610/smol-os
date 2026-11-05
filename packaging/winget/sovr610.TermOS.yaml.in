@@ -1,0 +1,6 @@
+# winget version manifest (D-126); the `packages` workflow fills it in.
+PackageIdentifier: sovr610.TermOS
+PackageVersion: "@VERSION@"
+DefaultLocale: en-US
+ManifestType: version
+ManifestVersion: 1.6.0

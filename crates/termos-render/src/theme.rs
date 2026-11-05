@@ -175,6 +175,9 @@ pub fn is_light(bg: Rgb) -> bool {
 #[serde(default, rename_all = "kebab-case", deny_unknown_fields)]
 pub struct ThemeConfig {
     pub base: ThemeBase,
+    /// A theme file to start from, `themes/NAME.toml` beside the config
+    /// (the gallery's themes, D-126); the colours set here win over it.
+    pub name: Option<String>,
     #[serde(deserialize_with = "opt_color")]
     pub accent: Option<Color>,
     #[serde(deserialize_with = "opt_color")]
@@ -198,6 +201,30 @@ pub struct ThemeConfig {
 }
 
 impl ThemeConfig {
+    /// Fills what this config leaves unset from a theme file's: each
+    /// colour, and the base while this one is `auto`.
+    pub fn fill_from(&mut self, file: &ThemeConfig) {
+        if self.base == ThemeBase::Auto {
+            self.base = file.base;
+        }
+        for (mine, theirs) in [
+            (&mut self.accent, file.accent),
+            (&mut self.fg, file.fg),
+            (&mut self.muted, file.muted),
+            (&mut self.border, file.border),
+            (&mut self.status_bg, file.status_bg),
+            (&mut self.status_fg, file.status_fg),
+            (&mut self.overlay_bg, file.overlay_bg),
+            (&mut self.selection_bg, file.selection_bg),
+            (&mut self.warn, file.warn),
+            (&mut self.error, file.error),
+        ] {
+            if mine.is_none() {
+                *mine = theirs;
+            }
+        }
+    }
+
     /// The theme for a terminal with this background, from `base` (or
     /// `base_override`, a theme picked at run time) plus the overrides.
     pub fn theme(&self, base_override: Option<ThemeBase>, background: Option<Rgb>) -> Theme {

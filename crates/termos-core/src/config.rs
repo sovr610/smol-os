@@ -91,6 +91,8 @@ pub struct Config {
     pub power: PowerConfig,
     /// Time sync and the status clock's format (M13d, D-124).
     pub clock: ClockConfig,
+    /// The gallery of themes, layouts and widgets (M13g, D-126).
+    pub gallery: GalleryConfig,
     /// The coding harness (M11c, D-099).
     pub harness: HarnessConfig,
     /// A git worktree per task (M12a, D-113).
@@ -133,6 +135,7 @@ impl Default for Config {
             lock: LockConfig::default(),
             power: PowerConfig::default(),
             clock: ClockConfig::default(),
+            gallery: GalleryConfig::default(),
             harness: HarnessConfig::default(),
             worktrees: WorktreesConfig::default(),
         }
@@ -535,6 +538,28 @@ impl Default for ClockConfig {
     }
 }
 
+/// The gallery (`[gallery]`, D-126).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(default, deny_unknown_fields, rename_all = "kebab-case")]
+pub struct GalleryConfig {
+    /// Where the signed index is (an `https` address, or a local file for
+    /// a gallery's maintainers). Its entries are checked against the keys
+    /// built into TermOS wherever it comes from.
+    pub index: String,
+}
+
+impl Default for GalleryConfig {
+    fn default() -> Self {
+        Self {
+            index: GALLERY_INDEX.to_owned(),
+        }
+    }
+}
+
+/// The gallery's index on GitHub.
+pub const GALLERY_INDEX: &str =
+    "https://raw.githubusercontent.com/sovr610/termos-gallery/main/index.json";
+
 /// Whether `name` can be an NTP server's name or address: letters,
 /// digits, dots, hyphens and colons (IPv6), as `ntpd -p` takes them.
 pub fn valid_ntp_server(name: &str) -> bool {
@@ -865,7 +890,7 @@ pub enum ConfigError {
 impl Config {
     /// Parses config text; `path` is only used in error messages.
     pub fn parse(src: &str, path: &Path) -> Result<Self, ConfigError> {
-        toml::from_str(src).map_err(|e| {
+        let mut cfg: Self = toml::from_str(src).map_err(|e| {
             let (line, col) = e.span().map_or((1, 1), |span| line_col(src, span.start));
             ConfigError::Parse {
                 path: path.to_owned(),
@@ -873,7 +898,43 @@ impl Config {
                 col,
                 message: e.message().trim().to_owned(),
             }
-        })
+        })?;
+        cfg.load_theme_file(path);
+        Ok(cfg)
+    }
+
+    /// `[theme] name`: the colours of `themes/NAME.toml` beside the
+    /// config file, under the ones the config sets (D-126). A missing or
+    /// broken theme file leaves the preset, with a warning in the log.
+    fn load_theme_file(&mut self, path: &Path) {
+        let Some(name) = self.theme.name.clone() else {
+            return;
+        };
+        let plain = !name.is_empty()
+            && name
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_'));
+        if !plain {
+            tracing::warn!("[theme] name = {name:?} is not a theme's name");
+            return;
+        }
+        let file = path
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join("themes")
+            .join(format!("{name}.toml"));
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct ThemeFile {
+            theme: ThemeConfig,
+        }
+        match std::fs::read_to_string(&file)
+            .map_err(|e| e.to_string())
+            .and_then(|t| toml::from_str::<ThemeFile>(&t).map_err(|e| e.message().to_owned()))
+        {
+            Ok(f) => self.theme.fill_from(&f.theme),
+            Err(e) => tracing::warn!("theme {name} ({}): {e}", file.display()),
+        }
     }
 
     /// Loads `path`; a missing file means the defaults.
@@ -1032,6 +1093,10 @@ critical = 5             # percent: suspend after a 30-second countdown (0: neve
 ntp-servers = ["pool.ntp.org"]   # the image's time sync
 time-format = "24h"      # 24h | 12h, for the status clock
 
+[gallery]
+# Themes, layouts and widgets, signed (termos gallery list; docs/gallery.md).
+index = "https://raw.githubusercontent.com/sovr610/termos-gallery/main/index.json"
+
 # Saved commands, in the palette as "snippet: NAME". {param} and
 # {param:default} are asked for. Do not put secrets in them.
 # [[snippets]]
@@ -1184,6 +1249,7 @@ repeat-rate = 25         # repeats per second
 # auto | dark | light | high-contrast. "auto" is dark or light to match each
 # terminal's background. Switch while running: palette → "theme".
 base = "auto"
+# name = "nord"          # a theme file, themes/NAME.toml beside this one (the gallery's)
 # Override any colour of the preset: "default", "#rrggbb", "colourN"
 # (0-255) or names like "brightblue".
 # accent = "#6cb6ff"

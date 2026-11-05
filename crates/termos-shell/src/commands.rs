@@ -88,6 +88,12 @@ pub enum Command {
     /// A window running `termos update install` (D-077).
     UpdateOpen,
     SettingsOpen,
+    /// The gallery of themes, layouts and widgets (D-126).
+    GalleryOpen,
+    /// A window exporting the settings to an archive in the home folder.
+    SettingsExport,
+    /// A window importing a settings archive (it asks which).
+    SettingsImport,
     /// Run a project task (build, run, test, or one from termos.toml) in
     /// a panel.
     Task(String),
@@ -356,6 +362,18 @@ pub const COMMANDS: &[CommandInfo] = &[
     ),
     info("network.open", "Network: connections and Wi-Fi"),
     info("update.open", "Updates: install a newer TermOS"),
+    info(
+        "gallery.open",
+        "Gallery: themes, layouts and widgets to install",
+    ),
+    info(
+        "settings.export",
+        "Export the settings to an archive (for another machine)",
+    ),
+    info(
+        "settings.import",
+        "Import settings from an exported archive",
+    ),
     info("settings.open", "Settings"),
     info("clipboard.open", "Clipboard history"),
     info("clipboard.clear", "Forget the clipboard history"),
@@ -901,6 +919,9 @@ impl FromStr for Command {
             },
             "network.open" => no_arg(Command::NetworkOpen),
             "update.open" => no_arg(Command::UpdateOpen),
+            "gallery.open" => no_arg(Command::GalleryOpen),
+            "settings.export" => no_arg(Command::SettingsExport),
+            "settings.import" => no_arg(Command::SettingsImport),
             "settings.open" => no_arg(Command::SettingsOpen),
             "clipboard.open" => no_arg(Command::ClipboardOpen),
             "clipboard.clear" => no_arg(Command::ClipboardClear),
@@ -999,6 +1020,9 @@ impl fmt::Display for Command {
             Command::GitOpen => f.write_str("git.open"),
             Command::NetworkOpen => f.write_str("network.open"),
             Command::UpdateOpen => f.write_str("update.open"),
+            Command::GalleryOpen => f.write_str("gallery.open"),
+            Command::SettingsExport => f.write_str("settings.export"),
+            Command::SettingsImport => f.write_str("settings.import"),
             Command::SettingsOpen => f.write_str("settings.open"),
             Command::ClipboardOpen => f.write_str("clipboard.open"),
             Command::ClipboardClear => f.write_str("clipboard.clear"),

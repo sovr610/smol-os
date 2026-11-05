@@ -1,0 +1,18 @@
+# winget locale manifest (D-126).
+PackageIdentifier: sovr610.TermOS
+PackageVersion: "@VERSION@"
+PackageLocale: en-US
+Publisher: TermOS contributors
+PublisherUrl: https://github.com/sovr610/smol-os
+PackageName: TermOS
+PackageUrl: https://github.com/sovr610/smol-os
+License: GPL-3.0-or-later
+LicenseUrl: https://github.com/sovr610/smol-os/blob/main/LICENSE
+ShortDescription: "Terminal-first desktop: windows, AI agents and local models in any terminal"
+Moniker: termos
+Tags:
+  - terminal
+  - tui
+  - multiplexer
+ManifestType: defaultLocale
+ManifestVersion: 1.6.0

@@ -21,7 +21,9 @@ TermOS comes two ways:
   bad update falls back. See [bare-metal.md](bare-metal.md): try the live
   ISO, then `termos install`.
 
-From a release, pick the file for your system:
+The easiest way is a package: `apt`, `dnf`, Homebrew, Scoop, winget, the
+AUR or Nix ([installing.md](installing.md)). Or, from a release, pick the
+file for your system:
 
 | File | System |
 | --- | --- |

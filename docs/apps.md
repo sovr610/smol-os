@@ -221,6 +221,13 @@ A saved network is joined whenever it is in range. Elsewhere (TermOS in a
 terminal) Wi-Fi belongs to the system's own network tools, and the page
 shows the connections only.
 
+## Gallery
+
+Themes, layouts and status-line widgets from the signed gallery (D-126):
+◆ Menu → Apps → Gallery, or Settings → Gallery. Type to search; `Enter`
+installs the selected entry, `Ctrl+U` uses an installed theme, `Ctrl+D`
+removes, `Ctrl+R` loads the index again. See [gallery.md](gallery.md).
+
 ## Settings
 
 The common options of `config.toml`: theme, window borders and shadows,
@@ -228,6 +235,10 @@ animations, how images are shown, the status line, the mouse, key hints,
 session restore, scrollback saving and the clipboard history; on TermOS
 images also the lock and power settings and the clock (D-124). `↑` `↓`
 choose, `←` `→` (or `Enter`) change.
+
+**System → Export settings** and **Import settings** move your settings
+to another machine ([installing.md](installing.md#moving-to-another-machine)),
+and **System → Gallery** opens the gallery.
 
 **Clock → Time zone** (TermOS images) opens the list of zones: type to
 search (`new york`, `paris`), `↑` `↓` choose, `Enter` sets it, `Esc` goes

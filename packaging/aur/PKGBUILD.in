@@ -1,0 +1,29 @@
+# The AUR package `termos-bin` (D-126): the release's Linux build. The
+# `packages` workflow fills in the version and checksums and pushes it,
+# with its .SRCINFO, to the AUR.
+pkgname=termos-bin
+pkgver=@VERSION@
+pkgrel=1
+pkgdesc="Terminal-first desktop: windows, AI agents and local models in any terminal"
+arch=('x86_64' 'aarch64')
+url="https://github.com/sovr610/smol-os"
+license=('GPL-3.0-or-later')
+depends=('glibc')
+optdepends=('bubblewrap: the sandbox for agents commands'
+            'git: worktrees and the Git window')
+provides=('termos')
+conflicts=('termos')
+source_x86_64=("https://github.com/sovr610/smol-os/releases/download/v${pkgver}/termos-${pkgver}-linux-x86_64.tar.gz")
+source_aarch64=("https://github.com/sovr610/smol-os/releases/download/v${pkgver}/termos-${pkgver}-linux-aarch64.tar.gz")
+sha256sums_x86_64=('@SHA_LINUX_X86_64@')
+sha256sums_aarch64=('@SHA_LINUX_AARCH64@')
+
+package() {
+	cd "termos-${pkgver}-linux-${CARCH}"
+	install -Dm755 termos "$pkgdir/usr/bin/termos"
+	install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+	./termos completions bash | install -Dm644 /dev/stdin "$pkgdir/usr/share/bash-completion/completions/termos"
+	./termos completions zsh | install -Dm644 /dev/stdin "$pkgdir/usr/share/zsh/site-functions/_termos"
+	./termos completions fish | install -Dm644 /dev/stdin "$pkgdir/usr/share/fish/vendor_completions.d/termos.fish"
+	./termos man | install -Dm644 /dev/stdin "$pkgdir/usr/share/man/man1/termos.1"
+}

@@ -1390,6 +1390,10 @@ impl Desktop {
             Command::SettingsOpen => {
                 Box::new(termos_apps::Settings::open(self.opts.config_path.clone()))
             }
+            Command::GalleryOpen => Box::new(termos_apps::gallery_window::GalleryWindow::open(
+                self.config.gallery.index.clone(),
+                termos_apps::gallery::Places::from_paths(&self.opts.paths, &self.opts.config_path),
+            )),
             Command::ClipboardOpen => Box::new(termos_apps::ClipboardManager::new(
                 std::sync::Arc::clone(&self.opts.clipboard),
             )),
@@ -2014,12 +2018,18 @@ impl Desktop {
     /// for a newer release, asks before installing it, and waits for a key
     /// so its last words can be read (D-077).
     fn open_update(&mut self, area: Rect) {
+        let args = ["update", "install", "--wait"].map(str::to_owned).to_vec();
+        self.open_cli_window("updates", args, area);
+    }
+
+    /// A floating window running `termos ARGS` (which waits for Enter
+    /// before it closes).
+    fn open_cli_window(&mut self, title: &str, args: Vec<String>, area: Rect) {
         let Some(exe) = self.termos_exe() else {
             self.notify(Level::Error, "cannot find the termos program");
             return;
         };
         let cwd = self.focused_cwd();
-        let args = ["update", "install", "--wait"].map(str::to_owned).to_vec();
         match self.spawn_pane(
             cwd,
             (area.w * 7 / 10, area.h / 2),
@@ -2027,12 +2037,12 @@ impl Desktop {
         ) {
             Ok(id) => {
                 if let Some(p) = self.panes.get_mut(&id) {
-                    p.title = "updates".into();
+                    p.title = title.into();
                 }
                 self.session.active_mut().add_float(id, area);
                 self.animate(anim::Kind::FloatOpen(id), Instant::now());
             }
-            Err(e) => self.notify(Level::Error, format!("cannot start termos update: {e}")),
+            Err(e) => self.notify(Level::Error, format!("cannot start termos {title}: {e}")),
         }
     }
 
@@ -3109,7 +3119,25 @@ impl Desktop {
                 }
             }
             Command::UpdateOpen => self.open_update(area),
-            Command::SettingsOpen | Command::ClipboardOpen => {
+            Command::SettingsExport => {
+                let name = format!(
+                    "termos-settings-{}.tar.gz",
+                    jiff::Zoned::now().strftime("%Y-%m-%d")
+                );
+                let file = home_dir().unwrap_or_default().join(name);
+                let args = vec![
+                    "settings".to_owned(),
+                    "export".to_owned(),
+                    file.display().to_string(),
+                    "--wait".to_owned(),
+                ];
+                self.open_cli_window("settings export", args, area);
+            }
+            Command::SettingsImport => {
+                let args = ["settings", "import", "--wait"].map(str::to_owned).to_vec();
+                self.open_cli_window("settings import", args, area);
+            }
+            Command::SettingsOpen | Command::ClipboardOpen | Command::GalleryOpen => {
                 if let Some(app) = self.build_app(&cmd) {
                     self.open_app(app);
                 }

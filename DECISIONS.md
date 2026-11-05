@@ -1580,6 +1580,49 @@ rewrite history.
 
 ---
 
+## D-125: M13g owner answers: every channel, a GitHub gallery the owner reviews, data and widgets first
+- **Status:** Accepted · 2026-11-05
+- **Context:** M13g's "Ask first" questions (D-117, docs/plans/m13-os.md).
+- **Decision:** the plan's answers, chosen by the owner:
+  - **Channels:** all of them: `.deb` and `.rpm` on each release; Homebrew (a tap), Scoop (a bucket), winget, the AUR (`termos-bin`) and a Nix flake. The owner owns the accounts; each publishing job stays off until its secret exists.
+  - **The gallery** is a GitHub repository, `sovr610/termos-gallery`, holding one signed index; the owner reviews every entry.
+  - **Kinds at first:** themes, layouts and WASM widgets. Native plugins and saved commands come later.
+- **Alternatives:** fewer channels (less upkeep); the index in this repository; all five kinds at once (native plugins are programs, and need a review of what each asks for).
+
+---
+
+## D-126: Packages, the gallery and settings that move
+- **Status:** Accepted · 2026-11-05
+- **Context:** M13g (D-117) with D-125's answers.
+- **Decision:**
+  - **Completions and the man page:** `termos completions SHELL` (clap_complete: bash, zsh, fish, powershell, elvish) and `termos man` (clap_mangen), hidden commands the packages run. Completions are written to memory first (clap_complete panics on a closed pipe).
+  - **`.deb` and `.rpm` (release.yml):** a job takes the release's glibc builds for x86_64 and aarch64, makes the completions and man page once with the x86_64 binary, and packages with `cargo deb --no-build` and `cargo generate-rpm` from metadata in termos-cli's Cargo.toml. Dependencies are written out (`libc6 (>= 2.31)`, `glibc >= 2.31`), since the arm64 binary cannot be inspected on an x86_64 runner. A rehearsal's version becomes `~rehearsal`. Each package is installed on Ubuntu 24.04, Debian 12 and Fedora 41 (x86_64 and arm64 runners), and runs, before the draft release takes it.
+  - **The other channels (packages.yml):** on a published release (or by hand with a tag), `render-packaging.sh` fills `packaging/` (Homebrew formula, Scoop manifest, winget manifests, PKGBUILD) from the release's `SHA256SUMS`, failing on any checksum it cannot find. Then each is installed on a clean runner: a local tap on macOS, Scoop on Windows, winget where the runner has it, `makepkg` in an Arch container. Each publishes only with its secret: a push to the tap or bucket, `wingetcreate submit`, a push to the AUR over SSH.
+    - **Homebrew, the AUR and Nix** make completions and the man page at install time from the binary.
+    - **Nix:** `flake.nix` builds from source with rust-overlay's toolchain from `rust-toolchain.toml` (nixpkgs' Rust may be older than the pin). Tests are off in the sandbox (they need PTYs and shells, and CI runs them). It is built on Linux and macOS by the workflow and on changes to it.
+  - **The gallery (`termos_apps::gallery`):**
+    - **The index:** JSON, format 1, naming its signing key's id (the first 16 hex digits of the public key's SHA-256). Each entry has name, kind, version, summary, `https` address, SHA-256, author, licence and an Ed25519 signature (`ed25519-dalek`, new, BSD-3-Clause). The signature covers a domain string and every other field, one per line; fields may not hold line breaks, so the message is unambiguous without canonical JSON.
+    - **Checks:** one bad signature refuses the whole index. Kinds this TermOS does not install are counted and skipped. Names are lowercase letters, digits and `-`; versions, lengths and the number of entries are bounded. A download must match its SHA-256 and be its kind (a `[theme]` file, a layout `termos_core::layouts` parses, a module starting `\0asm`) before it is written.
+    - **Keys:** built into the binary (`KEYS`), with none yet. The owner makes one offline with `termos gallery keygen` and adds its public half, so this build installs nothing and says so; a `TODO(M13g)` marks it. `termos gallery sign` signs an index for the maintainers. `[gallery] index` can point at a mirror or a local file, still checked against the built-in keys.
+    - **Fetching:** the system's `curl` (`--proto =https --tlsv1.2`, size limits), as TermOS's other downloads.
+    - **Installing:** themes to `themes/NAME.toml` beside the config, layouts to `layouts/`, widgets to `widgets/NAME.wasm` plus a `[widgets.NAME] path` table written with toml_edit (comments kept, the result checked as a config). A record in `<state>/gallery/installed.json` lets `update` and `remove` work; removing takes the files and tables away again.
+    - **Themes:** a new `[theme] name` loads `themes/NAME.toml` under the config's own colours (the base too while the config's is `auto`). A missing or broken file keeps the preset and logs why, so a config never fails over it.
+    - **The CLI:** `termos gallery list|search|show|install [--use]|use|update|remove`.
+    - **The window:** a Gallery window (◆ Menu → Apps, or Settings), which loads the index and installs on threads.
+  - **Settings export and import (`termos_apps::settings_io`, `termos settings`):**
+    - **The archive:** a `.tar.gz` under `termos-settings/` with the config, `layouts/*.toml`, `themes/*.toml`, the gallery's record, the AI accounts' names (from the accounts index's tables, nothing else) and a manifest.
+    - **What never goes:** keys, the secrets file, histories, snapshots and logs are never collected. Every text file is also scanned with `termos_ai`'s redaction patterns, and an export with a key-shaped line stops and names the line.
+    - **Import:** only known names are read (no `..`, regular files, size limits). The config is merged key by key with toml_edit, the archive winning and the user's comments and other keys staying, and the result is checked before writing. A file that differs is replaced only on a yes (`--yes` for all). The gallery's entries are installed again from the gallery, and accounts are listed to sign in to again.
+    - **In the desktop:** Settings gets Gallery, Export settings and Import settings, which open windows running the CLI (`--wait`).
+  - **Tests:** a fixture key signs an index that verifies; a changed field, a bad signature, an unknown key and no keys are refused; bad indexes are refused; wrong downloads write nothing; a theme, layout and widget land where TermOS reads them and come out again. A two-home round trip runs the real binary, checks the archive against the redaction patterns, and checks that a pasted key stops the export. A new fuzz target covers `gallery_index`.
+- **Alternatives:**
+  - **Signing the whole index:** needs canonical JSON, or a detached signature over the file's bytes, which cannot say which entry is wrong.
+  - **minisign or GPG:** another tool for maintainers and users, where ed25519-dalek is small.
+  - **A themes folder TermOS scans:** `[theme] name` names one, so nothing changes by itself.
+  - **Exporting the accounts index:** it holds budgets and labels only, but importing it would describe folders and sign-ins the new machine does not have.
+
+---
+
 ## Open questions (the owner will be asked before the milestone that needs each one)
 
 | ID | Question | Needed by | Current lean |

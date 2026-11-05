@@ -1,0 +1,16 @@
+# winget installer manifest (D-126): the release's zip, with termos.exe
+# as a portable command.
+PackageIdentifier: sovr610.TermOS
+PackageVersion: "@VERSION@"
+InstallerType: zip
+NestedInstallerType: portable
+NestedInstallerFiles:
+  - RelativeFilePath: termos-@VERSION@-windows-x86_64\termos.exe
+    PortableCommandAlias: termos
+MinimumOSVersion: 10.0.17763.0
+Installers:
+  - Architecture: x64
+    InstallerUrl: https://github.com/sovr610/smol-os/releases/download/v@VERSION@/termos-@VERSION@-windows-x86_64.zip
+    InstallerSha256: "@SHA_WINDOWS_X86_64_UPPER@"
+ManifestType: installer
+ManifestVersion: 1.6.0

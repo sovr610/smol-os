@@ -25,6 +25,8 @@ pub mod drives;
 pub mod du;
 pub mod files;
 pub mod findfiles;
+pub mod gallery;
+pub mod gallery_window;
 pub mod gitstatus;
 pub mod image_viewer;
 pub mod markdown;
@@ -33,6 +35,7 @@ pub mod network;
 pub mod procs;
 pub mod rename;
 pub mod settings;
+pub mod settings_io;
 
 pub use clipboard::ClipboardManager;
 pub use files::{FileManager, Files, FilesOptions};
