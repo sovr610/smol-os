@@ -109,7 +109,7 @@ pub(crate) fn install_tool(
 /// The Node.js that runs Gemini CLI: installed by mise (not made your
 /// default), its program found with `mise where`.
 fn gemini_node(paths: &Paths) -> anyhow::Result<PathBuf> {
-    let mise = termos_devkit::mise::ensure(&paths.data_dir, &mut |m| say(m))?;
+    let mise = termos_devkit::mise::ensure(&paths.data_dir, &mut |m| println!("{m}"))?;
     say(&format!(
         "installing Node.js ({}) with mise…",
         ca::GEMINI_NODE
