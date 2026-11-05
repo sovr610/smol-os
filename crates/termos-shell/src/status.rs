@@ -25,6 +25,9 @@ pub struct TabInfo {
     /// A pane rang the bell while the workspace was in the background.
     pub bell: bool,
     pub zoomed: bool,
+    /// An agent there needs the user (`You`), or finished a turn not
+    /// seen yet (`Done`) (D-115).
+    pub attention: Option<crate::attention::Need>,
 }
 
 /// Everything the status line shows.
@@ -264,12 +267,21 @@ pub fn draw(
         if tab.zoomed {
             flag.push('Z');
         }
+        // An agent waiting: a dot; a finished turn: a tick (D-115).
+        match tab.attention {
+            Some(crate::attention::Need::You) => flag.push('\u{25cf}'),
+            Some(crate::attention::Need::Done) => flag.push('\u{2713}'),
+            None => {}
+        }
         let text = format!(" {}:{}{} ", tab.index, truncate(&tab.name, 16), flag);
-        let style = if tab.active || hovered(x, x + width(&text)) {
+        let mut style = if tab.active || hovered(x, x + width(&text)) {
             theme.status_tab_active
         } else {
             theme.status_tab
         };
+        if tab.attention == Some(crate::attention::Need::You) && !tab.active {
+            style = style.fg(theme.colors.warn);
+        }
         let start = x;
         x = grid.put_str(x, y, &text, style, left_limit);
         if tab.active {
@@ -342,6 +354,7 @@ mod tests {
             active: true,
             last: false,
             bell: false,
+            attention: None,
             zoomed: false,
         };
         let mut info = StatusInfo {
@@ -391,6 +404,7 @@ mod tests {
             active: true,
             last: false,
             bell: false,
+            attention: None,
             zoomed: false,
         };
         let info = StatusInfo {
@@ -432,6 +446,7 @@ mod tests {
                     active: false,
                     last: true,
                     bell: true,
+                    attention: None,
                     zoomed: false,
                 },
                 TabInfo {
@@ -440,6 +455,7 @@ mod tests {
                     active: true,
                     last: false,
                     bell: false,
+                    attention: None,
                     zoomed: true,
                 },
             ],

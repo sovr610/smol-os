@@ -93,6 +93,26 @@ pub(crate) enum AgentCmd {
     /// Claude Code's status line command: keeps the plan limits it passes
     /// (for the usage app), then shows your own status line or a short one.
     Statusline,
+    /// Add TermOS's hooks to every account of Claude Code, Codex and
+    /// Gemini CLI (or the one named): they mark an agent that needs you
+    /// or finished (D-116).
+    Hooks {
+        /// Take them out instead.
+        #[arg(long)]
+        remove: bool,
+        name: Option<String>,
+    },
+    /// What the CLIs' hooks run: tells TermOS about the agent in this
+    /// pane (D-116).
+    #[command(hide = true)]
+    Event {
+        /// claude, codex or gemini.
+        #[arg(long)]
+        cli: String,
+        /// The event's JSON (Codex's `notify` passes it here); else it
+        /// is read from standard input.
+        json: Option<String>,
+    },
     /// Run an external agent preset here (what `agent.external` opens).
     External {
         /// For Claude Code and Codex: the account (default: the one in
@@ -103,6 +123,13 @@ pub(crate) enum AgentCmd {
         /// (switching accounts, D-097).
         #[arg(long)]
         resume_from: Option<String>,
+        /// Continue this folder's latest conversation (a restored pane,
+        /// D-115).
+        #[arg(long)]
+        resume: bool,
+        /// With --resume: this conversation, when it is still there.
+        #[arg(long, requires = "resume")]
+        conversation: Option<String>,
         name: String,
         /// Arguments for the agent.
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
@@ -515,6 +542,10 @@ pub(crate) fn agent_command(
     paths: &Paths,
     config_path: &Path,
 ) -> anyhow::Result<ExitCode> {
+    // A hook: fast, and never failing over the configuration.
+    if let AgentCmd::Event { cli, json } = action {
+        return Ok(crate::agent_hooks::event(cli, json.as_deref()));
+    }
     let config = load_config(config_path)?;
     match action {
         AgentCmd::Ask {
@@ -666,20 +697,24 @@ pub(crate) fn agent_command(
         AgentCmd::Remove { name } => return crate::coding_agents::remove(paths, name),
         AgentCmd::Status => return crate::coding_agents::status(paths),
         AgentCmd::Statusline => return crate::coding_agents::statusline(paths),
+        AgentCmd::Hooks { remove, name } => {
+            return crate::agent_hooks::command(paths, *remove, name.as_deref());
+        }
+        AgentCmd::Event { .. } => {}
         AgentCmd::External {
             account,
             resume_from,
+            resume,
+            conversation,
             name,
             args,
         } => {
-            return external_command(
-                &config,
-                paths,
-                name,
-                account.as_deref(),
-                resume_from.as_deref(),
-                args,
-            );
+            let resume = match (resume_from, resume) {
+                (Some(from), _) => Resume::From(from.clone()),
+                (None, true) => Resume::Here(conversation.clone()),
+                (None, false) => Resume::No,
+            };
+            return external_command(&config, paths, name, account.as_deref(), &resume, args);
         }
     }
     Ok(ExitCode::SUCCESS)
@@ -700,12 +735,21 @@ pub(crate) fn pause(wait: bool, result: anyhow::Result<ExitCode>) -> anyhow::Res
     Ok(code)
 }
 
+/// Which conversation an agent window continues.
+enum Resume {
+    No,
+    /// The folder's latest, from another account (D-097).
+    From(String),
+    /// The folder's latest in its own account, or this one (D-115).
+    Here(Option<String>),
+}
+
 fn external_command(
     config: &Config,
     paths: &Paths,
     name: &str,
     account: Option<&str>,
-    resume_from: Option<&str>,
+    resume: &Resume,
     args: &[String],
 ) -> anyhow::Result<ExitCode> {
     let presets = external::presets(&config.agents.external);
@@ -724,13 +768,26 @@ fn external_command(
         && let Some(launch) =
             crate::coding_agents::resolve_external(paths, config, program, account)?
     {
-        if let Some(from) = resume_from {
-            let here = std::env::current_dir()?;
-            preset.command.extend(crate::coding_agents::continue_args(
+        let here = std::env::current_dir()?;
+        match resume {
+            Resume::No => {}
+            Resume::From(from) => preset.command.extend(crate::coding_agents::continue_args(
                 paths, &launch, from, &here,
-            )?);
+            )?),
+            Resume::Here(id) => preset
+                .command
+                .extend(crate::coding_agents::resume_args_here(
+                    &launch,
+                    id.as_deref(),
+                    &here,
+                )),
         }
         preset.command[0] = launch.program.display().to_string();
+        // Agent windows mark when they need you (D-116), also for
+        // accounts made before TermOS had hooks.
+        if let Some(a) = &launch.account {
+            crate::agent_hooks::ensure(config, a);
+        }
         chosen = Some(launch);
     }
     let preset = &preset;

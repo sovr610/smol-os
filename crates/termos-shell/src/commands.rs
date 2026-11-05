@@ -124,6 +124,14 @@ pub enum Command {
     AuditOpen(String),
     /// The command center (D-093).
     CenterOpen,
+    /// Go to the agent waiting longest for the user (D-115).
+    AgentWaiting,
+    /// Copy mode at the previous prompt (OSC 133, D-116).
+    PromptPrev,
+    /// Copy mode at the next prompt.
+    PromptNext,
+    /// Copy the last command's output in the focused pane.
+    CopyOutput,
     /// The package manager app (D-110).
     PackagesOpen,
     /// `termos pkg ARGS` in a window: "install devroot gcc" (D-110).
@@ -412,6 +420,10 @@ pub const COMMANDS: &[CommandInfo] = &[
         "center.open",
         "The command center: AI and system, live and over time",
     ),
+    info("agent.waiting", "Go to the agent waiting longest for you"),
+    info("pane.prompt-prev", "Scroll back to the previous prompt"),
+    info("pane.prompt-next", "Scroll on to the next prompt"),
+    info("pane.copy-output", "Copy the last command's output"),
     CommandInfo {
         name: "file.open",
         description: "Open a file",
@@ -698,6 +710,10 @@ impl FromStr for Command {
             },
             "audit.open" => Ok(Command::AuditOpen(arg.unwrap_or("").to_owned())),
             "center.open" => no_arg(Command::CenterOpen),
+            "agent.waiting" => no_arg(Command::AgentWaiting),
+            "pane.prompt-prev" => no_arg(Command::PromptPrev),
+            "pane.prompt-next" => no_arg(Command::PromptNext),
+            "pane.copy-output" => no_arg(Command::CopyOutput),
             "network.open" => no_arg(Command::NetworkOpen),
             "update.open" => no_arg(Command::UpdateOpen),
             "settings.open" => no_arg(Command::SettingsOpen),
@@ -817,6 +833,10 @@ impl fmt::Display for Command {
             Command::AuditOpen(id) if id.is_empty() => f.write_str("audit.open"),
             Command::AuditOpen(id) => write!(f, "audit.open {id}"),
             Command::CenterOpen => f.write_str("center.open"),
+            Command::AgentWaiting => f.write_str("agent.waiting"),
+            Command::PromptPrev => f.write_str("pane.prompt-prev"),
+            Command::PromptNext => f.write_str("pane.prompt-next"),
+            Command::CopyOutput => f.write_str("pane.copy-output"),
             Command::PackagesOpen => f.write_str("packages.open"),
             Command::PkgRun(a) => write!(f, "pkg.run {a}"),
             Command::DevrootCreate => f.write_str("devroot.create"),

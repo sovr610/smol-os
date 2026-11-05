@@ -223,6 +223,7 @@ pub(crate) fn account_command(
                             Err(e) => eprintln!("termos: {e:#}"),
                         }
                     }
+                    crate::agent_hooks::ensure(&config, &a);
                     if !no_sign_in && std::io::stdin().is_terminal() {
                         print!("Sign in to it now? [Y/n] ");
                         let _ = std::io::stdout().flush();

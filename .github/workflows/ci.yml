@@ -77,11 +77,14 @@ jobs:
       # keymaps (xkb-data).
       # The dev rootfs (D-110) adds shadow's newuidmap (uidmap) and a range
       # of subordinate IDs for the runner; its test then must run too.
-      - name: Agent sandbox, dev rootfs and console libraries (Linux)
+      # zsh and fish: the shell integration's tests (D-116) run with real
+      # bash, zsh and fish here, and fail rather than skip without them.
+      - name: Agent sandbox, dev rootfs, console libraries and shells (Linux)
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq bubblewrap uidmap libinput-dev libudev-dev libxkbcommon-dev libseat-dev xkb-data
+          sudo apt-get install -y -qq bubblewrap uidmap libinput-dev libudev-dev libxkbcommon-dev libseat-dev xkb-data zsh fish
+          echo "TERMOS_REQUIRE_SHELLS=bash,zsh,fish" >> "$GITHUB_ENV"
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
           grep -q "^$(id -un):" /etc/subuid || sudo usermod --add-subuids 100000-165535 --add-subgids 100000-165535 "$(id -un)"
           echo "TERMOS_REQUIRE_SANDBOX=1" >> "$GITHUB_ENV"
@@ -309,7 +312,7 @@ jobs:
       - name: Run fuzz targets
         working-directory: fuzz
         run: |
-          for target in vt_advance config_parse keyspec_parse input_decode proto_decode caps_reply sixel_decode apc_dcs_intercept markdown_layout sse_parse gguf_parse ppm_parse mcp_message plan_parse cli_events; do
+          for target in vt_advance config_parse keyspec_parse input_decode proto_decode caps_reply sixel_decode apc_dcs_intercept osc_signals markdown_layout sse_parse gguf_parse ppm_parse mcp_message plan_parse cli_events; do
             cargo +nightly fuzz run "$target" --target x86_64-unknown-linux-gnu -- -max_total_time=60
           done
 

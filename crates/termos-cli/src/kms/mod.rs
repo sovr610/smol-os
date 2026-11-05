@@ -360,8 +360,9 @@ impl Console {
                 self.screen.image_free(id);
                 self.show()?;
             }
-            // There is no window title on a console.
-            ServerMsg::Title(_) => {}
+            // There is no window title on a console, nor a notification
+            // service: the desktop's own toast shows it.
+            ServerMsg::Title(_) | ServerMsg::Notify { .. } => {}
             // The console's keyboard reports neither repeats nor releases.
             ServerMsg::KeyboardFlags(_) => {}
         }

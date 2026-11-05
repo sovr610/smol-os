@@ -2199,6 +2199,13 @@ impl Server {
                     lines: Option<usize>,
                     #[serde(default)]
                     session: Option<String>,
+                    /// The last command only: its line, output and status
+                    /// (OSC 133, D-116).
+                    #[serde(default)]
+                    command: bool,
+                    /// Only commands that finished (a pane reading its own).
+                    #[serde(default)]
+                    finished: bool,
                 }
                 let p: P = req.params_as()?;
                 let key = self.session_with(p.session.as_deref(), Some(p.pane))?;
@@ -2206,11 +2213,53 @@ impl Server {
                     .sessions
                     .get(&key)
                     .ok_or_else(|| RpcError::not_found("no such session"))?;
-                let lines = e
+                let lines = p.lines.unwrap_or(200).clamp(1, 10_000);
+                let last = e
                     .desktop
-                    .read_pane(Some(PaneId(p.pane)), p.lines.unwrap_or(200).clamp(1, 10_000))
+                    .last_command(Some(PaneId(p.pane)), p.finished)
+                    .map_err(RpcError::not_found)?
+                    .map(|b| {
+                        let skip = b.output.len().saturating_sub(lines);
+                        json!({
+                            "command": b.command,
+                            "output": b.output[skip..],
+                            "exit": b.exit,
+                            "state": match b.state {
+                                termos_term::blocks::BlockState::Prompt => "prompt",
+                                termos_term::blocks::BlockState::Running => "running",
+                                termos_term::blocks::BlockState::Finished => "finished",
+                            },
+                        })
+                    });
+                if p.command {
+                    return Ok(json!({ "pane": p.pane, "last_command": last }));
+                }
+                let text = e
+                    .desktop
+                    .read_pane(Some(PaneId(p.pane)), lines)
                     .map_err(RpcError::not_found)?;
-                Ok(json!({ "pane": p.pane, "lines": lines }))
+                Ok(json!({ "pane": p.pane, "lines": text, "last_command": last }))
+            }
+            // An agent CLI's hook (`termos agent event`, D-116): it needs
+            // the user, finished a turn, or started a conversation.
+            "agent.event" => {
+                #[derive(Deserialize)]
+                struct P {
+                    #[serde(flatten)]
+                    event: crate::attention::AgentEvent,
+                    #[serde(default)]
+                    session: Option<String>,
+                }
+                let p: P = req.params_as()?;
+                let key = self.session_with(p.session.as_deref(), Some(p.event.pane))?;
+                let e = self
+                    .sessions
+                    .get_mut(&key)
+                    .ok_or_else(|| RpcError::not_found("no such session"))?;
+                e.desktop
+                    .agent_event(p.event)
+                    .map_err(RpcError::not_found)?;
+                Ok(json!({}))
             }
             // The command center's Go (D-093): show a pane, switching to
             // its workspace.

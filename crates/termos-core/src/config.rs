@@ -37,8 +37,10 @@ pub struct Config {
     pub prefix: KeyEvent,
     /// Mouse support (click to focus, drag to resize/move, wheel scroll).
     pub mouse: bool,
-    /// Program for new panes; default `$SHELL`, then `/bin/sh`.
-    pub shell: Option<String>,
+    /// Program for new panes; default `$SHELL`, then `/bin/sh`. Either
+    /// `shell = "/bin/zsh"` or a `[shell]` table that can also turn
+    /// TermOS's shell integration off (D-115).
+    pub shell: ShellConfig,
     /// Scrollback lines kept per pane.
     pub scrollback: usize,
     /// How long a repeatable binding (resize) stays active after the
@@ -68,6 +70,8 @@ pub struct Config {
     pub kms: KmsConfig,
     /// The command center's history (M10c, D-092).
     pub center: CenterConfig,
+    /// Notifications outside TermOS (M12b, D-115).
+    pub notifications: NotificationsConfig,
     /// The coding harness (M11c, D-099).
     pub harness: HarnessConfig,
     /// A git worktree per task (M12a, D-113).
@@ -79,7 +83,7 @@ impl Default for Config {
         Self {
             prefix: KeyEvent::ctrl('b'),
             mouse: true,
-            shell: None,
+            shell: ShellConfig::default(),
             scrollback: 10_000,
             repeat_time_ms: 500,
             keys: KeysConfig::default(),
@@ -100,6 +104,7 @@ impl Default for Config {
             models: ModelsConfig::default(),
             kms: KmsConfig::default(),
             center: CenterConfig::default(),
+            notifications: NotificationsConfig::default(),
             harness: HarnessConfig::default(),
             worktrees: WorktreesConfig::default(),
         }
@@ -252,6 +257,9 @@ pub struct SessionConfig {
     pub scrollback_lines: usize,
     /// Snapshots are written this long after the last change.
     pub snapshot_delay_ms: u64,
+    /// Claude Code, Codex and Gemini CLI come back in their panes,
+    /// continuing their conversations (D-115).
+    pub restore_agents: bool,
 }
 
 impl Default for SessionConfig {
@@ -265,6 +273,7 @@ impl Default for SessionConfig {
             save_scrollback: false,
             scrollback_lines: 2000,
             snapshot_delay_ms: 2000,
+            restore_agents: true,
         }
     }
 }
@@ -302,6 +311,72 @@ pub enum StartLook {
     Desktop,
     /// One terminal filling the screen, as in tmux.
     Terminal,
+}
+
+/// The shell new panes start (`shell`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShellConfig {
+    /// The program; `None`: `$SHELL`, then the platform's default.
+    pub program: Option<String>,
+    /// Start bash, zsh, fish and PowerShell with TermOS's integration
+    /// script, which marks prompts, commands and their exit status (OSC
+    /// 133) after loading your own configuration (D-115, D-116).
+    pub integration: bool,
+}
+
+impl Default for ShellConfig {
+    fn default() -> Self {
+        Self {
+            program: None,
+            integration: true,
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for ShellConfig {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields, rename_all = "kebab-case")]
+        struct Table {
+            program: Option<String>,
+            integration: Option<bool>,
+        }
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Raw {
+            Program(String),
+            Table(Table),
+        }
+        match Raw::deserialize(d).map_err(|_| {
+            serde::de::Error::custom(
+                "`shell` is a program (`shell = \"/bin/zsh\"`) or a table with `program` and `integration`",
+            )
+        })? {
+            Raw::Program(p) => Ok(Self {
+                program: Some(p),
+                integration: true,
+            }),
+            Raw::Table(t) => Ok(Self {
+                program: t.program,
+                integration: t.integration.unwrap_or(true),
+            }),
+        }
+    }
+}
+
+/// Notifications outside TermOS (`[notifications]`, D-115).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(default, deny_unknown_fields, rename_all = "kebab-case")]
+pub struct NotificationsConfig {
+    /// Send "needs you" to the terminal TermOS runs in (OSC 9, 99 or
+    /// 777), which may show it as a system notification.
+    pub system: bool,
+}
+
+impl Default for NotificationsConfig {
+    fn default() -> Self {
+        Self { system: true }
+    }
 }
 
 /// Motion and looks (D-042, D-087, D-088).
@@ -562,6 +637,7 @@ impl Config {
     /// (Unix only), else [`default_shell`].
     pub fn shell_program(&self, env_shell: Option<String>) -> String {
         self.shell
+            .program
             .clone()
             .or(env_shell)
             .filter(|s| !s.is_empty())
@@ -628,6 +704,11 @@ mouse = true
 
 # Program for new panes. Default: $SHELL, then /bin/sh.
 # shell = "/bin/zsh"
+# Or as a table, which can also turn off the integration that marks bash's,
+# zsh's, fish's and PowerShell's prompts and commands (docs/attention.md):
+# [shell]
+# program = "/bin/zsh"
+# integration = true
 
 # Lines of scrollback per pane.
 scrollback = 10000
@@ -657,6 +738,10 @@ restore-programs = ["vim", "nvim", "less", "man", "htop", "top"]  # re-run on re
 save-scrollback = false  # also save pane text (stored readable only by you)
 scrollback-lines = 2000
 snapshot-delay-ms = 2000
+restore-agents = true    # Claude Code, Codex and Gemini CLI continue their conversation
+
+[notifications]
+system = true            # "needs you" as a system notification where the terminal shows them
 
 [plugins]
 enabled = []             # plugin directory names under ~/.config/termos/plugins
@@ -724,6 +809,9 @@ history = true                # keep conversations (mode 0600) to resume them
 # register = true
 # deny = []                   # e.g. ["read_pane", "send_to_pane"]
 # deny-commands = ["session.quit", "client.detach", "workspace.kill", "pane.kill"]
+# Their hooks, which mark an agent that needs you or finished (docs/attention.md).
+# [agents.hooks]
+# register = true
 
 # The harness (docs/harness.md): one goal planned into tasks over Claude
 # Code, Codex and API models. `termos harness status` shows the routes.
@@ -909,10 +997,35 @@ position = "top"
             assert_eq!(default_shell(), "/bin/sh");
         }
         let c = Config {
-            shell: Some("fish".into()),
+            shell: ShellConfig {
+                program: Some("fish".into()),
+                integration: true,
+            },
             ..Config::default()
         };
         assert_eq!(c.shell_program(Some("/bin/zsh".into())), "fish");
+    }
+
+    #[test]
+    fn shell_as_a_program_or_a_table() {
+        let c = Config::parse("shell = \"/bin/zsh\"\n", Path::new("c.toml")).expect("parses");
+        assert_eq!(c.shell.program.as_deref(), Some("/bin/zsh"));
+        assert!(c.shell.integration);
+        let c =
+            Config::parse("[shell]\nintegration = false\n", Path::new("c.toml")).expect("parses");
+        assert_eq!(c.shell.program, None);
+        assert!(!c.shell.integration);
+        let c =
+            Config::parse("[shell]\nprogram = \"fish\"\n", Path::new("c.toml")).expect("parses");
+        assert_eq!(c.shell.program.as_deref(), Some("fish"));
+        assert!(c.shell.integration);
+        let e = Config::parse("[shell]\nintegrate = false\n", Path::new("c.toml"))
+            .expect_err("unknown key");
+        assert!(e.to_string().contains("`shell` is a program"), "{e}");
+        let c = Config::parse("[notifications]\nsystem = false\n", Path::new("c.toml"))
+            .expect("parses");
+        assert!(!c.notifications.system);
+        assert!(Config::default().notifications.system);
     }
 
     #[test]

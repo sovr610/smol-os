@@ -87,13 +87,18 @@ enum TosCmd {
     /// one).
     Panes,
     /// Print the last lines of a pane's text: its scrollback and screen
-    /// (keys and passwords it shows are masked).
+    /// (keys and passwords it shows are masked). With --command, its last
+    /// command, that command's output and its exit status.
     Read {
-        /// The pane's id (`tos panes`).
-        pane: u64,
+        /// The pane's id (`tos panes`); default: this one.
+        pane: Option<u64>,
         /// How many lines, from the end.
         #[arg(short = 'n', long, default_value_t = 100)]
         lines: usize,
+        /// Only the last command: its line, output and exit status (the
+        /// pane's shell marks commands, D-116).
+        #[arg(short, long)]
+        command: bool,
     },
     /// Zoom this pane, or unzoom.
     Zoom,
@@ -172,6 +177,38 @@ pub(crate) fn invoked_as_tos() -> bool {
                 .map(|s| s.eq_ignore_ascii_case(NAME))
         })
         .unwrap_or(false)
+}
+
+/// A pane's last command as `tos read --command` prints it.
+fn last_command_text(last: Option<&Value>) -> String {
+    let Some(b) = last.filter(|v| !v.is_null()) else {
+        return "no command found: the pane's shell does not mark its commands \
+                (bash, zsh, fish and PowerShell do in TermOS)\n"
+            .into();
+    };
+    let mut out = format!(
+        "$ {}\n",
+        b.get("command").and_then(Value::as_str).unwrap_or_default()
+    );
+    for l in b
+        .get("output")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+    {
+        out.push_str(l);
+        out.push('\n');
+    }
+    match (
+        b.get("state").and_then(Value::as_str),
+        b.get("exit").and_then(Value::as_i64),
+    ) {
+        (Some("running"), _) => out.push_str("[still running]\n"),
+        (_, Some(code)) => out.push_str(&format!("[exit status {code}]\n")),
+        _ => out.push_str("[exit status unknown]\n"),
+    }
+    out
 }
 
 /// The pane this runs in.
@@ -353,14 +390,35 @@ fn run(tos: Tos) -> anyhow::Result<ExitCode> {
                 );
             }
         }
-        TosCmd::Read { pane, lines } => {
+        TosCmd::Read {
+            pane,
+            lines,
+            command,
+        } => {
+            let own = pane_id();
+            let Some(pane) = pane.or(own) else {
+                bail!("which pane? `tos panes` lists them");
+            };
             let got = crate::call(
                 &t,
                 "pane.read",
-                Some(
-                    json!({ "session": t.session, "pane": pane, "lines": lines.clamp(1, 10_000) }),
-                ),
+                Some(json!({
+                    "session": t.session,
+                    "pane": pane,
+                    "lines": lines.clamp(1, 10_000),
+                    "command": command,
+                    // Its own newest command is this one.
+                    "finished": Some(pane) == own,
+                })),
             )?;
+            if command {
+                let redactor = termos_ai::redact::Redactor::new();
+                print!(
+                    "{}",
+                    redactor.text(&last_command_text(got.get("last_command")))
+                );
+                return Ok(ExitCode::SUCCESS);
+            }
             let text: Vec<&str> = got
                 .get("lines")
                 .and_then(Value::as_array)

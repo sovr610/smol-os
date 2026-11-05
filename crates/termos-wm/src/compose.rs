@@ -56,7 +56,9 @@ pub fn drop_shadow(grid: &mut Grid, outer: Rect, bounds: Rect, theme: &Theme) {
 }
 
 /// Draws the workspace. `content` draws a pane's content into its rectangle;
-/// `title` names a floating window.
+/// `title` names a floating window; `ring` gives the style of a ring
+/// around a pane that wants the user (D-115), drawn over the focus colour.
+#[allow(clippy::too_many_arguments)]
 pub fn compose(
     grid: &mut Grid,
     placement: &Placement,
@@ -64,12 +66,13 @@ pub fn compose(
     theme: &Theme,
     opts: &ComposeOptions,
     title: &dyn Fn(PaneId) -> String,
+    ring: &dyn Fn(PaneId) -> Option<Style>,
     content: &mut dyn FnMut(PaneId, Rect, &mut Grid),
 ) {
     for (pane, rect) in &placement.tiled {
         content(*pane, *rect, grid);
     }
-    draw_separators(grid, placement, focus, theme);
+    draw_separators(grid, placement, focus, theme, ring);
     for f in &placement.floats {
         let focused = focus == Some(f.pane);
         if opts.shadow && placement.zoomed != Some(f.pane) {
@@ -77,10 +80,10 @@ pub fn compose(
         }
         grid.fill(f.outer, &Cell::blank(Style::new()));
         content(f.pane, f.inner, grid);
-        let border = if focused {
-            theme.float_border
-        } else {
-            theme.border
+        let border = match ring(f.pane) {
+            Some(style) => style,
+            None if focused => theme.float_border,
+            None => theme.border,
         };
         let title_style = if focused {
             theme.float_title
@@ -146,7 +149,13 @@ pub fn compose(
     }
 }
 
-fn draw_separators(grid: &mut Grid, placement: &Placement, focus: Option<PaneId>, theme: &Theme) {
+fn draw_separators(
+    grid: &mut Grid,
+    placement: &Placement,
+    focus: Option<PaneId>,
+    theme: &Theme,
+    ring_of: &dyn Fn(PaneId) -> Option<Style>,
+) {
     if placement.separators.is_empty() {
         return;
     }
@@ -172,17 +181,24 @@ fn draw_separators(grid: &mut Grid, placement: &Placement, focus: Option<PaneId>
         };
         mask[idx(x, y)]
     };
+    let around = |r: &Rect| {
+        Rect::new(
+            r.x.saturating_sub(1),
+            r.y.saturating_sub(1),
+            r.w.saturating_add(2),
+            r.h.saturating_add(2),
+        )
+    };
     // Cells around the focused tiled pane draw in the active colour.
     let ring = focus
         .and_then(|f| placement.tiled.iter().find(|(p, _)| *p == f))
-        .map(|(_, r)| {
-            Rect::new(
-                r.x.saturating_sub(1),
-                r.y.saturating_sub(1),
-                r.w.saturating_add(2),
-                r.h.saturating_add(2),
-            )
-        });
+        .map(|(_, r)| around(r));
+    // Panes that want the user ring in their own style, over the focus.
+    let marked: Vec<(Rect, Style)> = placement
+        .tiled
+        .iter()
+        .filter_map(|(p, r)| ring_of(*p).map(|s| (around(r), s)))
+        .collect();
     for y in area.y..area.bottom() {
         for x in area.x..area.right() {
             if !mask[idx(x, y)] {
@@ -196,10 +212,10 @@ fn draw_separators(grid: &mut Grid, placement: &Placement, focus: Option<PaneId>
                 is_sep(xi + 1, yi),
             );
             let active = ring.is_some_and(|r| r.contains(x, y));
-            let style = if active {
-                theme.border_active
-            } else {
-                theme.border
+            let style = match marked.iter().find(|(r, _)| r.contains(x, y)) {
+                Some((_, s)) => *s,
+                None if active => theme.border_active,
+                None => theme.border,
             };
             grid.set(x, y, Cell::new(ch, style));
         }
@@ -230,6 +246,7 @@ mod tests {
             &Theme::default(),
             &ComposeOptions::default(),
             &|p| format!("pane {}", p.0),
+            &|_| None,
             &mut letters,
         );
         g.to_text()
@@ -305,6 +322,7 @@ mod tests {
                 &theme,
                 &ComposeOptions::default(),
                 &|p| format!("pane {}", p.0),
+                &|_| None,
                 &mut letters,
             );
             let name = if gradients {
@@ -336,12 +354,28 @@ mod tests {
             &theme,
             &ComposeOptions::default(),
             &|_| String::new(),
+            &|_| None,
             &mut letters,
         );
         // The vertical separator next to pane 0 is active.
         assert_eq!(g.get(20, 3).map(|c| c.style), Some(theme.border_active));
         // The horizontal one between panes 1 and 2 is not adjacent to pane 0.
         assert_eq!(g.get(30, 6).map(|c| c.style), Some(theme.border));
+        // A pane that wants the user rings in its style, over the focus.
+        let want = Style::new().fg(theme.colors.warn);
+        compose(
+            &mut g,
+            &pl,
+            Some(PaneId(0)),
+            &theme,
+            &ComposeOptions::default(),
+            &|_| String::new(),
+            &|p| (p == PaneId(2)).then_some(want),
+            &mut letters,
+        );
+        assert_eq!(g.get(30, 6).map(|c| c.style), Some(want));
+        assert_eq!(g.get(20, 9).map(|c| c.style), Some(want));
+        assert_eq!(g.get(20, 3).map(|c| c.style), Some(theme.border_active));
     }
 
     #[test]
@@ -359,6 +393,7 @@ mod tests {
             &theme,
             &ComposeOptions::default(),
             &|_| String::new(),
+            &|_| None,
             &mut letters,
         );
         let shaded = g.get(26, 4).map(|c| c.style.bg);

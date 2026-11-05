@@ -66,6 +66,20 @@ impl Notifications {
         }
     }
 
+    /// Records a notification in the center only, without a toast.
+    pub fn record(&mut self, level: Level, text: impl Into<String>) {
+        if let Ok(mut h) = self.history.lock() {
+            h.push_back(Notice {
+                time: local_time(),
+                level,
+                text: text.into(),
+            });
+            while h.len() > HISTORY_LIMIT {
+                h.pop_front();
+            }
+        }
+    }
+
     /// The current toast, if any.
     pub fn toast(&self) -> Option<(&str, Level)> {
         self.toast.as_ref().map(|(t, l, _)| (t.as_str(), *l))

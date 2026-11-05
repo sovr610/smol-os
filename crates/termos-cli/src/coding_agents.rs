@@ -27,7 +27,7 @@ fn parse(spec: &str) -> anyhow::Result<(Tool, Option<&str>)> {
     }
 }
 
-fn say(line: &str) {
+pub(crate) fn say(line: &str) {
     println!("termos: {line}");
 }
 
@@ -99,6 +99,10 @@ pub(crate) fn install_tool(
             }
         }
     }
+    // The hooks that mark an agent needing you (D-116).
+    for account in accounts(paths)?.list(tool) {
+        crate::agent_hooks::ensure(config, &account);
+    }
     Ok(got)
 }
 
@@ -167,7 +171,7 @@ pub(crate) fn env(k: &str) -> Option<String> {
 }
 
 /// The program to register with: this one, by its real path.
-fn termos_exe() -> anyhow::Result<PathBuf> {
+pub(crate) fn termos_exe() -> anyhow::Result<PathBuf> {
     let exe = std::env::current_exe().context("cannot find the termos program")?;
     let real = exe.canonicalize().unwrap_or(exe);
     Ok(if cfg!(windows) { plain(real) } else { real })
@@ -771,6 +775,42 @@ pub(crate) fn continue_args(
         carried
     };
     Ok(conversations::resume_args(&c))
+}
+
+/// The arguments that continue `launch`'s account's conversation in
+/// `cwd`: `conversation` when it is still there, else the folder's latest
+/// (a restored pane, D-115). None: it starts a new one.
+pub(crate) fn resume_args_here(
+    launch: &crate::shim::Launch,
+    conversation: Option<&str>,
+    cwd: &Path,
+) -> Vec<String> {
+    use termos_devkit::conversations;
+    let Some(account) = &launch.account else {
+        return Vec::new();
+    };
+    let Some(dir) = account.home(&env, home().as_deref()) else {
+        return Vec::new();
+    };
+    let found = conversation
+        .and_then(|id| conversations::find(account.tool, &dir, cwd, id))
+        .or_else(|| conversations::latest(account.tool, &dir, cwd));
+    match found {
+        Some(c) => {
+            say(&format!(
+                "continuing {}'s conversation in this folder",
+                describe(account)
+            ));
+            conversations::resume_args(&c)
+        }
+        None => {
+            say(&format!(
+                "{} has no conversation in this folder to continue; starting a new one",
+                describe(account)
+            ));
+            Vec::new()
+        }
+    }
 }
 
 /// The program and environment for an external agent preset whose

@@ -32,6 +32,8 @@ pub enum VtEvent {
     Clipboard(String),
     /// OSC 7: the program's working directory changed.
     Cwd(PathBuf),
+    /// OSC 9, 99 or 777: the program asks for the user (D-116).
+    Notify(crate::signals::Notice),
 }
 
 /// Terminal modes the desktop needs for routing input.
@@ -108,6 +110,11 @@ pub trait VtBackend: Send {
     fn set_cell_px(&mut self, px: Option<termos_render::caps::PxSize>);
     /// Images programs placed that are (at least partly) in view.
     fn images(&self) -> Vec<crate::graphics::PaneImage>;
+    /// The command blocks the shell marked (OSC 133) that are still in
+    /// the history or on screen, oldest first.
+    fn blocks(&self) -> Vec<crate::blocks::Block> {
+        Vec::new()
+    }
 }
 
 #[derive(Clone, Default)]
@@ -147,6 +154,10 @@ pub struct AlacrittyVt {
     /// Default foreground and background (see
     /// [`VtBackend::set_default_colors`]).
     defaults: (VtRgb, VtRgb),
+    /// Command blocks (OSC 133).
+    blocks: crate::blocks::Tracker,
+    /// kitty notifications (OSC 99) being assembled.
+    notices: crate::signals::KittyNotices,
 }
 
 impl std::fmt::Debug for AlacrittyVt {
@@ -220,6 +231,8 @@ impl AlacrittyVt {
             guard: crate::kbguard::KeyboardStackGuard::default(),
             filtered: Vec::new(),
             defaults: (default_rgb(256), default_rgb(257)),
+            blocks: crate::blocks::Tracker::default(),
+            notices: crate::signals::KittyNotices::default(),
         }
     }
 
@@ -464,7 +477,8 @@ impl VtBackend for AlacrittyVt {
         self.intercept.feed(bytes, &mut pieces);
         for piece in pieces {
             match piece {
-                crate::intercept::Piece::Bytes(b) => self.parse(&b),
+                crate::intercept::Piece::Bytes(b) => self.output(&b),
+                crate::intercept::Piece::Osc { number, body } => self.osc(number, &body),
                 crate::intercept::Piece::Kitty(body) => self.kitty(&body),
                 crate::intercept::Piece::Sixel { data, .. } => self.sixel(&data),
                 crate::intercept::Piece::CellSizeQuery => {
@@ -480,6 +494,10 @@ impl VtBackend for AlacrittyVt {
 
     fn set_cell_px(&mut self, px: Option<termos_render::caps::PxSize>) {
         self.cell_px = px;
+    }
+
+    fn blocks(&self) -> Vec<crate::blocks::Block> {
+        self.scan_blocks()
     }
 
     fn images(&self) -> Vec<crate::graphics::PaneImage> {
@@ -615,6 +633,9 @@ impl VtBackend for AlacrittyVt {
                 grid.set(at.x + x, at.y + y, cell);
             }
         }
+        if self.blocks.any_failed() {
+            self.mark_failed(grid, at);
+        }
     }
 
     fn scroll(&mut self, lines: i32) {
@@ -716,6 +737,246 @@ impl AlacrittyVt {
             self.reset_emulator();
         }
         self.drain_listener();
+    }
+
+    /// Program output: while a command line is being typed, its end (the
+    /// line it ends on) starts the command's output (D-116).
+    fn output(&mut self, mut bytes: &[u8]) {
+        while self.blocks.phase() == crate::blocks::Phase::Input
+            && let Some(i) = bytes.iter().position(|b| *b == b'\n')
+        {
+            self.parse(&bytes[..=i]);
+            if let Some(close) = self.blocks.output_start(false) {
+                self.parse(&close);
+            }
+            bytes = &bytes[i + 1..];
+        }
+        if !bytes.is_empty() {
+            self.parse(bytes);
+        }
+    }
+
+    /// A notification or a shell mark.
+    fn osc(&mut self, number: u16, body: &[u8]) {
+        use crate::signals::{Mark, Signal};
+        if number == 99 {
+            if let Some(n) = self.notices.feed(body) {
+                self.pending.push(VtEvent::Notify(n));
+            }
+            return;
+        }
+        match crate::signals::parse(number, body) {
+            Some(Signal::Notify(n)) => self.pending.push(VtEvent::Notify(n)),
+            Some(Signal::Mark(m)) => {
+                let feed = match m {
+                    Mark::PromptStart => Some(self.blocks.prompt_start()),
+                    Mark::InputStart => self.blocks.input_start(),
+                    Mark::OutputStart => self.blocks.output_start(true),
+                    Mark::Finished(exit) => self.blocks.finished(exit),
+                    Mark::CommandLine(line) => {
+                        self.blocks.command_line(line);
+                        None
+                    }
+                };
+                if let Some(bytes) = feed {
+                    self.parse(&bytes);
+                }
+            }
+            None => {}
+        }
+    }
+
+    /// The block and part a cell's hidden link names.
+    fn block_of(c: &VtCell) -> Option<(u64, crate::blocks::Part)> {
+        c.hyperlink().and_then(|l| crate::blocks::anchor(l.uri()))
+    }
+
+    /// Finds the blocks in the history and on screen.
+    fn scan_blocks(&self) -> Vec<crate::blocks::Block> {
+        use crate::blocks::{Block, BlockState, Part};
+        struct Found {
+            id: u64,
+            /// Where its first marked cell is.
+            start: (i32, usize),
+            /// The last line holding its prompt or command.
+            last: i32,
+            /// The command as typed, row by row.
+            typed: Vec<(i32, String)>,
+        }
+        let g = self.term.grid();
+        let history = i32::try_from(g.history_size()).unwrap_or(0);
+        let rows = i32::from(self.rows);
+        let cols = usize::from(self.cols);
+        let mut found: Vec<Found> = Vec::new();
+        for line in -history..rows {
+            let row = &g[Line(line)];
+            for x in 0..cols {
+                let c = &row[Column(x)];
+                let Some((id, part)) = Self::block_of(c) else {
+                    continue;
+                };
+                let at = match found.iter().rposition(|f| f.id == id) {
+                    Some(at) => at,
+                    None => {
+                        found.push(Found {
+                            id,
+                            start: (line, x),
+                            last: line,
+                            typed: Vec::new(),
+                        });
+                        found.len() - 1
+                    }
+                };
+                let f = &mut found[at];
+                f.last = line;
+                if part == Part::Command
+                    && !c
+                        .flags
+                        .intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER)
+                {
+                    match f.typed.last_mut() {
+                        Some((l, text)) if *l == line => text.push(c.c),
+                        _ => f.typed.push((line, c.c.to_string())),
+                    }
+                }
+            }
+        }
+        // The rows' text, and whether each wraps onto the next.
+        let text = |line: i32| self.row_text(line);
+        let cursor_line = g.cursor.point.line.0;
+        let mut out = Vec::with_capacity(found.len());
+        for (i, f) in found.iter().enumerate() {
+            let info = self.blocks.info(f.id);
+            // Its output: from the line after its command to where the
+            // next block starts (or the cursor).
+            let (end_line, end_x) = match found.get(i + 1) {
+                Some(next) => next.start,
+                None => (cursor_line.max(f.last), usize::MAX),
+            };
+            let mut output: Vec<String> = Vec::new();
+            let mut first_row = None;
+            let mut last_row = None;
+            let mut joined = false;
+            for line in f.last + 1..=end_line.min(rows - 1) {
+                let (mut t, wraps) = text(line);
+                if line == end_line {
+                    t = t.chars().take(end_x).collect();
+                }
+                let t_trim = t.trim_end().to_owned();
+                if joined {
+                    if let Some(prev) = output.last_mut() {
+                        prev.push_str(&t);
+                    }
+                } else {
+                    output.push(t_trim.clone());
+                }
+                if joined && let Some(prev) = output.last_mut() {
+                    let keep = prev.trim_end().len();
+                    prev.truncate(keep);
+                }
+                joined = wraps && line != end_line;
+                if !t_trim.is_empty() {
+                    first_row.get_or_insert(line);
+                    last_row = Some(line);
+                }
+            }
+            while output.last().is_some_and(String::is_empty) {
+                output.pop();
+            }
+            while output.first().is_some_and(String::is_empty) {
+                output.remove(0);
+            }
+            let command = info.and_then(|i| i.command.clone()).unwrap_or_else(|| {
+                let mut s = String::new();
+                for (n, (line, t)) in f.typed.iter().enumerate() {
+                    if n > 0 {
+                        let prev_wraps = text(f.typed[n - 1].0).1 && *line == f.typed[n - 1].0 + 1;
+                        if !prev_wraps {
+                            s.push('\n');
+                        }
+                    }
+                    s.push_str(t);
+                }
+                s.trim().to_owned()
+            });
+            let state = match info {
+                Some(i) if i.finished => BlockState::Finished,
+                _ if self.blocks.is_current(f.id)
+                    && matches!(self.blocks.phase(), crate::blocks::Phase::Output) =>
+                {
+                    BlockState::Running
+                }
+                _ if self.blocks.is_current(f.id) => BlockState::Prompt,
+                _ => BlockState::Finished,
+            };
+            out.push(Block {
+                id: f.id,
+                prompt_line: f.start.0,
+                command,
+                output,
+                output_rows: first_row.zip(last_row),
+                exit: info.and_then(|i| i.exit),
+                state,
+            });
+        }
+        out
+    }
+
+    /// Marks failed commands in view: their status at the right end of
+    /// their command line, where it is blank.
+    fn mark_failed(&self, grid: &mut Grid, at: Rect) {
+        let g = self.term.grid();
+        let offset = i32::try_from(g.display_offset()).unwrap_or(0);
+        let rows = at.h.min(self.rows);
+        let cols = at.w.min(self.cols);
+        let mut marked: Vec<u64> = Vec::new();
+        for y in 0..rows {
+            let line = Line(i32::from(y) - offset);
+            let row = &g[line];
+            let mut hit = None;
+            for x in 0..usize::from(cols) {
+                if let Some((id, part)) = Self::block_of(&row[Column(x)]) {
+                    hit = Some((id, part));
+                    if part == crate::blocks::Part::Command {
+                        break;
+                    }
+                }
+            }
+            let Some((id, _)) = hit else {
+                continue;
+            };
+            let Some(code) = self
+                .blocks
+                .info(id)
+                .and_then(|i| i.exit)
+                .filter(|e| *e != 0)
+            else {
+                continue;
+            };
+            if marked.contains(&id) {
+                continue;
+            }
+            marked.push(id);
+            let label = format!(" \u{2717} {code}");
+            let w = u16::try_from(label.chars().count()).unwrap_or(u16::MAX);
+            if w + 1 >= cols {
+                continue;
+            }
+            let start = cols - w;
+            // Only over blank cells: never hide text.
+            let blank = (start..cols).all(|x| {
+                let c = &row[Column(usize::from(x))];
+                c.c == ' ' && !c.flags.intersects(Flags::WIDE_CHAR_SPACER)
+            });
+            if !blank {
+                continue;
+            }
+            let red = self.map_color(VtColor::Named(NamedColor::Red));
+            let style = Style::new()
+                .fg(red)
+                .bg(self.map_color(VtColor::Named(NamedColor::Background)));
+            grid.put_str(at.x + start, at.y + y, &label, style, at.x + cols);
+        }
     }
 
     fn reply(&mut self, text: String) {
@@ -1250,5 +1511,112 @@ mod tests {
         vt.flush_sync();
         assert_eq!(screen(&vt), "partial\n");
         assert!(vt.sync_deadline().is_none());
+    }
+
+    /// A shell session as bash with TermOS's integration writes it.
+    const SESSION: &[u8] = b"\x1b]133;D;0\x07\x1b]133;A\x07\x1b[1m$\x1b[0m \x1b]133;B\x07ls -x\r\n\x1b]133;C\x07a\r\nb\r\n\x1b]133;D;0\x07\x1b]133;A\x07$ \x1b]133;B\x07false\r\n\x1b]133;C\x07\x1b]133;D;1\x07\x1b]133;A\x07$ \x1b]133;B\x07\r\n\x1b]133;D;1\x07\x1b]133;A\x07$ \x1b]133;B\x07";
+
+    #[test]
+    fn command_blocks_from_shell_marks() {
+        use crate::blocks::BlockState;
+        let mut vt = AlacrittyVt::new(20, 8, 100);
+        vt.advance(SESSION);
+        let blocks = vt.blocks();
+        let summary: Vec<_> = blocks
+            .iter()
+            .map(|b| {
+                (
+                    b.prompt_line,
+                    b.command.as_str(),
+                    b.output.clone(),
+                    b.exit,
+                    b.state,
+                )
+            })
+            .collect();
+        assert_eq!(
+            summary,
+            vec![
+                (
+                    0,
+                    "ls -x",
+                    vec!["a".to_owned(), "b".to_owned()],
+                    Some(0),
+                    BlockState::Finished
+                ),
+                (3, "false", vec![], Some(1), BlockState::Finished),
+                // An empty line: no command, and its status does not count.
+                (4, "", vec![], None, BlockState::Finished),
+                (5, "", vec![], None, BlockState::Prompt),
+            ]
+        );
+        assert_eq!(blocks[0].output_rows, Some((1, 2)));
+        // The failed command is marked at the end of its line; the marks
+        // themselves are invisible.
+        let text = screen(&vt);
+        assert_eq!(
+            text.lines().nth(3),
+            Some("$ false          \u{2717} 1"),
+            "{text}"
+        );
+        assert!(!text.contains("termos-block"));
+        // A command that is running.
+        vt.advance(b"sleep 1\r\n\x1b]133;C\x07zz");
+        let last = vt.blocks().pop().expect("a block");
+        assert_eq!(last.state, BlockState::Running);
+        assert_eq!(
+            (last.command.as_str(), last.output),
+            ("sleep 1", vec!["zz".to_owned()])
+        );
+    }
+
+    #[test]
+    fn block_output_ends_where_the_next_prompt_starts() {
+        let mut vt = AlacrittyVt::new(10, 6, 100);
+        // Output without a final newline, then a long wrapped line.
+        vt.advance(b"\x1b]133;A\x07$ \x1b]133;B\x07printf\r\n\x1b]133;C\x07foo\x1b]133;D;0\x07\x1b]133;A\x07$ \x1b]133;B\x07x\r\n\x1b]133;C\x07abcdefghijklmnopq\r\n\x1b]133;D;0\x07\x1b]133;A\x07$ \x1b]133;B\x07");
+        let blocks = vt.blocks();
+        assert_eq!(blocks[0].output, vec!["foo".to_owned()]);
+        assert_eq!(blocks[1].output, vec!["abcdefghijklmnopq".to_owned()]);
+        // VS Code's command line wins over the screen.
+        vt.advance(b"\x1b]633;E;echo a\\x3bb\x07echo a;b\r\n\x1b]133;C\x07a\r\n\x1b]133;D;0\x07");
+        let b = vt.blocks().pop().expect("a block");
+        assert_eq!(b.command, "echo a;b");
+        // Clearing the screen and history clears the blocks with them.
+        vt.advance(b"\x1b[H\x1b[2J\x1b[3J");
+        assert!(vt.blocks().is_empty());
+    }
+
+    #[test]
+    fn notifications_become_events() {
+        let mut vt = AlacrittyVt::new(10, 2, 0);
+        vt.advance(b"\x1b]9;Build done\x07\x1b]777;notify;Codex;Approve?\x1b\\\x1b]99;i=1:d=0;Hi\x1b\\\x1b]99;i=1:p=body;there\x1b\\\x1b]9;4;1;20\x07");
+        let notes: Vec<_> = vt
+            .take_events()
+            .into_iter()
+            .filter_map(|e| match e {
+                VtEvent::Notify(n) => Some((n.title, n.body)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            notes,
+            vec![
+                (String::new(), "Build done".to_owned()),
+                ("Codex".to_owned(), "Approve?".to_owned()),
+                ("Hi".to_owned(), "there".to_owned()),
+            ]
+        );
+        assert_eq!(screen(&vt), "\n\n");
+    }
+
+    #[test]
+    fn a_mark_and_its_prompt_may_come_in_separate_reads() {
+        let mut vt = AlacrittyVt::new(20, 5, 100);
+        vt.advance(b"\x1b]133;A\x07");
+        vt.advance(b"$ ");
+        let b = vt.blocks();
+        assert_eq!(b.len(), 1, "{b:?}");
+        assert_eq!(b[0].state, crate::blocks::BlockState::Prompt);
     }
 }

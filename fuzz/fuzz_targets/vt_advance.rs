@@ -19,6 +19,12 @@ fuzz_target!(|data: &[u8]| {
                     0 => vt.resize(u16::from(arg % 120) + 1, u16::from(arg % 50) + 1),
                     1 => vt.scroll(i32::from(arg as i8)),
                     2 => vt.flush_sync(),
+                    _ if arg & 1 == 1 => {
+                        // Command blocks (OSC 133) found in the text.
+                        for b in vt.blocks() {
+                            assert!(b.output_rows.is_none_or(|(a, z)| a <= z));
+                        }
+                    }
                     _ => vt.scroll_to_bottom(),
                 }
             }

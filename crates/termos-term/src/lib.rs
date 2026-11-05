@@ -9,14 +9,18 @@
 //! - [`vt`]: the [`vt::VtBackend`] trait and its `alacritty_terminal`
 //!   implementation (D-008).
 //! - [`input`]: encoding keys, mouse, paste and focus for the child.
+//! - [`blocks`] and [`signals`]: command blocks from shells' OSC 133
+//!   marks and programs' notifications (D-116).
 //!
 //! The VT input path is fuzzed by `fuzz/fuzz_targets/vt_advance.rs`.
 
+pub mod blocks;
 pub mod graphics;
 pub mod input;
 pub mod intercept;
 mod kbguard;
 pub mod pty;
+pub mod signals;
 pub mod vt;
 
 pub use pty::{PtyEvent, PtyPane, SpawnSpec};

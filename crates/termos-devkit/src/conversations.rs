@@ -142,6 +142,73 @@ pub fn latest(tool: Tool, home: &Path, cwd: &Path) -> Option<Conversation> {
     }
 }
 
+/// The conversation `id` that `tool` keeps in `home` for `cwd`, if it is
+/// still there (a hook's id, for restoring a pane, D-116).
+pub fn find(tool: Tool, home: &Path, cwd: &Path, id: &str) -> Option<Conversation> {
+    // Ids are file names; anything that could leave the folder is not one.
+    if id.is_empty()
+        || !id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        return None;
+    }
+    let found = |path: PathBuf| {
+        let relative = path.strip_prefix(home).ok()?.to_owned();
+        Some(Conversation {
+            tool,
+            id: id.to_owned(),
+            path,
+            relative,
+        })
+    };
+    match tool {
+        Tool::Claude => {
+            let projects = home.join("projects");
+            let here = projects
+                .join(project_folder(cwd))
+                .join(format!("{id}.jsonl"));
+            if here.is_file() {
+                return found(here);
+            }
+            std::fs::read_dir(&projects)
+                .ok()?
+                .flatten()
+                .map(|e| e.path().join(format!("{id}.jsonl")))
+                .find(|p| p.is_file())
+                .and_then(found)
+        }
+        Tool::Codex => {
+            let mut files = Vec::new();
+            walk(&home.join("sessions"), 4, &mut files);
+            let suffix = format!("-{id}.jsonl");
+            files
+                .into_iter()
+                .find(|p| {
+                    p.file_name()
+                        .is_some_and(|n| n.to_string_lossy().ends_with(&suffix))
+                })
+                .and_then(found)
+        }
+        Tool::Gemini => {
+            let slug = gemini_project(home, cwd)?;
+            newest_jsonl(&home.join("tmp").join(&slug).join("chats"))
+                .into_iter()
+                .find(|p| {
+                    first_line(p)
+                        .and_then(|v| {
+                            v.get("sessionId")
+                                .and_then(|i| i.as_str())
+                                .map(str::to_owned)
+                        })
+                        .as_deref()
+                        == Some(id)
+                })
+                .and_then(found)
+        }
+    }
+}
+
 fn walk(dir: &Path, depth: u32, out: &mut Vec<PathBuf>) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
@@ -432,5 +499,28 @@ mod tests {
                 .exists()
         );
         assert_eq!(resume_args(&moved), ["resume", "aaa"]);
+    }
+
+    #[test]
+    fn a_conversation_is_found_by_its_id() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let home = dir.path().join("claude");
+        let work = dir.path().join("work");
+        std::fs::create_dir_all(&work).expect("mkdir");
+        let folder = home.join("projects").join(project_folder(&work));
+        std::fs::create_dir_all(&folder).expect("mkdir");
+        std::fs::write(folder.join("abc-1.jsonl"), "{}\n").expect("write");
+        std::fs::write(folder.join("newer.jsonl"), "{}\n").expect("write");
+        let c = find(Tool::Claude, &home, &work, "abc-1").expect("found");
+        assert_eq!(c.path, folder.join("abc-1.jsonl"));
+        assert!(find(Tool::Claude, &home, &work, "gone").is_none());
+        assert!(find(Tool::Claude, &home, &work, "../x").is_none());
+        // Codex: by the id at the end of the file name.
+        let codex = dir.path().join("codex");
+        let day = codex.join("sessions/2026/11/05");
+        std::fs::create_dir_all(&day).expect("mkdir");
+        std::fs::write(day.join("rollout-2026-11-05T10-00-00-t-99.jsonl"), "{}\n").expect("write");
+        assert!(find(Tool::Codex, &codex, &work, "t-99").is_some());
+        assert!(find(Tool::Codex, &codex, &work, "t-9").is_none());
     }
 }

@@ -70,6 +70,41 @@ pub struct PaneSnapshot {
     /// was (D-104).
     #[serde(default)]
     pub reopen: Option<String>,
+    /// An agent CLI it ran: restored as that CLI, in its account and
+    /// folder, continuing its conversation (D-115).
+    #[serde(default)]
+    pub agent: Option<SavedAgent>,
+}
+
+/// An agent CLI a pane ran.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SavedAgent {
+    /// `claude`, `codex`, `gemini`.
+    pub cli: String,
+    #[serde(default)]
+    pub account: Option<String>,
+    /// The conversation its hooks reported.
+    #[serde(default)]
+    pub conversation: Option<String>,
+    /// The pane was the agent's own window; else a shell it ran in.
+    #[serde(default)]
+    pub window: bool,
+}
+
+/// The command that brings `agent` back: `termos agent external` (after
+/// `termos`, or after `tos` typed into a shell), continuing the folder's
+/// latest conversation, or the one reported.
+pub fn agent_args(agent: &SavedAgent) -> Vec<String> {
+    let mut args = vec!["agent".to_owned(), "external".to_owned()];
+    if let Some(a) = &agent.account {
+        args.extend(["--account".to_owned(), a.clone()]);
+    }
+    args.push("--resume".to_owned());
+    if let Some(c) = &agent.conversation {
+        args.extend(["--conversation".to_owned(), c.clone()]);
+    }
+    args.push(agent.cli.clone());
+    args
 }
 
 /// The program name of a command line (`/usr/bin/vim` → `vim`,
@@ -343,7 +378,43 @@ mod tests {
             title: String::new(),
             scrollback: None,
             reopen: None,
+            agent: None,
         }
+    }
+
+    #[test]
+    fn agents_come_back_continuing_their_conversation() {
+        let agent = SavedAgent {
+            cli: "claude".into(),
+            account: Some("work".into()),
+            conversation: Some("abc".into()),
+            window: true,
+        };
+        assert_eq!(
+            agent_args(&agent),
+            [
+                "agent",
+                "external",
+                "--account",
+                "work",
+                "--resume",
+                "--conversation",
+                "abc",
+                "claude"
+            ]
+        );
+        let plain = SavedAgent {
+            account: None,
+            conversation: None,
+            ..agent
+        };
+        assert_eq!(
+            agent_args(&plain),
+            ["agent", "external", "--resume", "claude"]
+        );
+        // Snapshots from before M12b have no agent.
+        let old: PaneSnapshot = serde_json::from_str(r#"{"id":1,"title":"x"}"#).expect("reads");
+        assert_eq!(old.agent, None);
     }
 
     #[test]

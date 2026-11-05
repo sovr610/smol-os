@@ -289,6 +289,79 @@ impl Caps {
     }
 }
 
+/// How the outer terminal shows a system notification (D-116).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NotifyStyle {
+    /// iTerm2's `OSC 9` (also WezTerm, Ghostty, Warp).
+    Osc9,
+    /// kitty's `OSC 99`.
+    Osc99,
+    /// rxvt's `OSC 777;notify` (also foot).
+    Osc777,
+}
+
+impl Caps {
+    /// The notification sequence this terminal shows, told from its
+    /// XTVERSION name, `$TERM` and `$TERM_PROGRAM` (the client's). `None`
+    /// where it shows none or TermOS cannot tell, and inside tmux, which
+    /// would not pass it on.
+    pub fn notify_style(&self, term_program: Option<&str>) -> Option<NotifyStyle> {
+        if self.in_tmux {
+            return None;
+        }
+        let name = format!(
+            "{} {} {}",
+            self.terminal.as_deref().unwrap_or_default(),
+            self.term,
+            term_program.unwrap_or_default()
+        )
+        .to_ascii_lowercase();
+        let has = |words: &[&str]| words.iter().any(|w| name.contains(w));
+        if has(&["kitty"]) {
+            Some(NotifyStyle::Osc99)
+        } else if has(&["iterm", "wezterm", "ghostty", "warp"]) {
+            Some(NotifyStyle::Osc9)
+        } else if has(&["foot", "rxvt"]) {
+            Some(NotifyStyle::Osc777)
+        } else {
+            None
+        }
+    }
+}
+
+/// The bytes that show `title` and `body` as a notification.
+pub fn notify_sequence(style: NotifyStyle, title: &str, body: &str) -> Vec<u8> {
+    let clean = |s: &str| -> String { s.chars().filter(|c| !c.is_control()).collect() };
+    let (title, body) = (clean(title), clean(body));
+    match style {
+        NotifyStyle::Osc9 => {
+            let mut text = if body.is_empty() {
+                title
+            } else {
+                format!("{title}: {body}")
+            };
+            // ConEmu's numbered commands share OSC 9.
+            if text.starts_with(|c: char| c.is_ascii_digit()) {
+                text.insert_str(0, "TermOS: ");
+            }
+            format!("\x1b]9;{text}\x07").into_bytes()
+        }
+        NotifyStyle::Osc99 => {
+            use base64::Engine as _;
+            let b64 = |s: &str| base64::engine::general_purpose::STANDARD.encode(s);
+            format!(
+                "\x1b]99;i=termos:d=0:e=1;{}\x1b\\\x1b]99;i=termos:p=body:e=1;{}\x1b\\",
+                b64(&title),
+                b64(&body)
+            )
+            .into_bytes()
+        }
+        NotifyStyle::Osc777 => {
+            format!("\x1b]777;notify;{};{body}\x1b\\", title.replace(';', ",")).into_bytes()
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -506,5 +579,54 @@ mod tests {
         ]);
         assert_eq!(caps.color, ColorDepth::Ansi16);
         assert!(!caps.sync_output);
+    }
+
+    #[test]
+    fn notifications_follow_the_terminal() {
+        let caps = |terminal: Option<&str>, term: &str| Caps {
+            terminal: terminal.map(str::to_owned),
+            term: term.into(),
+            ..Caps::default()
+        };
+        assert_eq!(
+            caps(Some("kitty(0.39.1)"), "xterm-kitty").notify_style(None),
+            Some(NotifyStyle::Osc99)
+        );
+        assert_eq!(
+            caps(None, "xterm-256color").notify_style(Some("iTerm.app")),
+            Some(NotifyStyle::Osc9)
+        );
+        assert_eq!(
+            caps(Some("WezTerm 20240203"), "xterm-256color").notify_style(None),
+            Some(NotifyStyle::Osc9)
+        );
+        assert_eq!(
+            caps(Some("foot(1.20.2)"), "foot").notify_style(None),
+            Some(NotifyStyle::Osc777)
+        );
+        assert_eq!(
+            caps(Some("XTerm(390)"), "xterm-256color").notify_style(None),
+            None
+        );
+        let mut tmux = caps(Some("kitty(0.39.1)"), "tmux-256color");
+        tmux.in_tmux = true;
+        assert_eq!(tmux.notify_style(None), None);
+
+        assert_eq!(
+            notify_sequence(NotifyStyle::Osc9, "claude needs you", "Allow\x07 Bash?"),
+            b"\x1b]9;claude needs you: Allow Bash?\x07"
+        );
+        assert_eq!(
+            notify_sequence(NotifyStyle::Osc9, "3 tests", ""),
+            b"\x1b]9;TermOS: 3 tests\x07"
+        );
+        assert_eq!(
+            notify_sequence(NotifyStyle::Osc777, "a;b", "c;d"),
+            b"\x1b]777;notify;a,b;c;d\x1b\\"
+        );
+        assert_eq!(
+            notify_sequence(NotifyStyle::Osc99, "T", "B"),
+            b"\x1b]99;i=termos:d=0:e=1;VA==\x1b\\\x1b]99;i=termos:p=body:e=1;Qg==\x1b\\"
+        );
     }
 }

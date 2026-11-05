@@ -17,15 +17,22 @@
 //! - [`plugins`]: the out-of-process plugin host.
 //! - [`notify`] and [`apps`]: notifications, the notification center and
 //!   the first-run tutorial.
+//! - [`attention`] and [`integration`]: agents that wait for the user, and
+//!   the shell integration that marks commands (D-115, D-116).
+
+/// TermOS's command in every pane (D-085).
+pub const TOS: &str = "tos";
 
 pub mod anim;
 pub mod apps;
+pub mod attention;
 pub mod commands;
 pub mod copymode;
 pub mod desktop;
 #[cfg(windows)]
 pub mod endsession;
 pub mod images;
+pub mod integration;
 pub mod keys;
 pub mod menu;
 pub mod notify;

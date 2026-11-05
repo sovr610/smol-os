@@ -932,6 +932,170 @@ pub fn codex_config_without(existing: &str) -> Result<String, AgentError> {
     Ok(doc.to_string())
 }
 
+/// What marks TermOS's hooks in a CLI's settings (D-116).
+const HOOK_MARK: &str = " agent event --cli ";
+
+/// The events TermOS's hooks listen to: a prompt for permission or a
+/// question (needs you), the end of a turn (done), a prompt submitted
+/// (working again), and the start and end of a conversation (for
+/// restoring it).
+pub fn hook_events(tool: Tool) -> &'static [&'static str] {
+    match tool {
+        Tool::Claude => &[
+            "SessionStart",
+            "SessionEnd",
+            "UserPromptSubmit",
+            "PermissionRequest",
+            "Notification",
+            "Stop",
+            "StopFailure",
+        ],
+        Tool::Codex => &[
+            "SessionStart",
+            "SessionEnd",
+            "UserPromptSubmit",
+            "PermissionRequest",
+            "Stop",
+        ],
+        Tool::Gemini => &[
+            "SessionStart",
+            "SessionEnd",
+            "BeforeAgent",
+            "Notification",
+            "AfterAgent",
+        ],
+    }
+}
+
+/// The file the hooks go in, in the account's folder: Claude Code's and
+/// Gemini CLI's `settings.json`, Codex's `hooks.json`.
+pub fn hooks_file(tool: Tool) -> &'static str {
+    match tool {
+        Tool::Codex => "hooks.json",
+        Tool::Claude | Tool::Gemini => "settings.json",
+    }
+}
+
+/// The command a hook runs: `termos agent event --cli claude`.
+pub fn hook_command(termos: &Path, tool: Tool) -> String {
+    let path = termos.display().to_string();
+    // Quoted only when it must be: PowerShell would take a quoted path
+    // as a string, not a command.
+    let plain = path
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || "/\\:._-+".contains(c));
+    let program = if plain { path } else { format!("\"{path}\"") };
+    format!("{program}{HOOK_MARK}{}", tool.name())
+}
+
+/// A settings object (empty when there is none).
+fn json_object(existing: &str, what: &str) -> Result<serde_json::Map<String, Value>, AgentError> {
+    if existing.trim().is_empty() {
+        return Ok(serde_json::Map::new());
+    }
+    match serde_json::from_str::<Value>(existing) {
+        Ok(Value::Object(m)) => Ok(m),
+        _ => Err(AgentError::Setup(format!(
+            "{what} does not parse as plain JSON (comments?); not changed"
+        ))),
+    }
+}
+
+/// Takes TermOS's hooks out of a `hooks` object, leaving others'.
+fn strip_hooks(hooks: &mut serde_json::Map<String, Value>) {
+    for groups in hooks.values_mut() {
+        let Value::Array(list) = groups else {
+            continue;
+        };
+        for group in list.iter_mut() {
+            if let Some(Value::Array(inner)) = group.get_mut("hooks") {
+                inner.retain(|h| {
+                    !h.get("command")
+                        .and_then(Value::as_str)
+                        .is_some_and(|c| c.contains(HOOK_MARK))
+                });
+            }
+        }
+        list.retain(|g| {
+            g.get("hooks")
+                .and_then(Value::as_array)
+                .is_none_or(|h| !h.is_empty())
+        });
+    }
+    hooks.retain(|_, v| v.as_array().is_none_or(|l| !l.is_empty()));
+}
+
+fn pretty(m: serde_json::Map<String, Value>) -> Result<String, AgentError> {
+    serde_json::to_string_pretty(&Value::Object(m))
+        .map(|t| t + "\n")
+        .map_err(|e| AgentError::Setup(e.to_string()))
+}
+
+/// `tool`'s hooks file (its text) with TermOS's hooks running `termos`
+/// (older ones replaced; everything else kept).
+pub fn with_hooks(tool: Tool, existing: &str, termos: &Path) -> Result<String, AgentError> {
+    let mut m = json_object(existing, hooks_file(tool))?;
+    let hooks = object_at(&mut m, "hooks");
+    strip_hooks(hooks);
+    let mut hook = serde_json::json!({
+        "type": "command",
+        "command": hook_command(termos, tool),
+    });
+    // Claude Code and Codex count seconds; TermOS answers at once.
+    if tool != Tool::Gemini {
+        hook["timeout"] = Value::from(10);
+    }
+    for event in hook_events(tool) {
+        let list = hooks
+            .entry((*event).to_owned())
+            .or_insert_with(|| Value::Array(Vec::new()));
+        if !list.is_array() {
+            *list = Value::Array(Vec::new());
+        }
+        if let Value::Array(l) = list {
+            l.push(serde_json::json!({ "hooks": [hook.clone()] }));
+        }
+    }
+    pretty(m)
+}
+
+/// `tool`'s hooks file without TermOS's hooks.
+pub fn without_hooks(tool: Tool, existing: &str) -> Result<String, AgentError> {
+    let mut m = json_object(existing, hooks_file(tool))?;
+    if let Some(Value::Object(hooks)) = m.get_mut("hooks") {
+        strip_hooks(hooks);
+        if hooks.is_empty() {
+            m.remove("hooks");
+        }
+    }
+    pretty(m)
+}
+
+/// Whether TermOS's hooks are in a hooks file (its text), with `termos`
+/// as their program.
+pub fn hooks_registered(tool: Tool, existing: &str, termos: &Path) -> bool {
+    let want = hook_command(termos, tool);
+    serde_json::from_str::<Value>(existing)
+        .ok()
+        .and_then(|v| v.get("hooks").cloned())
+        .is_some_and(|hooks| {
+            hook_events(tool).iter().all(|e| {
+                hooks
+                    .get(*e)
+                    .and_then(Value::as_array)
+                    .is_some_and(|groups| {
+                        groups.iter().any(|g| {
+                            g.get("hooks").and_then(Value::as_array).is_some_and(|l| {
+                                l.iter().any(|h| {
+                                    h.get("command").and_then(Value::as_str) == Some(&want)
+                                })
+                            })
+                        })
+                    })
+            })
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1394,5 +1558,58 @@ mod tests {
             claude_settings(&env, Some(Path::new("/h"))),
             Some(PathBuf::from("/h/.claude.json"))
         );
+    }
+
+    #[test]
+    fn hooks_are_added_replaced_and_removed() {
+        let termos = Path::new("/opt/termos/termos");
+        let before = r#"{"theme":"dark","hooks":{"Stop":[{"hooks":[{"type":"command","command":"say done"}]}]}}"#;
+        let after = with_hooks(Tool::Claude, before, termos).expect("adds");
+        let v: Value = serde_json::from_str(&after).expect("json");
+        assert_eq!(v["theme"], "dark");
+        // The user's own Stop hook stays, beside TermOS's.
+        let stop = v["hooks"]["Stop"].as_array().expect("list");
+        assert_eq!(stop.len(), 2);
+        assert_eq!(stop[0]["hooks"][0]["command"], "say done");
+        assert_eq!(
+            stop[1]["hooks"][0]["command"],
+            "/opt/termos/termos agent event --cli claude"
+        );
+        assert_eq!(stop[1]["hooks"][0]["timeout"], 10);
+        assert!(hooks_registered(Tool::Claude, &after, termos));
+        assert!(!hooks_registered(
+            Tool::Claude,
+            &after,
+            Path::new("/elsewhere/termos")
+        ));
+        // Again (TermOS moved): replaced, not doubled.
+        let moved = with_hooks(Tool::Claude, &after, Path::new("/new place/termos")).expect("adds");
+        let v: Value = serde_json::from_str(&moved).expect("json");
+        assert_eq!(v["hooks"]["Stop"].as_array().map(Vec::len), Some(2));
+        assert_eq!(
+            v["hooks"]["PermissionRequest"][0]["hooks"][0]["command"],
+            "\"/new place/termos\" agent event --cli claude"
+        );
+        // Removed: only the user's hook is left.
+        let removed = without_hooks(Tool::Claude, &moved).expect("removes");
+        let v: Value = serde_json::from_str(&removed).expect("json");
+        assert_eq!(
+            v["hooks"],
+            serde_json::json!({"Stop":[{"hooks":[{"type":"command","command":"say done"}]}]})
+        );
+        // From nothing, and back to nothing.
+        let fresh = with_hooks(Tool::Gemini, "", termos).expect("adds");
+        let v: Value = serde_json::from_str(&fresh).expect("json");
+        assert!(
+            v["hooks"]["AfterAgent"][0]["hooks"][0]
+                .get("timeout")
+                .is_none()
+        );
+        assert_eq!(
+            without_hooks(Tool::Gemini, &fresh).expect("removes"),
+            "{}\n"
+        );
+        assert!(with_hooks(Tool::Codex, "// comment\n{}", termos).is_err());
+        assert_eq!(hooks_file(Tool::Codex), "hooks.json");
     }
 }

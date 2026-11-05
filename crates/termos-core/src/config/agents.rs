@@ -33,6 +33,24 @@ pub struct AgentsConfig {
     pub termos_mcp: TermosMcpConfig,
     /// TermOS's skills for the coding CLIs (D-098).
     pub skills: SkillsConfig,
+    /// The coding CLIs' hooks that tell TermOS an agent needs you (D-116).
+    pub hooks: HooksConfig,
+}
+
+/// `[agents.hooks]`: TermOS's hooks in Claude Code, Codex and Gemini CLI,
+/// which mark an agent that needs you or finished (D-115, D-116).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(default, deny_unknown_fields, rename_all = "kebab-case")]
+pub struct HooksConfig {
+    /// Add them to each account's settings (with the CLIs, new accounts
+    /// and agent windows).
+    pub register: bool,
+}
+
+impl Default for HooksConfig {
+    fn default() -> Self {
+        Self { register: true }
+    }
 }
 
 /// `[agents.skills]`: the skills that teach Claude Code, Codex and the
@@ -62,6 +80,7 @@ impl Default for AgentsConfig {
             external: BTreeMap::new(),
             termos_mcp: TermosMcpConfig::default(),
             skills: SkillsConfig::default(),
+            hooks: HooksConfig::default(),
         }
     }
 }

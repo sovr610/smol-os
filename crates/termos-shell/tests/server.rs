@@ -174,7 +174,12 @@ impl Screen {
                     }
                     apply(&mut self.grid, &f.spans);
                 }
-                Some(ServerMsg::Title(_) | ServerMsg::Bell | ServerMsg::Clipboard(_)) => {}
+                Some(
+                    ServerMsg::Title(_)
+                    | ServerMsg::Bell
+                    | ServerMsg::Clipboard(_)
+                    | ServerMsg::Notify { .. },
+                ) => {}
                 other => return other,
             }
         }

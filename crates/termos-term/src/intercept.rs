@@ -1,13 +1,16 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//! Takes images and graphics queries out of a program's output before the
-//! terminal emulator sees it (ARCHITECTURE.md §5.8).
+//! Takes images, graphics queries, notifications and command marks out of
+//! a program's output before the terminal emulator sees it (ARCHITECTURE.md
+//! §5.8).
 //!
 //! `alacritty_terminal` drops Kitty graphics (APC) and Sixel (DCS) on the
-//! floor, and does not answer the cell-size or XTSMGRAPHICS queries that
-//! image tools ask first. This streaming filter finds those sequences,
+//! floor, does not answer the cell-size or XTSMGRAPHICS queries that image
+//! tools ask first, and ignores notifications (OSC 9, 99, 777) and shell
+//! marks (OSC 133, 633). This streaming filter finds those sequences,
 //! across reads, and hands them over separately; everything else passes
-//! through unchanged, in order. A sequence longer than [`MAX_SEQUENCE`] is
-//! dropped (its remainder discarded up to the terminator).
+//! through unchanged, in order. A sequence longer than [`MAX_SEQUENCE`]
+//! (an OSC longer than [`MAX_OSC`]) is dropped (its remainder discarded up
+//! to the terminator).
 
 //
 //! On Windows the system's ConPTY removes these sequences before they get
@@ -17,8 +20,16 @@
 /// Largest image sequence accepted.
 pub const MAX_SEQUENCE: usize = 32 * 1024 * 1024;
 
+/// Largest notification or mark accepted.
+pub const MAX_OSC: usize = 64 * 1024;
+
 /// Longest CSI sequence examined; longer ones pass through.
 const MAX_CSI: usize = 64;
+
+/// The OSC numbers taken out: notifications (9: iTerm2's, 99: kitty's,
+/// 777: rxvt's `notify`) and shell marks (133: FinalTerm's, 633: VS
+/// Code's).
+const OSC_TAKEN: &[u16] = &[9, 99, 133, 633, 777];
 
 /// One piece of program output, in order.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -33,6 +44,9 @@ pub enum Piece {
     CellSizeQuery,
     /// XTSMGRAPHICS `CSI ? item ; action ; value S`.
     GraphicsAttr { item: u32, action: u32 },
+    /// An OSC in [`OSC_TAKEN`]: its number and what follows `number;` up
+    /// to the terminator.
+    Osc { number: u16, body: Vec<u8> },
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -47,6 +61,12 @@ enum State {
     DcsParams,
     Sixel,
     Csi,
+    /// After `ESC ]`: the OSC's number.
+    OscNumber,
+    /// The body of an OSC in [`OSC_TAKEN`].
+    Osc,
+    /// An OSC that was too long: skip to BEL or ST.
+    OscDiscard,
     /// A sequence that was too long: skip to its terminator.
     Discard,
     /// `ESC` inside a string: `\` ends it.
@@ -58,6 +78,7 @@ enum State {
 enum Inner {
     Kitty,
     Sixel,
+    Osc,
     Discard,
 }
 
@@ -68,6 +89,8 @@ pub struct Interceptor {
     held: Vec<u8>,
     /// DCS parameters (for Sixel).
     params: Vec<u8>,
+    /// The number of the OSC being read.
+    osc: u16,
 }
 
 impl Interceptor {
@@ -105,6 +128,10 @@ impl Interceptor {
                 }
                 b'[' => {
                     self.state = State::Csi;
+                    self.held.clear();
+                }
+                b']' => {
+                    self.state = State::OscNumber;
                     self.held.clear();
                 }
                 0x1b => pass.push(0x1b),
@@ -183,6 +210,50 @@ impl Interceptor {
                     }
                 }
             }
+            State::OscNumber => {
+                if b.is_ascii_digit() && self.held.len() < 4 {
+                    self.held.push(b);
+                    return None;
+                }
+                let number = std::str::from_utf8(&self.held)
+                    .ok()
+                    .and_then(|n| n.parse::<u16>().ok())
+                    .filter(|n| OSC_TAKEN.contains(n));
+                match number {
+                    Some(n) if b == b';' => {
+                        self.osc = n;
+                        self.held.clear();
+                        self.state = State::Osc;
+                    }
+                    _ => {
+                        // Not one of ours: the emulator reads the rest.
+                        pass.extend_from_slice(b"\x1b]");
+                        pass.append(&mut self.held);
+                        self.state = State::Ground;
+                        return self.byte(b, pass);
+                    }
+                }
+            }
+            State::Osc => match b {
+                0x07 => {
+                    self.state = State::Ground;
+                    return Some(Piece::Osc {
+                        number: self.osc,
+                        body: std::mem::take(&mut self.held),
+                    });
+                }
+                0x1b => self.state = State::StringEsc(Inner::Osc),
+                _ if self.held.len() >= MAX_OSC => {
+                    self.held = Vec::new();
+                    self.state = State::OscDiscard;
+                }
+                _ => self.held.push(b),
+            },
+            State::OscDiscard => match b {
+                0x07 => self.state = State::Ground,
+                0x1b => self.state = State::StringEsc(Inner::Discard),
+                _ => {}
+            },
             State::Discard => {
                 if b == 0x1b {
                     self.state = State::StringEsc(Inner::Discard);
@@ -197,6 +268,10 @@ impl Interceptor {
                         Inner::Sixel => Some(Piece::Sixel {
                             params: std::mem::take(&mut self.params),
                             data: held,
+                        }),
+                        Inner::Osc => Some(Piece::Osc {
+                            number: self.osc,
+                            body: held,
                         }),
                         Inner::Discard => None,
                     };
@@ -283,6 +358,49 @@ mod tests {
         ];
         assert_eq!(run(input), want);
         assert_eq!(run_bytewise(input), want);
+    }
+
+    #[test]
+    fn notifications_and_marks_come_out_other_oscs_pass() {
+        let input: &[u8] = b"a\x1b]133;A\x07$ \x1b]133;B\x1b\\ls\x1b]0;title\x07\x1b]9;done\x07\x1b]777;notify;T;B\x1b\\\x1b]8;;http://x\x1b\\z\x1b]1337;x\x07\x1b]99;i=1;hi\x1b\\";
+        let want = vec![
+            Piece::Bytes(b"a".to_vec()),
+            Piece::Osc {
+                number: 133,
+                body: b"A".to_vec(),
+            },
+            Piece::Bytes(b"$ ".to_vec()),
+            Piece::Osc {
+                number: 133,
+                body: b"B".to_vec(),
+            },
+            Piece::Bytes(b"ls\x1b]0;title\x07".to_vec()),
+            Piece::Osc {
+                number: 9,
+                body: b"done".to_vec(),
+            },
+            Piece::Osc {
+                number: 777,
+                body: b"notify;T;B".to_vec(),
+            },
+            Piece::Bytes(b"\x1b]8;;http://x\x1b\\z\x1b]1337;x\x07".to_vec()),
+            Piece::Osc {
+                number: 99,
+                body: b"i=1;hi".to_vec(),
+            },
+        ];
+        assert_eq!(run(input), want);
+        assert_eq!(run_bytewise(input), want);
+        // An OSC longer than allowed is dropped up to its BEL.
+        let mut big = b"\x1b]9;".to_vec();
+        big.extend(std::iter::repeat_n(b'x', MAX_OSC + 10));
+        big.extend_from_slice(b"\x07after");
+        assert_eq!(run(&big), vec![Piece::Bytes(b"after".to_vec())]);
+        // `ESC ] 9` without `;`, and five digits, are not ours.
+        assert_eq!(
+            run(b"\x1b]9\x07\x1b]13399;x\x07"),
+            vec![Piece::Bytes(b"\x1b]9\x07\x1b]13399;x\x07".to_vec())]
+        );
     }
 
     #[test]

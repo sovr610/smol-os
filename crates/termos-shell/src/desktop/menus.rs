@@ -49,7 +49,19 @@ impl Desktop {
 
     /// The TermOS menu.
     pub(super) fn start_entries(&self) -> Vec<Entry> {
-        let mut agents = vec![
+        let mut agents = Vec::new();
+        // An agent waiting for you comes first (D-115).
+        if let Some((_, a)) = self.waiting().into_iter().next() {
+            let what = match a.need {
+                crate::attention::Need::You => "needs you",
+                crate::attention::Need::Done => "finished",
+            };
+            agents.push(Entry::item(
+                format!("Go to {} ({what})", a.who),
+                Command::AgentWaiting,
+            ));
+        }
+        agents.extend([
             Entry::item("Harness: plan a goal", Command::HarnessOpen(String::new())),
             Entry::item(
                 "New worktree for a task",
@@ -63,7 +75,7 @@ impl Desktop {
             Entry::item("Resume a conversation", Command::AgentResume(String::new())),
             Entry::item("Audit logs", Command::AuditOpen(String::new())),
             Entry::Separator,
-        ];
+        ]);
         agents.extend(
             EXTERNAL_AGENTS
                 .iter()

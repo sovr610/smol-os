@@ -30,6 +30,36 @@ const MAX_TEXT: usize = 64 * 1024;
 /// The most lines `read_pane` returns.
 const MAX_LINES: u64 = 2000;
 
+/// A pane's last command (from `pane.read`) as text for the agent.
+fn last_command_text(last: Option<&Value>) -> String {
+    let Some(b) = last.filter(|v| !v.is_null()) else {
+        return "(no command found: the pane's shell does not mark its commands)".into();
+    };
+    let mut out = format!(
+        "$ {}\n",
+        b.get("command").and_then(Value::as_str).unwrap_or_default()
+    );
+    for l in b
+        .get("output")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+    {
+        out.push_str(l);
+        out.push('\n');
+    }
+    out.push_str(&match (
+        b.get("state").and_then(Value::as_str),
+        b.get("exit").and_then(Value::as_i64),
+    ) {
+        (Some("running"), _) => "(still running)".to_owned(),
+        (_, Some(code)) => format!("(exit status {code})"),
+        _ => "(exit status unknown)".to_owned(),
+    });
+    out
+}
+
 /// The TermOS server, through its control API.
 pub trait Control {
     fn call(&self, method: &str, params: Value) -> Result<Value, String>;
@@ -449,9 +479,26 @@ impl Server {
                     .and_then(Value::as_u64)
                     .unwrap_or(100)
                     .clamp(1, MAX_LINES);
-                let got = self
-                    .control
-                    .call("pane.read", json!({ "pane": pane, "lines": lines }))?;
+                let command = args
+                    .get("last_command")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
+                let got = self.control.call(
+                    "pane.read",
+                    json!({
+                        "pane": pane,
+                        "lines": lines,
+                        "command": command,
+                        // An agent reading its own pane: its newest
+                        // command is still running.
+                        "finished": Some(pane) == self.context.pane,
+                    }),
+                )?;
+                if command {
+                    return Ok(self
+                        .redactor
+                        .text(&last_command_text(got.get("last_command"))));
+                }
                 let text: Vec<&str> = got
                     .get("lines")
                     .and_then(Value::as_array)
@@ -588,7 +635,9 @@ const TOOLS: &[Tool] = &[
         name: "read_pane",
         title: "Read a TermOS window",
         description: "The last lines of a terminal pane's text (its scrollback and screen), \
-                      e.g. a build's or server's output. Keys and passwords it shows are masked.",
+                      e.g. a build's or server's output. With last_command, only the last \
+                      command run in its shell: the command line, its output and exit status. \
+                      Keys and passwords it shows are masked.",
         read_only: true,
         destructive: false,
         schema: || {
@@ -597,6 +646,7 @@ const TOOLS: &[Tool] = &[
                 "properties": {
                     "pane": { "type": "integer", "description": "The pane's id (list_panes)" },
                     "lines": { "type": "integer", "minimum": 1, "maximum": MAX_LINES, "description": "How many lines, from the end (default 100)" },
+                    "last_command": { "type": "boolean", "description": "Only the last command: its line, output and exit status (shells in TermOS mark their commands)" },
                 },
                 "required": ["pane"],
             })

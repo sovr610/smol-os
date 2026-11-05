@@ -392,6 +392,10 @@ mod tests {
             ServerMsg::ImageFree { id: 3 },
             ServerMsg::KeyboardFlags(2 | 4),
             ServerMsg::Bell,
+            ServerMsg::Notify {
+                title: "claude needs you".into(),
+                body: "Allow Bash?".into(),
+            },
             ServerMsg::Detached {
                 session: "main".into(),
             },

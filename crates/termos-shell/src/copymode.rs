@@ -431,6 +431,28 @@ impl CopyMode {
                     search_failed = !self.run_search(vt, &q, dir);
                 }
             }
+            // Command blocks (OSC 133, D-116): the previous and next
+            // prompt, and the output of the command the cursor is in.
+            KeyCode::Char('[') if k.mods.is_empty() => {
+                if let Some(b) = vt.blocks().iter().rev().find(|b| b.prompt_line < self.cy) {
+                    self.cy = b.prompt_line;
+                    self.cx = 0;
+                }
+            }
+            KeyCode::Char(']') if k.mods.is_empty() => {
+                if let Some(b) = vt.blocks().iter().find(|b| b.prompt_line > self.cy) {
+                    self.cy = b.prompt_line;
+                    self.cx = 0;
+                }
+            }
+            KeyCode::Char('o') if k.mods.is_empty() => {
+                let blocks = vt.blocks();
+                if let Some(b) = blocks.iter().rev().find(|b| b.prompt_line <= self.cy)
+                    && !b.output.is_empty()
+                {
+                    return (CopyAction::Copy(b.output.join("\n")), false);
+                }
+            }
             _ => {}
         }
         self.clamp(vt);
@@ -623,5 +645,35 @@ mod tests {
         assert!(!cm.scroll(3, &mut vt));
         assert_eq!(vt.display_offset(), 3);
         assert!(cm.scroll(-3, &mut vt));
+    }
+
+    #[test]
+    fn jumps_between_prompts_and_copies_a_commands_output() {
+        let mut vt = AlacrittyVt::new(20, 4, 100);
+        let mut session = Vec::new();
+        for (cmd, out) in [("ls", "a\r\nb\r\n"), ("pwd", "/tmp\r\n"), ("true", "")] {
+            session.extend_from_slice(b"\x1b]133;A\x07$ \x1b]133;B\x07");
+            session.extend_from_slice(cmd.as_bytes());
+            session.extend_from_slice(b"\r\n\x1b]133;C\x07");
+            session.extend_from_slice(out.as_bytes());
+            session.extend_from_slice(b"\x1b]133;D;0\x07");
+        }
+        session.extend_from_slice(b"\x1b]133;A\x07$ ");
+        vt.advance(&session);
+        let mut cm = CopyMode::new(PaneId(1), &vt);
+        // From the last prompt back to `true`'s, then `pwd`'s.
+        keys(&mut cm, &mut vt, "[ [");
+        assert_eq!(vt.line_text(cm.cy), "$ pwd");
+        assert_eq!(keys(&mut cm, &mut vt, "o"), CopyAction::Copy("/tmp".into()));
+        let mut cm = CopyMode::new(PaneId(1), &vt);
+        keys(&mut cm, &mut vt, "g");
+        assert_eq!(vt.line_text(cm.cy), "$ ls");
+        assert_eq!(
+            keys(&mut cm, &mut vt, "j o"),
+            CopyAction::Copy("a\nb".into())
+        );
+        let mut cm = CopyMode::new(PaneId(1), &vt);
+        keys(&mut cm, &mut vt, "g ]");
+        assert_eq!(vt.line_text(cm.cy), "$ pwd");
     }
 }

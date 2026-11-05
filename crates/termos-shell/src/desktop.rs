@@ -37,6 +37,7 @@ use termos_wm::workspace::{Placement, Session, Snap, SplitHow, Workspace};
 use tokio::sync::mpsc;
 
 use crate::apps::{About, NotificationCenter, Tutorial};
+use crate::attention::{Attention, Hooked, Need};
 use crate::commands::{COMMANDS, Command};
 use crate::copymode::{CopyAction, CopyMode};
 use crate::keys::KeyTables;
@@ -50,6 +51,7 @@ use crate::status::{self, StatusInfo, StatusRegions, TabInfo};
 use crate::ui::Chrome;
 use crate::whichkey;
 
+mod attend;
 mod menus;
 mod wall;
 
@@ -79,6 +81,10 @@ pub struct Pane {
     pub name: Option<String>,
     /// An agent CLI's window: its preset and account (D-097).
     pub agent: Option<AgentWindow>,
+    /// Waiting for the user, or a turn finished and not seen (D-115).
+    pub attention: Option<Attention>,
+    /// The agent CLI its hooks reported, for restoring it (D-116).
+    pub hooked: Option<Hooked>,
 }
 
 /// What runs in an agent CLI's window.
@@ -88,6 +94,31 @@ pub struct AgentWindow {
     pub preset: String,
     /// Its account, for CLIs that have them.
     pub account: Option<String>,
+}
+
+/// The agent CLI a pane runs, for its snapshot (D-115): its own window,
+/// or one its hooks reported running in a shell.
+fn saved_agent(p: &Pane) -> Option<snapshot::SavedAgent> {
+    let hooked = p.hooked.as_ref();
+    if let Some(w) = &p.agent {
+        let same = hooked.filter(|h| h.cli == w.preset);
+        return Some(snapshot::SavedAgent {
+            cli: w.preset.clone(),
+            account: w
+                .account
+                .clone()
+                .or_else(|| same.and_then(|h| h.account.clone())),
+            conversation: same.and_then(|h| h.conversation.clone()),
+            window: true,
+        });
+    }
+    let h = hooked.filter(|h| h.running)?;
+    Some(snapshot::SavedAgent {
+        cli: h.cli.clone(),
+        account: h.account.clone(),
+        conversation: h.conversation.clone(),
+        window: false,
+    })
 }
 
 /// An agent CLI's arguments to start with `prompt` as its first message
@@ -207,6 +238,9 @@ pub struct PaneInfo {
     pub rows: u16,
     pub floating: bool,
     pub focused: bool,
+    /// `needs-you` or `done` when its agent wants the user (D-115).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub waiting: Option<&'static str>,
 }
 
 /// Startup settings for a desktop.
@@ -431,6 +465,9 @@ pub struct Desktop {
     anim: Animations,
     /// App images rendered as blocks.
     block_cache: BlockCache,
+    /// Where the shell integration scripts are, once written (`None`
+    /// inside: they could not be, D-116).
+    shell_scripts: Option<Option<PathBuf>>,
     /// The wallpaper picture, if one is configured (D-089).
     wall: wall::Wall,
     /// Spinners in busy windows' titles turn from here (D-090).
@@ -544,6 +581,7 @@ impl Desktop {
             clock_deadline: None,
             anim: Animations::default(),
             block_cache: BlockCache::default(),
+            shell_scripts: None,
             wall: wall::Wall::default(),
             spin_epoch: Instant::now(),
             outbox: Vec::new(),
@@ -613,6 +651,7 @@ impl Desktop {
             return Err(io::Error::other("the snapshot has no panes"));
         }
         let allow = d.config.session.restore_programs.clone();
+        let restore_agents = d.config.session.restore_agents;
         // Restored programs are typed into the pane's shell, quoted for it.
         let shell = snapshot::ShellKind::of(&d.config.shell_program(d.opts.env_shell.clone()));
         let area = d.layout_area();
@@ -635,6 +674,31 @@ impl Desktop {
                 }
                 continue;
             }
+            // An agent's own window comes back as that agent, continuing
+            // its conversation (D-115).
+            if let Some(agent) = saved.agent.as_ref().filter(|a| a.window && restore_agents)
+                && let Some(exe) = d.termos_exe()
+            {
+                let args = snapshot::agent_args(agent);
+                match d.spawn_pane(
+                    snapshot::restore_cwd(saved),
+                    (area.w, area.h),
+                    Some((exe.display().to_string(), args)),
+                ) {
+                    Ok(id) => {
+                        map.insert(old, id);
+                        if let Some(p) = d.panes.get_mut(&id) {
+                            p.title.clone_from(&saved.title);
+                            p.agent = Some(AgentWindow {
+                                preset: agent.cli.clone(),
+                                account: agent.account.clone(),
+                            });
+                        }
+                        continue;
+                    }
+                    Err(e) => tracing::warn!("not restoring {}: {e}", agent.cli),
+                }
+            }
             let id = d.spawn_term(snapshot::restore_cwd(saved), (area.w, area.h))?;
             map.insert(old, id);
             let Some(pane) = d.panes.get_mut(&id) else {
@@ -651,6 +715,17 @@ impl Desktop {
                     text.push_str("\r\n");
                 }
                 vt.advance(text.as_bytes());
+            }
+            // An agent that ran in this shell is typed into it again
+            // (`tos agent external …`), so the shell is there after it.
+            if let Some(agent) = saved.agent.as_ref().filter(|a| !a.window && restore_agents) {
+                let mut argv = vec![crate::TOS.to_owned()];
+                argv.extend(snapshot::agent_args(agent));
+                match snapshot::command_line(&argv, shell) {
+                    Some(line) => pty.write(format!("{line}\r").into_bytes()),
+                    None => skipped.push(agent.cli.clone()),
+                }
+                continue;
             }
             match snapshot::relaunch(saved, &allow) {
                 Relaunch::Program(argv) => match snapshot::command_line(&argv, shell) {
@@ -704,6 +779,7 @@ impl Desktop {
                         title: p.title.clone(),
                         scrollback,
                         reopen: None,
+                        agent: saved_agent(p),
                     }
                 }
                 // Built-in apps say how to open them again (D-104).
@@ -716,6 +792,7 @@ impl Desktop {
                     title: app.title(),
                     scrollback: None,
                     reopen: app.reopen(),
+                    agent: None,
                 },
             })
             .collect();
@@ -1065,10 +1142,21 @@ impl Desktop {
         let (w, h) = (size.0.max(1), size.1.max(1));
         let mut spec =
             SpawnSpec::shell(self.config.shell_program(self.opts.env_shell.clone()), w, h);
+        let shell = program.is_none();
         if let Some((program, args)) = program {
             spec.program = program;
             spec.args = args;
         }
+        // The shell marks its prompts and commands (D-115, D-116).
+        let injection = if shell && self.config.shell.integration {
+            crate::integration::Shell::of(&spec.program)
+                .zip(self.shell_scripts())
+                .map(|(kind, dir)| {
+                    crate::integration::inject(kind, &dir, &|k| std::env::var(k).ok())
+                })
+        } else {
+            None
+        };
         spec.cwd = cwd.filter(|c| c.is_dir());
         spec.env = vec![
             ("TERM".into(), "xterm-256color".into()),
@@ -1077,6 +1165,10 @@ impl Desktop {
             ("TERMOS_PANE".into(), id.to_string()),
         ];
         spec.env.extend(self.opts.pane_env.iter().cloned());
+        if let Some(inj) = injection {
+            spec.args = inj.args;
+            spec.env.extend(inj.env);
+        }
         // A pane in a worktree gets its name, branch and ports (D-114).
         if let (Some(launcher), Some(dir)) = (self.opts.launcher.clone(), spec.cwd.clone()) {
             let ctx = termos_core::app::LaunchContext {
@@ -1103,9 +1195,30 @@ impl Desktop {
                 cwd: None,
                 size: (w, h),
                 bell: false,
+                attention: None,
+                hooked: None,
             },
         );
         Ok(id)
+    }
+
+    /// The shell integration scripts' folder, written on first use.
+    fn shell_scripts(&mut self) -> Option<PathBuf> {
+        self.shell_scripts
+            .get_or_insert_with(|| {
+                let dir = crate::integration::dir(&self.opts.paths.data_dir);
+                match crate::integration::install(&dir) {
+                    Ok(()) => Some(dir),
+                    Err(e) => {
+                        tracing::warn!(
+                            "shells start without TermOS's integration: cannot write {}: {e}",
+                            dir.display()
+                        );
+                        None
+                    }
+                }
+            })
+            .clone()
     }
 
     fn open_app(&mut self, app: Box<dyn App>) -> PaneId {
@@ -1199,6 +1312,8 @@ impl Desktop {
                 cwd: None,
                 size: (0, 0),
                 bell: false,
+                attention: None,
+                hooked: None,
             },
         );
     }
@@ -1859,7 +1974,20 @@ impl Desktop {
         }
     }
 
+    /// Input for a pane's program: the user (or a script) answered it,
+    /// so it no longer waits (D-115).
     fn write_to_pane(&mut self, id: PaneId, bytes: Vec<u8>) {
+        if let Some(p) = self.panes.get_mut(&id)
+            && p.attention.take().is_some()
+        {
+            self.dirty = true;
+        }
+        self.write_quietly(id, bytes);
+    }
+
+    /// Bytes for a pane's program that are not an answer (the wheel's
+    /// arrow keys).
+    fn write_quietly(&mut self, id: PaneId, bytes: Vec<u8>) {
         if let Some(Pane {
             kind: PaneKind::Term { vt, pty },
             ..
@@ -1875,11 +2003,16 @@ impl Desktop {
 
     fn copy_text(&mut self, text: String, source: ClipSource) {
         let n = text.chars().count();
+        self.copy_quietly(text, source);
+        self.notify(Level::Info, format!("copied {n} characters"));
+    }
+
+    /// [`Desktop::copy_text`] without its message.
+    fn copy_quietly(&mut self, text: String, source: ClipSource) {
         self.remember_copy(&text, source);
         self.outbox
             .push((self.current, ServerMsg::Clipboard(text.clone())));
         self.paste_buffer = Some(text);
-        self.notify(Level::Info, format!("copied {n} characters"));
     }
 
     /// Adds a copy to the clipboard history.
@@ -2468,6 +2601,63 @@ impl Desktop {
         Ok(out.split_off(skip))
     }
 
+    /// The command blocks a pane's shell marked (OSC 133, D-116), oldest
+    /// first.
+    pub fn blocks(&self, pane: Option<PaneId>) -> Result<Vec<termos_term::blocks::Block>, String> {
+        let id = self.target_pane(pane)?;
+        match self.panes.get(&id).map(|p| &p.kind) {
+            Some(PaneKind::Term { vt, .. }) => Ok(vt.blocks()),
+            _ => Err(format!("pane {id} is not a terminal")),
+        }
+    }
+
+    /// The last command in a pane: the newest block with a command line,
+    /// or with `finished`, the newest that finished (a pane reading its
+    /// own, whose newest is the reading command).
+    pub fn last_command(
+        &self,
+        pane: Option<PaneId>,
+        finished: bool,
+    ) -> Result<Option<termos_term::blocks::Block>, String> {
+        use termos_term::blocks::BlockState;
+        Ok(self
+            .blocks(pane)?
+            .into_iter()
+            .rev()
+            .find(|b| !b.command.is_empty() && (!finished || b.state == BlockState::Finished)))
+    }
+
+    /// `pane.copy-output`: the focused pane's last finished command's
+    /// output to the clipboard.
+    fn copy_last_output(&mut self) {
+        let last = self.last_command(None, true).ok().flatten();
+        match last {
+            Some(b) if !b.output.is_empty() => {
+                let n = b.output.len();
+                let cmd = crate::attention::short(&b.command, 40);
+                self.copy_quietly(b.output.join("\n"), ClipSource::Selection);
+                self.notify(
+                    Level::Info,
+                    format!(
+                        "copied {n} line{} of `{cmd}`'s output",
+                        if n == 1 { "" } else { "s" }
+                    ),
+                );
+            }
+            Some(b) => self.notify(
+                Level::Info,
+                format!(
+                    "`{}` printed nothing",
+                    crate::attention::short(&b.command, 40)
+                ),
+            ),
+            None => self.notify(
+                Level::Info,
+                "no command here to copy from (its shell does not mark commands)",
+            ),
+        }
+    }
+
     /// Sends keys (tmux notation) to a pane, encoded for its program.
     pub fn send_keys(&mut self, pane: Option<PaneId>, keys: &[KeyEvent]) -> Result<(), String> {
         let id = self.target_pane(pane)?;
@@ -2526,6 +2716,10 @@ impl Desktop {
                     rows: p.size.1,
                     floating: ws.is_floating(id),
                     focused: Some(id) == focus && wi == self.session.active_index(),
+                    waiting: p.attention.as_ref().map(|a| match a.need {
+                        Need::You => "needs-you",
+                        Need::Done => "done",
+                    }),
                 });
             }
         }
@@ -2751,6 +2945,14 @@ impl Desktop {
             Command::HarnessBest(arg) => {
                 self.launch(termos_core::app::LaunchKind::HarnessBest, &arg);
             }
+            Command::AgentWaiting => self.jump_to_waiting(),
+            Command::PromptPrev | Command::PromptNext => {
+                if self.enter_copy_mode(false) {
+                    let c = if cmd == Command::PromptPrev { '[' } else { ']' };
+                    self.copy_key(KeyEvent::plain(termos_core::input::KeyCode::Char(c)));
+                }
+            }
+            Command::CopyOutput => self.copy_last_output(),
             Command::WorktreeReview(name) => {
                 // A review of it already open comes forward instead.
                 let open = (!name.is_empty())
@@ -3435,7 +3637,7 @@ impl Desktop {
                 }) => encode_key(key, &vt.modes()),
                 _ => Vec::new(),
             };
-            self.write_to_pane(pane, bytes.repeat(3));
+            self.write_quietly(pane, bytes.repeat(3));
             return;
         }
         self.session.active_mut().set_focus(pane);
@@ -3473,8 +3675,10 @@ impl Desktop {
                     return;
                 };
                 vt.advance(&bytes);
+                let mut notices = Vec::new();
                 for ev in vt.take_events() {
                     match ev {
+                        VtEvent::Notify(n) => notices.push(n),
                         VtEvent::Title(t) => pane.title = t,
                         VtEvent::ResetTitle => pane.title.clear(),
                         VtEvent::Bell => {
@@ -3501,6 +3705,9 @@ impl Desktop {
                             self.layout_changed = true;
                         }
                     }
+                }
+                for n in notices {
+                    self.program_notice(id, &n.title, &n.body);
                 }
                 if visible {
                     self.output_since_render += bytes.len();
@@ -3738,6 +3945,20 @@ impl Desktop {
                         .iter()
                         .any(|p| self.panes.get(p).is_some_and(|p| p.bell)),
                 zoomed: ws.zoomed().is_some(),
+                attention: {
+                    let needs: Vec<Need> = ws
+                        .panes()
+                        .iter()
+                        .filter_map(|p| self.panes.get(p)?.attention.as_ref().map(|a| a.need))
+                        .collect();
+                    if needs.contains(&Need::You) {
+                        Some(Need::You)
+                    } else if i != active && needs.contains(&Need::Done) {
+                        Some(Need::Done)
+                    } else {
+                        None
+                    }
+                },
             })
             .collect();
         let minimized = self
@@ -3823,10 +4044,14 @@ impl Desktop {
             }
         }
         let focus = self.focused();
-        // The active workspace's panes have been seen: clear their bells.
+        // The active workspace's panes have been seen: clear their bells
+        // and finished turns.
         for id in self.session.active().panes() {
             if let Some(p) = self.panes.get_mut(&id) {
                 p.bell = false;
+                if p.attention.as_ref().is_some_and(|a| a.need == Need::Done) {
+                    p.attention = None;
+                }
             }
         }
 
@@ -3895,6 +4120,12 @@ impl Desktop {
             let copy = &self.copy;
             let block_cache = &mut self.block_cache;
             let candidates = &mut candidates;
+            let waiting: Vec<PaneId> = panes
+                .values()
+                .filter(|p| p.attention.as_ref().is_some_and(|a| a.need == Need::You))
+                .map(|p| p.id)
+                .collect();
+            let ring_style = Style::new().fg(theme.colors.warn);
             compose(
                 grid,
                 &placement,
@@ -3902,10 +4133,12 @@ impl Desktop {
                 theme,
                 &opts,
                 &|p| titles.get(&p).cloned().unwrap_or_default(),
+                &|p| waiting.contains(&p).then_some(ring_style),
                 &mut |id, rect, g| {
                     let Some(pane) = panes.get_mut(&id) else {
                         return;
                     };
+                    let needs_you = waiting.contains(&id);
                     match &mut pane.kind {
                         PaneKind::Term { vt, .. } => {
                             vt.render_into(g, rect);
@@ -3978,6 +4211,20 @@ impl Desktop {
                                     });
                                 }
                             }
+                        }
+                    }
+                    // A badge at the top right of a pane that waits for
+                    // the user (D-115): it shows where a ring cannot (a
+                    // pane alone in its workspace).
+                    if needs_you {
+                        let label = " \u{25cf} needs you ";
+                        let w = u16::try_from(label.chars().count()).unwrap_or(u16::MAX);
+                        if rect.w >= w + 2 {
+                            let style = Style::new()
+                                .fg(theme.colors.status_bg)
+                                .bg(theme.colors.warn)
+                                .attrs(termos_render::cell::Attrs::BOLD);
+                            g.put_str(rect.right() - w, rect.y, label, style, rect.right());
                         }
                     }
                 },

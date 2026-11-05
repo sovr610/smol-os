@@ -21,7 +21,8 @@ use crate::input::{KeyEvent, MouseEvent};
 /// - 3: images (`FrameUpdate::images`, `ImageData`, `ImageFree`).
 /// - 4: Kitty keyboard details (`ClientMsg::KeyDetail`,
 ///   `ServerMsg::KeyboardFlags`).
-pub const PROTOCOL_VERSION: u32 = 4;
+/// - 5: system notifications (`ServerMsg::Notify`).
+pub const PROTOCOL_VERSION: u32 = 5;
 
 /// A frame for one client: the cells that changed since the last frame this
 /// client received, plus where the cursor goes.
@@ -90,6 +91,12 @@ pub enum ServerMsg {
     /// Put text on the system clipboard (the client emits OSC 52).
     Clipboard(String),
     Bell,
+    /// An agent needs the user: show a system notification where the
+    /// terminal can (OSC 9, 99 or 777, D-116).
+    Notify {
+        title: String,
+        body: String,
+    },
     /// Set the outer terminal's title.
     Title(String),
     /// The session ended; the client should restore the terminal and exit.

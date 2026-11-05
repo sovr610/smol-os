@@ -150,6 +150,7 @@ pub(crate) async fn run(
         send(&end, msg)?;
     }
     let mut encoder = Encoder::new(&caps);
+    let notify_style = caps.notify_style(std::env::var("TERM_PROGRAM").ok().as_deref());
     let mut images = crate::images::ImageStore::default();
     let mut input = term_input::Reader::start(false)?;
     let mut resizes = Resizes::new()?;
@@ -218,6 +219,14 @@ pub(crate) async fn run(
                 Some(ServerMsg::Bell) => {
                     out.write_all(b"\x07")?;
                     out.flush()?;
+                }
+                Some(ServerMsg::Notify { title, body }) => {
+                    // As a system notification, where the terminal shows
+                    // them (D-116).
+                    if let Some(style) = notify_style {
+                        out.write_all(&termos_render::caps::notify_sequence(style, &title, &body))?;
+                        out.flush()?;
+                    }
                 }
                 Some(ServerMsg::Title(t)) => {
                     out.write_all(&set_title(&t))?;

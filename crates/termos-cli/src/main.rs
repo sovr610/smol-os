@@ -10,6 +10,7 @@
 //! the pane belongs to (`$TERMOS`).
 
 mod accounts_cmd;
+mod agent_hooks;
 mod agents;
 mod client;
 mod coding_agents;

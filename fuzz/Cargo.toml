@@ -83,6 +83,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "osc_signals"
+path = "fuzz_targets/osc_signals.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "markdown_layout"
 path = "fuzz_targets/markdown_layout.rs"
 test = false
