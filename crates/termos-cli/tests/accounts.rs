@@ -537,6 +537,21 @@ fn sign_in_and_keys_go_through_the_clis_own_commands() {
     );
     run(&env, &["account", "sign-in", "claude", "work", "--console"]);
     assert!(log().contains("auth login --console"), "{}", log());
+    // `default` keeps the environment as it is (as its windows do), and
+    // the sign-in says what comes before it.
+    let out = env.run(&["account", "sign-in", "claude", "default"]);
+    let said = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "{said}");
+    assert!(
+        said.contains("your environment sets ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN")
+            && !said.contains("sk-ant-inherited"),
+        "{said}"
+    );
+    assert!(
+        log().contains("claude default auth login  key=sk-ant-inherited oauth=inherited-token"),
+        "{}",
+        log()
+    );
 
     run(&env, &["account", "add", "codex", "work", "--no-sign-in"]);
     let codex_work = data.join("accounts/codex/work");

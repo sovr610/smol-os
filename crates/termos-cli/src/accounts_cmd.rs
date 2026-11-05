@@ -392,10 +392,14 @@ fn sign_in(paths: &Paths, a: &Account) -> anyhow::Result<ExitCode> {
 
 /// The CLI as the account, with credentials inherited from the environment
 /// dropped (the sign-in is the account's own).
+/// `program` as the account, with the environment the shim would give it
+/// (so its status says what a window would use).
 fn as_account(program: &std::path::Path, a: &Account) -> std::process::Command {
     let mut cmd = std::process::Command::new(program);
-    for v in accounts::credential_variables(a.tool) {
-        cmd.env_remove(v);
+    if a.isolated() {
+        for v in accounts::credential_variables(a.tool) {
+            cmd.env_remove(v);
+        }
     }
     cmd.envs(a.env());
     cmd
@@ -424,6 +428,21 @@ fn sign_in_how(paths: &Paths, a: &Account, how: How) -> anyhow::Result<ExitCode>
     }
     let program = installed_program(paths, a.tool)?;
     let mut cmd = as_account(&program, a);
+    if !a.isolated() {
+        // `default` keeps the environment, whose sign-in comes first.
+        let set: Vec<&str> = accounts::credential_variables(a.tool)
+            .iter()
+            .copied()
+            .filter(|v| std::env::var_os(v).is_some_and(|x| !x.is_empty()))
+            .collect();
+        if !set.is_empty() {
+            eprintln!(
+                "termos: your environment sets {}; {} uses that before this sign-in for `default` (TermOS's own accounts leave it out).",
+                set.join(", "),
+                a.tool.title()
+            );
+        }
+    }
     match a.tool {
         Tool::Claude => {
             cmd.args(["auth", "login"]);

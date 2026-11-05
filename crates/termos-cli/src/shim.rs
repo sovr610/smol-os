@@ -139,7 +139,7 @@ fn plan_with(
         env.push((pin_variable(tool), a.name.clone()));
         // The account's own sign-in, not one inherited from the
         // environment; `default` keeps the environment as it is.
-        if !a.is_default() || a.meta.api_key.is_some() {
+        if a.isolated() {
             unset.extend(
                 accounts::credential_variables(tool)
                     .iter()

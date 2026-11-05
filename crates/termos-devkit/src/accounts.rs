@@ -271,6 +271,14 @@ impl Account {
         self.dir.is_none()
     }
 
+    /// Whether the sign-in variables of the environment
+    /// ([`credential_variables`]) are kept from the CLI: for TermOS's
+    /// accounts and any account with an API key (D-112). `default` keeps
+    /// the environment as it is.
+    pub fn isolated(&self) -> bool {
+        !self.is_default() || self.meta.api_key.is_some()
+    }
+
     /// The variable that points the CLI at its folder.
     pub fn variable(tool: Tool) -> &'static str {
         match tool {

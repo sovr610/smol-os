@@ -157,15 +157,22 @@ jobs:
           test -f "$second/.claude.json"
           grep -q '"termos"' "$second/.claude.json"
           grep -q "mcp_servers.termos" "$XDG_DATA_HOME/termos/accounts/codex/second/config.toml"
-          # Who each is signed in as, asked of the CLIs themselves.
-          $termos account status | tee who.txt
+          # Who each is signed in as, asked of the CLIs themselves. Keys
+          # in the environment do not reach TermOS's accounts (D-112).
+          ANTHROPIC_API_KEY=fixture-key CODEX_API_KEY=fixture-key \
+            $termos account status | tee who.txt
           grep -E "^  second +not signed in" who.txt | wc -l | grep -qx 2
           # `claude` follows the account in use, through TermOS's shim.
           $termos account use claude second
           "$bin/claude$ext" mcp list | tee mcp.txt
           grep -i "termos" mcp.txt | grep -qi "connected"
-          # The second account lists TermOS's skills too.
-          bash .github/scripts/claude-skills.sh "$bin/claude$ext" 8767
+          ANTHROPIC_API_KEY=fixture-key "$bin/claude$ext" auth status | tee auth.txt || true
+          grep -qiE '"loggedIn": *false|not logged in' auth.txt
+          # The second account's folder lists TermOS's skills too (Claude
+          # Code itself, pointed there: a fixture key stays out of the shim).
+          real=$($termos agent status | sed -n 's/^Claude Code .*(\(.*\))$/\1/p')
+          [ "$RUNNER_OS" = Windows ] && real=$(cygpath -u "$real")
+          CLAUDE_CONFIG_DIR="$second" bash .github/scripts/claude-skills.sh "$real" 8767
           $termos account use codex second
           "$bin/codex$ext" mcp list | tee mcp.txt
           grep -q "termos" mcp.txt
