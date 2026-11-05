@@ -245,15 +245,19 @@ jobs:
       - name: Install and run
         shell: sh
         run: |
+          # The man page is checked in the package: Ubuntu's and Fedora's
+          # container images are set not to install documentation.
+          man=usr/share/man/man1/termos.1.gz
           if [ "${{ matrix.kind }}" = deb ]; then
             apt-get update -qq
             apt-get install -y -qq ./pkg/termos_*_${{ matrix.arch }}.deb
+            dpkg-deb -c ./pkg/termos_*_${{ matrix.arch }}.deb | grep -q "\./$man\$"
           else
             dnf install -y -q ./pkg/termos-*.${{ matrix.arch }}.rpm
+            rpm -qlp ./pkg/termos-*.${{ matrix.arch }}.rpm | grep -qx "/$man"
           fi
           termos --version
           termos completions bash > /dev/null
-          test -f /usr/share/man/man1/termos.1.gz
 
   images:
     name: Image (${{ matrix.target }})

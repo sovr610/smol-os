@@ -321,8 +321,13 @@ mod tests {
         let pid = child.id();
         act(pid, Action::Pause).expect("paused");
         act(pid, Action::Resume).expect("resumed");
+        // From wherever it started (macOS runners start below 0).
+        let raw =
+            rustix::process::Pid::from_raw(i32::try_from(pid).expect("a pid")).expect("a pid");
+        let before = rustix::process::getpriority_process(Some(raw)).expect("its priority");
         let nicer = renice(pid, 1).expect("niced");
-        assert!(nicer >= 1);
+        assert_eq!(nicer, (before + 1).clamp(-20, 19));
+        assert_eq!(rustix::process::getpriority_process(Some(raw)), Ok(nicer));
         act(pid, Action::End).expect("ended");
         let status = child.wait().expect("waited");
         assert!(!status.success());

@@ -260,7 +260,8 @@ async fn the_search_lands_on_the_match_in_copy_mode() {
         h.desktop
             .send_text(
                 Some(*id),
-                &format!("{}\n", common::echo_split("word", &format!("-{i}x"))),
+                // `\r`, as Enter sends: cmd takes no `\n` for it.
+                &format!("{}\r", common::echo_split("word", &format!("-{i}x"))),
             )
             .expect("a terminal");
     }
