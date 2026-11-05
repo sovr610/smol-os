@@ -81,6 +81,10 @@ pub struct Config {
     pub record: RecordConfig,
     /// Saved commands (M13b, D-120).
     pub snippets: Vec<crate::snippets::Snippet>,
+    /// The file manager (M13c, D-122).
+    pub files: FilesConfig,
+    /// The process manager (M13c, D-122).
+    pub processes: ProcessesConfig,
     /// The coding harness (M11c, D-099).
     pub harness: HarnessConfig,
     /// A git worktree per task (M12a, D-113).
@@ -118,6 +122,8 @@ impl Default for Config {
             quick: QuickConfig::default(),
             record: RecordConfig::default(),
             snippets: Vec::new(),
+            files: FilesConfig::default(),
+            processes: ProcessesConfig::default(),
             harness: HarnessConfig::default(),
             worktrees: WorktreesConfig::default(),
         }
@@ -395,6 +401,30 @@ impl Default for NotificationsConfig {
             system: true,
             long_command: 15,
         }
+    }
+}
+
+/// The file manager (`[files]`, D-122).
+#[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize)]
+#[serde(default, deny_unknown_fields, rename_all = "kebab-case")]
+pub struct FilesConfig {
+    /// Folders in the sidebar and the `'` list (`b` adds the one shown).
+    pub bookmarks: Vec<PathBuf>,
+    /// Open with two panes side by side.
+    pub two_pane: bool,
+}
+
+/// The process manager (`[processes]`, D-122).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(default, deny_unknown_fields, rename_all = "kebab-case")]
+pub struct ProcessesConfig {
+    /// Ask before ending, killing, pausing or renicing a process.
+    pub confirm: bool,
+}
+
+impl Default for ProcessesConfig {
+    fn default() -> Self {
+        Self { confirm: true }
     }
 }
 
@@ -860,6 +890,13 @@ height = "40%"           # the drop-down terminal (prefix `), from the top
 
 [record]
 # dir = "~/recordings"   # pane recordings (prefix R); default ~/.local/state/termos/recordings
+
+[files]
+bookmarks = []           # folders in Files' sidebar (b adds the one shown, ' lists them)
+two-pane = false         # open Files with two panes (Tab switches, F5 copies, F6 moves)
+
+[processes]
+confirm = true           # ask before ending, killing, pausing or renicing a process
 
 # Saved commands, in the palette as "snippet: NAME". {param} and
 # {param:default} are asked for. Do not put secrets in them.

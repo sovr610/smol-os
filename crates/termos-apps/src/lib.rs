@@ -12,20 +12,29 @@
 //!   processes.
 //! - [`clipboard`]: what was copied, to paste again.
 //! - [`settings`]: the common options of `config.toml`.
+//! - [`archive`], [`rename`], [`du`], [`gitstatus`], [`findfiles`] and
+//!   [`procs`]: the file manager's archives, bulk rename, disk usage, git
+//!   marks and searches, and the monitor's process view (M13c, D-122).
 //!
 //! Planned (see `ARCHITECTURE.md`, "Apps and plugins"): the package
 //! manager UI (M5).
 
+pub mod archive;
 pub mod clipboard;
+pub mod du;
 pub mod files;
+pub mod findfiles;
+pub mod gitstatus;
 pub mod image_viewer;
 pub mod markdown;
 pub mod monitor;
 pub mod network;
+pub mod procs;
+pub mod rename;
 pub mod settings;
 
 pub use clipboard::ClipboardManager;
-pub use files::FileManager;
+pub use files::{FileManager, Files, FilesOptions};
 pub use image_viewer::ImageViewer;
 pub use markdown::MarkdownViewer;
 pub use monitor::SystemMonitor;

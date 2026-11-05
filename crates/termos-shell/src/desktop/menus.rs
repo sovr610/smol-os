@@ -168,6 +168,7 @@ impl Desktop {
                 vec![
                     Entry::item("Files", Command::FilesOpen(String::new())),
                     Entry::item("System monitor", Command::MonitorOpen),
+                    Entry::item("Processes", Command::ProcessesOpen(String::new())),
                     Entry::item("Clipboard history", Command::ClipboardOpen),
                     Entry::item("Packages", Command::PackagesOpen),
                     Entry::item("Network", Command::NetworkOpen),
@@ -248,6 +249,15 @@ impl Desktop {
                 },
                 Command::PaneSync,
             ));
+            if let Some(pid) = self.panes.get(&pane).and_then(|p| match &p.kind {
+                PaneKind::Term { pty, .. } => pty.pid(),
+                PaneKind::App(_) => None,
+            }) {
+                v.push(Entry::item(
+                    "Show its processes",
+                    Command::ProcessesOpen(pid.to_string()),
+                ));
+            }
             v.push(Entry::item(
                 if self.is_recording(pane) {
                     "Stop recording"

@@ -6,6 +6,11 @@
 //! only while the window is on screen: the desktop gives an app timers
 //! only when some client can see it (D-028), so a minimized or
 //! background monitor costs nothing.
+//!
+//! `Tab` switches to the process manager (M13c, D-122): every process,
+//! filtered, sorted or as a tree, with its user, time, state, ports
+//! (Linux) and command line; it ends, kills, pauses and renices them,
+//! asking first.
 
 use std::collections::VecDeque;
 use std::sync::mpsc::{Receiver, Sender, TryRecvError, channel};
@@ -19,7 +24,7 @@ use ratatui_core::widgets::Widget;
 use termos_core::app::{App, AppEffect, AppImage, AppWaker, new_image_key, tui_style};
 use termos_core::input::{KeyCode, KeyEvent};
 use termos_core::widgets::{LineChart, Meter, Series, Sparkline};
-use termos_hw::{Inventory, ProcessSample, Sample, Source};
+use termos_hw::{Action, Inventory, ProcessInfo, ProcessSample, Sample, Source};
 use termos_render::cell::{Attrs, Style};
 use termos_render::color::{Color, Rgb};
 use termos_render::graphics::Picture;
@@ -38,7 +43,46 @@ pub type SourceFactory = Box<dyn FnOnce() -> Result<Box<dyn Source>, String> + S
 enum Msg {
     Inventory(Inventory),
     Sample(Box<Sample>),
+    /// Every process, for the process view.
+    Table(Vec<ProcessInfo>),
     Failed(String),
+}
+
+/// What a reading asks the thread for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Ask {
+    /// Every process too (the process view is shown).
+    table: bool,
+}
+
+/// Which view the window shows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Tab {
+    #[default]
+    Overview,
+    Processes,
+}
+
+/// What the process view waits for an answer about.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Pending {
+    Act(u32, String, Action),
+    Renice(u32, String, i32),
+}
+
+/// The process view's state.
+#[derive(Debug, Default)]
+struct ProcView {
+    table: Vec<ProcessInfo>,
+    view: crate::procs::View,
+    selected: usize,
+    top: usize,
+    /// Typing the filter.
+    filtering: bool,
+    pending: Option<Pending>,
+    message: Option<(String, bool)>,
+    /// Ask before acting (`[processes] confirm`).
+    confirm: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -56,7 +100,9 @@ pub struct SystemMonitor {
     rx_hist: VecDeque<f64>,
     tx_hist: VecDeque<f64>,
     /// Asks the thread for a reading; dropping it stops the thread.
-    ask: Option<Sender<()>>,
+    ask: Option<Sender<Ask>>,
+    tab: Tab,
+    procs: ProcView,
     results: Receiver<Msg>,
     waker: Arc<Mutex<Option<AppWaker>>>,
     next: Option<Instant>,
@@ -111,7 +157,7 @@ impl SystemMonitor {
     /// A monitor of any source (tests use fixtures).
     pub fn with_source(factory: SourceFactory) -> Self {
         let waker: Arc<Mutex<Option<AppWaker>>> = Arc::new(Mutex::new(None));
-        let (ask_tx, ask_rx) = channel::<()>();
+        let (ask_tx, ask_rx) = channel::<Ask>();
         let (tx, rx) = channel();
         let w = Arc::clone(&waker);
         let spawned = std::thread::Builder::new()
@@ -130,8 +176,11 @@ impl SystemMonitor {
                 }
                 wake(&w);
                 // One reading per request; none while nobody asks.
-                while ask_rx.recv().is_ok() {
+                while let Ok(ask) = ask_rx.recv() {
                     if tx.send(Msg::Sample(Box::new(source.sample()))).is_err() {
+                        return;
+                    }
+                    if ask.table && tx.send(Msg::Table(source.processes(true))).is_err() {
                         return;
                     }
                     wake(&w);
@@ -150,6 +199,11 @@ impl SystemMonitor {
             rx_hist: VecDeque::new(),
             tx_hist: VecDeque::new(),
             ask,
+            tab: Tab::Overview,
+            procs: ProcView {
+                confirm: true,
+                ..ProcView::default()
+            },
             results: rx,
             waker,
             // The first reading as soon as the window is on screen.
@@ -174,6 +228,7 @@ impl SystemMonitor {
                     self.last = Some(*s);
                     self.samples += 1;
                 }
+                Ok(Msg::Table(t)) => self.procs.table = t,
                 Ok(Msg::Failed(e)) => {
                     self.error = Some(e);
                     self.ask = None;
@@ -188,6 +243,324 @@ impl SystemMonitor {
             }
         }
     }
+}
+
+impl SystemMonitor {
+    /// The monitor of this machine, open at its process view; with
+    /// `root`, only that process and its descendants (a pane's).
+    /// `confirm` asks before acting on one (`[processes] confirm`).
+    pub fn processes(root: Option<u32>, confirm: bool) -> Self {
+        let mut m = Self::open();
+        m.tab = Tab::Processes;
+        m.procs.view.root = root;
+        m.procs.view.tree = root.is_some();
+        m.procs.confirm = confirm;
+        m
+    }
+
+    /// Whether to ask before acting on a process.
+    pub fn set_confirm(&mut self, confirm: bool) {
+        self.procs.confirm = confirm;
+    }
+
+    /// The view shown.
+    pub fn tab(&self) -> Tab {
+        self.tab
+    }
+
+    fn proc_rows(&self) -> Vec<crate::procs::Row> {
+        crate::procs::rows(&self.procs.table, &self.procs.view)
+    }
+
+    /// The selected process.
+    fn proc_selected(&self) -> Option<ProcessInfo> {
+        self.proc_rows()
+            .into_iter()
+            .nth(self.procs.selected)
+            .map(|r| r.info)
+    }
+
+    /// Asks first (or acts at once without `confirm`).
+    fn proc_ask(&mut self, pending: Pending) -> AppEffect {
+        if self.procs.confirm {
+            self.procs.pending = Some(pending);
+        } else {
+            self.proc_do(pending);
+        }
+        AppEffect::Redraw
+    }
+
+    fn proc_do(&mut self, pending: Pending) {
+        self.procs.message = Some(match pending {
+            Pending::Act(pid, name, action) => match termos_hw::procs::act(pid, action) {
+                Ok(()) => (format!("{}: {name} ({pid})", past(action)), false),
+                Err(e) => (e, true),
+            },
+            Pending::Renice(pid, name, delta) => match termos_hw::procs::renice(pid, delta) {
+                Ok(n) => (format!("{name} ({pid}) now has niceness {n}"), false),
+                Err(e) => (e, true),
+            },
+        });
+        // Read again soon, so the change shows.
+        self.next = Some(Instant::now());
+    }
+
+    fn proc_key(&mut self, key: KeyEvent) -> AppEffect {
+        let p = &mut self.procs;
+        if let Some(pending) = p.pending.take() {
+            if matches!(key.code, KeyCode::Char('y' | 'Y')) {
+                self.proc_do(pending);
+            }
+            return AppEffect::Redraw;
+        }
+        if p.filtering {
+            match key.code {
+                KeyCode::Enter => p.filtering = false,
+                KeyCode::Esc => {
+                    p.filtering = false;
+                    p.view.filter.clear();
+                }
+                KeyCode::Backspace => {
+                    p.view.filter.pop();
+                }
+                KeyCode::Char(c)
+                    if !key.mods.intersects(
+                        termos_core::input::Mods::CTRL | termos_core::input::Mods::ALT,
+                    ) =>
+                {
+                    p.view.filter.push(c);
+                }
+                _ => return AppEffect::None,
+            }
+            p.selected = 0;
+            return AppEffect::Redraw;
+        }
+        let n = self.proc_rows().len();
+        let page = 10;
+        let p = &mut self.procs;
+        p.message = None;
+        match key.code {
+            KeyCode::Char('j') | KeyCode::Down => {
+                p.selected = (p.selected + 1).min(n.saturating_sub(1))
+            }
+            KeyCode::Char('k') | KeyCode::Up => p.selected = p.selected.saturating_sub(1),
+            KeyCode::PageDown => p.selected = (p.selected + page).min(n.saturating_sub(1)),
+            KeyCode::PageUp => p.selected = p.selected.saturating_sub(page),
+            KeyCode::Char('g') | KeyCode::Home => p.selected = 0,
+            KeyCode::Char('G') | KeyCode::End => p.selected = n.saturating_sub(1),
+            KeyCode::Char('/') => p.filtering = true,
+            KeyCode::Char('s') => {
+                p.view.sort = p.view.sort.next();
+                p.message = Some((format!("sorted by {}", p.view.sort.label()), false));
+            }
+            KeyCode::Char('t') => p.view.tree = !p.view.tree,
+            KeyCode::Char('a') => {
+                // The whole machine again, after a pane's processes.
+                p.view.root = None;
+                p.selected = 0;
+            }
+            KeyCode::Esc if !p.view.filter.is_empty() => {
+                p.view.filter.clear();
+                p.selected = 0;
+            }
+            KeyCode::Char('e')
+            | KeyCode::Char('K')
+            | KeyCode::Char('z')
+            | KeyCode::Char('+')
+            | KeyCode::Char('-') => {
+                let Some(sel) = self.proc_selected() else {
+                    return AppEffect::None;
+                };
+                let name = sel.name.clone();
+                let pending = match key.code {
+                    KeyCode::Char('e') => Pending::Act(sel.pid, name, Action::End),
+                    KeyCode::Char('K') => Pending::Act(sel.pid, name, Action::Kill),
+                    KeyCode::Char('z') => {
+                        let stopped = sel.state.to_lowercase().starts_with("stop");
+                        let a = if stopped {
+                            Action::Resume
+                        } else {
+                            Action::Pause
+                        };
+                        Pending::Act(sel.pid, name, a)
+                    }
+                    KeyCode::Char('+') => Pending::Renice(sel.pid, name, -1),
+                    _ => Pending::Renice(sel.pid, name, 1),
+                };
+                return self.proc_ask(pending);
+            }
+            _ => return AppEffect::None,
+        }
+        AppEffect::Redraw
+    }
+
+    /// The process view, the whole window.
+    fn draw_table(&mut self, pen: &mut Pen<'_>, area: TuiRect) {
+        let c = pen.theme.colors.clone();
+        if area.height < 4 {
+            return;
+        }
+        let rows = self.proc_rows();
+        let p = &mut self.procs;
+        p.selected = p.selected.min(rows.len().saturating_sub(1));
+        let scope = if p.view.root.is_some() {
+            " · a pane's processes (a: all)"
+        } else {
+            ""
+        };
+        let head = format!(
+            "Processes · {} · by {} (s){}{}",
+            rows.len(),
+            p.view.sort.label(),
+            if p.view.tree { " · tree (t)" } else { "" },
+            scope
+        );
+        pen.heading(area, &head);
+        let ports = termos_hw::procs::PORTS_AVAILABLE;
+        let fixed = 7 + 1 + 9 + 1 + 6 + 1 + 7 + 1 + 7 + 1 + if ports { 12 } else { 0 };
+        let cmd_w = usize::from(area.width).saturating_sub(fixed);
+        let header = if ports {
+            format!(
+                "{:>7} {:<9} {:>6} {:>7} {:>7} {:<11} {}",
+                "PID", "USER", "CPU%", "MEM", "TIME", "PORTS", "COMMAND"
+            )
+        } else {
+            format!(
+                "{:>7} {:<9} {:>6} {:>7} {:>7} {}",
+                "PID", "USER", "CPU%", "MEM", "TIME", "COMMAND"
+            )
+        };
+        pen.text(
+            area.x,
+            area.y + 1,
+            &header,
+            area.width,
+            Style::new().fg(c.muted),
+        );
+        let list_h = usize::from(area.height.saturating_sub(3));
+        if p.selected < p.top {
+            p.top = p.selected;
+        } else if list_h > 0 && p.selected >= p.top + list_h {
+            p.top = p.selected + 1 - list_h;
+        }
+        for (i, r) in rows.iter().enumerate().skip(p.top).take(list_h) {
+            let y = area.y + 2 + u16::try_from(i - p.top).unwrap_or(0);
+            let info = &r.info;
+            let user: String = info
+                .user
+                .clone()
+                .unwrap_or_else(|| "-".into())
+                .chars()
+                .take(9)
+                .collect();
+            let indent = "  ".repeat(r.depth.min(12));
+            let command: String = format!("{indent}{}", info.command)
+                .chars()
+                .take(cmd_w)
+                .collect();
+            let port_text: String = info
+                .ports
+                .iter()
+                .map(u16::to_string)
+                .collect::<Vec<_>>()
+                .join(",")
+                .chars()
+                .take(11)
+                .collect();
+            let line = if ports {
+                format!(
+                    "{:>7} {:<9} {:>6.1} {:>7} {:>7} {:<11} {}",
+                    info.pid,
+                    user,
+                    info.cpu,
+                    bytes(info.memory),
+                    crate::procs::run_time(info.run_time),
+                    port_text,
+                    command
+                )
+            } else {
+                format!(
+                    "{:>7} {:<9} {:>6.1} {:>7} {:>7} {}",
+                    info.pid,
+                    user,
+                    info.cpu,
+                    bytes(info.memory),
+                    crate::procs::run_time(info.run_time),
+                    command
+                )
+            };
+            let mut st = Style::new().fg(c.fg);
+            if info.state.to_lowercase().starts_with("stop") {
+                st = st.fg(c.warn);
+            }
+            if i == p.selected {
+                st = c.selected(st);
+                pen.buf.set_style(
+                    TuiRect::new(area.x, y, area.width, 1),
+                    tui_style(Style::new().bg(c.selection_bg)),
+                );
+            }
+            pen.text(area.x, y, &line, area.width, st);
+        }
+        if rows.is_empty() {
+            let text = if p.table.is_empty() {
+                "reading…"
+            } else {
+                "(no match)"
+            };
+            pen.text(
+                area.x,
+                area.y + 2,
+                text,
+                area.width,
+                Style::new().fg(c.muted),
+            );
+        }
+        let y = area.bottom() - 1;
+        let (line, st) = if let Some(pending) = &p.pending {
+            let q = match pending {
+                Pending::Act(pid, name, a) => format!("{} {name} ({pid})? y/n", capital(a.verb())),
+                Pending::Renice(pid, name, d) => format!(
+                    "{} the priority of {name} ({pid})? y/n",
+                    if *d < 0 { "Raise" } else { "Lower" }
+                ),
+            };
+            (q, Style::new().fg(c.warn).attrs(Attrs::BOLD))
+        } else if p.filtering {
+            (format!("/{}▏", p.view.filter), Style::new().fg(c.fg))
+        } else if let Some((m, err)) = &p.message {
+            (
+                m.clone(),
+                Style::new().fg(if *err { c.error } else { c.muted }),
+            )
+        } else {
+            let note = if ports { "" } else { " · ports: Linux only" };
+            (
+                format!(
+                    "/ filter · s sort · t tree · e end · K kill · z pause · +/- priority · Tab overview{note}"
+                ),
+                Style::new().fg(c.muted),
+            )
+        };
+        pen.text(area.x, y, &line, area.width, st);
+    }
+}
+
+/// `ended`, `killed`, …
+fn past(a: Action) -> &'static str {
+    match a {
+        Action::End => "asked to end",
+        Action::Kill => "killed",
+        Action::Pause => "paused",
+        Action::Resume => "resumed",
+    }
+}
+
+fn capital(s: &str) -> String {
+    let mut c = s.chars();
+    c.next()
+        .map(|f| f.to_uppercase().collect::<String>() + c.as_str())
+        .unwrap_or_default()
 }
 
 fn ratio(used: u64, total: u64) -> f64 {
@@ -625,7 +998,10 @@ impl SystemMonitor {
 
 impl App for SystemMonitor {
     fn reopen(&self) -> Option<String> {
-        Some("monitor.open".to_owned())
+        Some(match self.tab {
+            Tab::Overview => "monitor.open".to_owned(),
+            Tab::Processes => "processes.open".to_owned(),
+        })
     }
 
     fn icon(&self) -> termos_render::icons::Icon {
@@ -645,10 +1021,31 @@ impl App for SystemMonitor {
     }
 
     fn title(&self) -> String {
-        "System monitor".into()
+        match self.tab {
+            Tab::Overview => "System monitor".into(),
+            Tab::Processes => "Processes".into(),
+        }
     }
 
     fn handle_key(&mut self, key: KeyEvent) -> AppEffect {
+        if key.code == KeyCode::Tab && !self.procs.filtering && self.procs.pending.is_none() {
+            self.tab = match self.tab {
+                Tab::Overview => Tab::Processes,
+                Tab::Processes => Tab::Overview,
+            };
+            // The process list as soon as it shows.
+            self.next = self.ask.as_ref().map(|_| Instant::now());
+            return AppEffect::Redraw;
+        }
+        if self.tab == Tab::Processes {
+            if key.code == KeyCode::Char('q')
+                && !self.procs.filtering
+                && self.procs.pending.is_none()
+            {
+                return AppEffect::Close;
+            }
+            return self.proc_key(key);
+        }
         if !key.mods.is_empty() {
             return AppEffect::None;
         }
@@ -674,6 +1071,11 @@ impl App for SystemMonitor {
         let c = theme.colors.clone();
         if let Some(e) = &self.error {
             pen.text(area.x, area.y, e, area.width, Style::new().fg(c.error));
+            return;
+        }
+        if self.tab == Tab::Processes {
+            self.images.clear();
+            self.draw_table(&mut pen, area);
             return;
         }
         let Some(s) = self.last.clone() else {
@@ -789,7 +1191,8 @@ impl App for SystemMonitor {
             self.next = None;
             return AppEffect::None;
         };
-        if ask.send(()).is_err() {
+        let table = self.tab == Tab::Processes;
+        if ask.send(Ask { table }).is_err() {
             self.ask = None;
             self.next = None;
             return AppEffect::None;
@@ -928,6 +1331,46 @@ mod tests {
         let _ = m.handle_key(KeyEvent::plain(KeyCode::Char('s')));
         let text = crate::testing::render_text(&mut m, 110, 24);
         assert!(text.contains("by memory"), "{text}");
+    }
+
+    #[test]
+    fn the_process_view_filters_and_asks_before_acting() {
+        let mut m = monitor();
+        read(&mut m, 1);
+        m.procs.table = vec![
+            crate::procs::tests_support::info(42, None, "compiler"),
+            crate::procs::tests_support::info(43, Some(42), "linker"),
+        ];
+        assert_eq!(
+            m.handle_key(KeyEvent::plain(KeyCode::Tab)),
+            AppEffect::Redraw
+        );
+        assert_eq!(m.tab(), Tab::Processes);
+        assert_eq!(m.reopen().as_deref(), Some("processes.open"));
+        let text = crate::testing::render_text(&mut m, 100, 10);
+        assert!(text.contains("Processes · 2"), "{text}");
+        assert!(text.contains("compiler"), "{text}");
+        for k in ['/', 'l', 'i', 'n'] {
+            m.handle_key(KeyEvent::ch(k));
+        }
+        m.handle_key(KeyEvent::plain(KeyCode::Enter));
+        let text = crate::testing::render_text(&mut m, 100, 10);
+        assert!(
+            text.contains("Processes · 1") && !text.contains("compiler"),
+            "{text}"
+        );
+        // Ending asks first; `n` does nothing.
+        m.handle_key(KeyEvent::ch('e'));
+        let text = crate::testing::render_text(&mut m, 100, 10);
+        assert!(text.contains("End linker (43)? y/n"), "{text}");
+        m.handle_key(KeyEvent::ch('n'));
+        assert!(m.procs.pending.is_none());
+        assert!(m.procs.message.is_none());
+        assert_eq!(
+            m.handle_key(KeyEvent::plain(KeyCode::Tab)),
+            AppEffect::Redraw
+        );
+        assert_eq!(m.tab(), Tab::Overview);
     }
 
     #[test]

@@ -81,6 +81,8 @@ pub enum Command {
     FileOpen(String),
     /// Edit a file with `$VISUAL` or `$EDITOR` in a new pane.
     FileEdit(String),
+    /// Open a file with the system's own program for it (D-122).
+    FileOpenSystem(String),
     MonitorOpen,
     NetworkOpen,
     /// A window running `termos update install` (D-077).
@@ -157,6 +159,9 @@ pub enum Command {
     SshOpen(String),
     /// Start or stop recording the focused pane.
     PaneRecord,
+    /// The monitor's process view; with a pid, only that process and its
+    /// descendants (D-122).
+    ProcessesOpen(String),
     /// The package manager app (D-110).
     PackagesOpen,
     /// `termos pkg ARGS` in a window: "install devroot gcc" (D-110).
@@ -492,6 +497,7 @@ pub const COMMANDS: &[CommandInfo] = &[
         arg: Some("example.org"),
     },
     info("pane.record", "Record this pane, or stop recording"),
+    info("processes.open", "Processes: see, end, pause and renice"),
     CommandInfo {
         name: "file.open",
         description: "Open a file",
@@ -502,14 +508,21 @@ pub const COMMANDS: &[CommandInfo] = &[
         description: "Edit a file",
         arg: Some("notes.txt"),
     },
+    CommandInfo {
+        name: "file.open-system",
+        description: "Open a file with the system's program for it",
+        arg: Some("report.pdf"),
+    },
 ];
 
 /// Commands whose argument is the rest of the line: a path, spaces and
 /// all. The flag says whether the path may be left out.
-const PATH_COMMANDS: [(&str, bool); 5] = [
+const PATH_COMMANDS: [(&str, bool); 6] = [
     ("image.open", false),
     ("markdown.open", false),
     ("files.open", true),
+    // Before `file.open`, which it starts with.
+    ("file.open-system", false),
     ("file.open", false),
     ("file.edit", false),
 ];
@@ -521,6 +534,7 @@ fn path_command(name: &str, path: String) -> Option<Command> {
         "files.open" => Command::FilesOpen(path),
         "file.open" => Command::FileOpen(path),
         "file.edit" => Command::FileEdit(path),
+        "file.open-system" => Command::FileOpenSystem(path),
         _ => return None,
     })
 }
@@ -832,6 +846,13 @@ impl FromStr for Command {
                 None => Err(CommandError("`ssh.open` needs a host".into())),
             },
             "pane.record" => no_arg(Command::PaneRecord),
+            "processes.open" => match arg {
+                None => Ok(Command::ProcessesOpen(String::new())),
+                Some(a) if a.parse::<u32>().is_ok() => Ok(Command::ProcessesOpen(a.to_owned())),
+                Some(a) => Err(CommandError(format!(
+                    "`processes.open`: `{a}` is not a process id"
+                ))),
+            },
             "network.open" => no_arg(Command::NetworkOpen),
             "update.open" => no_arg(Command::UpdateOpen),
             "settings.open" => no_arg(Command::SettingsOpen),
@@ -923,6 +944,7 @@ impl fmt::Display for Command {
             Command::FilesOpen(p) => write!(f, "files.open {p}"),
             Command::FileOpen(p) => write!(f, "file.open {p}"),
             Command::FileEdit(p) => write!(f, "file.edit {p}"),
+            Command::FileOpenSystem(p) => write!(f, "file.open-system {p}"),
             Command::MonitorOpen => f.write_str("monitor.open"),
             Command::Task(t) if matches!(t.as_str(), "build" | "run" | "test") => {
                 write!(f, "task.{t}")
@@ -968,6 +990,8 @@ impl fmt::Display for Command {
             Command::SnippetRun(a) => write!(f, "snippet.run {a}"),
             Command::SshOpen(a) => write!(f, "ssh.open {a}"),
             Command::PaneRecord => f.write_str("pane.record"),
+            Command::ProcessesOpen(a) if a.is_empty() => f.write_str("processes.open"),
+            Command::ProcessesOpen(a) => write!(f, "processes.open {a}"),
             Command::PackagesOpen => f.write_str("packages.open"),
             Command::PkgRun(a) => write!(f, "pkg.run {a}"),
             Command::DevrootCreate => f.write_str("devroot.create"),

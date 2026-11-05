@@ -4764,6 +4764,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "ruzstd"
+version = "0.8.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a7c1c839d570d835527c9a5e4db7cb2198683a988cb9d7293fc8674e6bd58fc8"
+
+[[package]]
 name = "ryu"
 version = "1.0.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5424,19 +5430,28 @@ dependencies = [
 name = "termos-apps"
 version = "0.0.0"
 dependencies = [
+ "flate2",
+ "grep",
+ "ignore",
  "insta",
+ "proptest",
  "pulldown-cmark",
  "ratatui-core",
+ "regex",
+ "ruzstd",
  "secrecy",
+ "tar",
  "tempfile",
  "termos-core",
  "termos-hw",
  "termos-render",
+ "thiserror 2.0.21",
  "toml_edit",
  "tracing",
  "trash",
  "unicode-width",
  "zbus",
+ "zip",
 ]
 
 [[package]]
@@ -5576,6 +5591,7 @@ name = "termos-hw"
 version = "0.0.0"
 dependencies = [
  "nvml-wrapper",
+ "rustix",
  "sysinfo",
  "tempfile",
  "tracing",
@@ -5657,6 +5673,7 @@ dependencies = [
  "nucleo-matcher",
  "ratatui-core",
  "ratatui-widgets",
+ "regex",
  "serde",
  "serde_json",
  "tempfile",
@@ -5683,6 +5700,7 @@ dependencies = [
  "base64 0.23.1",
  "flate2",
  "portable-pty",
+ "regex",
  "sysinfo",
  "tempfile",
  "termos-core",

@@ -1474,6 +1474,51 @@ rewrite history.
 
 ---
 
+## D-121: M13c owner answers: processes in the monitor, bulk rename in the editor, four archive formats
+- **Status:** Accepted · 2026-11-05
+- **Context:** M13c's "Ask first" questions (D-117, docs/plans/m13-os.md).
+- **Decision:** the plan's answers, chosen by the owner:
+  - **The process manager** is a view of the system monitor (`Tab`, `processes.open`), not a window of its own.
+  - **Bulk rename** happens in the user's editor, as `vidir` does.
+  - **Archives:** zip, tar, tar.gz and tar.zst only.
+- **Alternatives:** a separate process window (a second sampler); a rename window with patterns; 7z and rar (more dependencies, and rar's decoder licence).
+
+---
+
+## D-122: Processes and files
+- **Status:** Accepted · 2026-11-05
+- **Context:** M13c (D-117) with D-121's answers.
+- **Decision:**
+  - **Process data (`termos_hw::procs`):** `ProcessInfo` (pid, parent, name, user, CPU, memory, run time, state, threads, command line, ports) beside the unchanged `ProcessSample`, through a new `Source::processes(ports)` (empty by default, so fixtures need nothing).
+    - **Where it comes from:** the sampler's refresh also reads each process's command line once, and the table is read from that same refresh, so CPU figures stay right.
+    - **User and threads:** from `/proc/PID/status` and `/etc/passwd` on Linux; elsewhere left out (the docs say so).
+    - **Ports:** listening TCP sockets from `/proc/net/tcp` and `tcp6`, matched to processes through `/proc/PID/fd`; Linux only, and only while the view is shown.
+  - **Process actions:** `act(pid, End | Kill | Pause | Resume)` through sysinfo's signals (Windows: terminate for end and kill; pause and resume refused), `renice(pid, ±1)` through rustix on Unix.
+    - **Refused:** pid 0 and 1 and TermOS's own process.
+    - **Not allowed:** another user's process, or raising a priority without privileges, gives the system's error; there is no sudo from here.
+  - **The view (`termos_apps::procs`, the monitor):** `Tab` switches the monitor between its overview (unchanged) and the process view. The view has a filter (name, command line or pid), sorting (CPU, memory, time, pid, name), a tree by parent (keeping the parents of what matches) and a root process with its descendants.
+    - **Asking first:** each action asks a y/n question unless `[processes] confirm = false`.
+    - **Opening it:** `processes.open [PID]` opens the view; the pane menu's "Show its processes" passes the pane's PTY child.
+    - **Readings:** the monitor's thread reads the table only when asked, while the view is shown.
+  - **Files (`termos_apps::files`, with `archive`, `rename`, `du`, `gitstatus`, `findfiles`):** `FileManager` stays one pane. The new `Files` window holds one or two of them and a sidebar of places, and the desktop's `files.open` opens a `Files`.
+    - **Marks:** Space marks, `*` inverts; copy, cut, trash, zip and `F5`/`F6` act on the marks, else the selected entry.
+    - **Two panes:** `Tab` opens the second and switches; `F5` copies and `F6` moves the active pane's selection into the other's folder (through the other pane's worker). Extracting and zipping write into the other pane's folder when there is one, which then reloads. `[files] two-pane` starts with two.
+    - **Places:** Home, `[files] bookmarks`, the trash (XDG on Linux, `~/.Trash` on macOS) in a sidebar from 100 columns, and in the `'` list. `b` adds or removes the folder, written into the config with toml_edit.
+    - **Searches:** `?` (names) and `Ctrl+F` (text, the `grep` crates) run on the worker with the `ignore` walker. They honour `.gitignore`, look in hidden files only when shown, and stop at 1000. Results replace the listing; Enter opens a text match with `file.edit PATH:LINE` (D-118).
+    - **Archives:** zip (the `zip` crate), tar, tar.gz (`flate2`) and tar.zst (`ruzstd`, new, MIT). They are listed with the folders they only imply and browsed read-only, and opening a member extracts it to a temporary folder first (then opened at the app's next timer). `X` extracts the archive, or the marked members below the folder shown; `z` zips. Absolute names and `..` are refused (counted as left out), and links and devices are skipped.
+    - **Git:** `git status --porcelain=v2 -z --ignored=matching` on the worker after each listing of a folder in a repository, relative to `git rev-parse --show-prefix`. One mark per entry (`M A R D U ? !`), a folder taking the strongest mark inside it.
+    - **Bulk rename:** `F2` on two or more marks writes `N<tab>name` lines to a temporary file and runs `file.edit` on it; `Enter` in Files reads it back. The checks: every line once, no empty name or separator, no two the same, no existing name unless it is renamed too (case-only renames allowed). The changes are shown, and on `y` they are done in two phases through temporary names, all or none. `u` undoes the last one. A property test checks that no file is ever lost.
+    - **Disk usage (`D`):** its own thread, without following links, sizes each entry of the folder, biggest first with bars. A count shows through a half-second timer while it runs, and only then. Enter goes in, `h` up, `d` trashes.
+    - **Open with (`O`):** TermOS's viewer (pictures, markdown), the editor, or the system's program. The system's program is the new `file.open-system PATH`, run by the server: `xdg-open`, `open` or `explorer`, the path as one argument. The choice is remembered per extension in `<state>/open-with` and used by Enter.
+  - **Settings:** `[files] bookmarks`, `two-pane`; `[processes] confirm`.
+- **Alternatives:**
+  - **Two panes inside `FileManager`:** a larger rewrite, and its tests and snapshot would change.
+  - **Bulk renames in one pass:** swaps would overwrite.
+  - **A zstd binding to the C library:** C in the build.
+  - **Disk usage on the worker:** it would hold up listings.
+
+---
+
 ## Open questions (the owner will be asked before the milestone that needs each one)
 
 | ID | Question | Needed by | Current lean |

@@ -11,7 +11,15 @@ authors.workspace = true
 publish.workspace = true
 
 [dependencies]
+flate2.workspace = true
+grep.workspace = true
+ignore.workspace = true
 pulldown-cmark.workspace = true
+regex.workspace = true
+ruzstd.workspace = true
+tar.workspace = true
+thiserror.workspace = true
+zip.workspace = true
 secrecy.workspace = true
 ratatui-core.workspace = true
 termos-core.workspace = true
@@ -27,6 +35,7 @@ zbus.workspace = true
 
 [dev-dependencies]
 insta.workspace = true
+proptest.workspace = true
 tempfile.workspace = true
 
 [lints]

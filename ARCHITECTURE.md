@@ -322,6 +322,7 @@ Window = { id, title, source: Pty | App | Plugin | Agent, state: normal | minimi
 - **Graphics:** `[graphics] protocol = "auto" | "kitty" | "sixel" | "iterm2" | "blocks"`.
 - **Links and hints (D-118):** `[ui] links` (programs' links passed to the outer terminal), `[hints] alphabet`, `[notifications] long-command` (seconds; 0: off).
 - **Workspace tools (D-120):** `[quick] height` and `key`, `[record] dir`, `[[snippets]]`; layout files in `<config>/layouts/` and a project's `termos.toml` (`[layout.NAME]`, `[[snippets]]`).
+- **Files and processes (D-122):** `[files] bookmarks` and `two-pane`, `[processes] confirm`; open-with choices in `<state>/open-with`.
 - **Clipboard:** `[clipboard] history` (entries kept in memory, default 50; 0 keeps none).
 - **Widgets:** `[widgets.<name>]` for WASM status-line widgets (§9, D-051).
 - **Agents (§11):** `[agents]` (providers, profiles, MCP servers, external agents) and `[secrets] store`; keys are named (`keyring:<name>`), never written.
@@ -351,8 +352,8 @@ Window = { id, title, source: Pty | App | Plugin | Agent, state: normal | minimi
   - **Saved with the session (D-104):** `reopen` gives the palette command that opens the window again as it is (`files.open DIR`, `image.open PATH`, `monitor.open`...). Snapshots store it, and restore builds the app from it into the saved layout. Apps without one (agents, the harness, the tutorial) are left out.
 - **The apps (D-049, D-052):**
   - image viewer (`image.open PATH`) and markdown viewer (`markdown.open PATH`, local pictures inline);
-  - file manager (`files.open [DIR]`; `file.open PATH` opens by kind, `file.edit PATH` runs `$VISUAL`/`$EDITOR` in a new pane; deletes to the trash, D-050);
-  - system monitor (`monitor.open`, from `termos-hw`, sampling once a second only while visible);
+  - file manager (`files.open [DIR]`; `file.open PATH` opens by kind, `file.edit PATH` runs `$VISUAL`/`$EDITOR` in a new pane; deletes to the trash, D-050). Since M13c (D-122) a `Files` window of one or two panes with places and bookmarks; marks; archives browsed like folders, extracted and zipped (zip, tar, tar.gz, tar.zst); searches by name and text; a git column; bulk rename in the editor with undo; disk usage; open with (`file.open-system`);
+  - system monitor (`monitor.open`, from `termos-hw`, sampling once a second only while visible); its process view (`processes.open [PID]`, D-122) lists every process (`termos_hw::procs`: user, time, state, command line, Linux ports), filtered, sorted or as a tree, and ends, kills, pauses and renices them, asking first;
   - clipboard manager (`clipboard.open`, prefix `=`): the server-wide history of copies, in memory only (D-050);
   - settings (`settings.open`): edits config.toml in place, keeping comments, and reloads;
   - About TermOS (`about.open`): version, system, file locations, licence (D-089).

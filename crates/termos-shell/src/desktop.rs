@@ -1340,9 +1340,25 @@ impl Desktop {
                 } else {
                     self.resolve_path(path)
                 };
-                Box::new(termos_apps::FileManager::open(dir))
+                Box::new(termos_apps::Files::open(
+                    dir,
+                    termos_apps::FilesOptions {
+                        bookmarks: self.config.files.bookmarks.clone(),
+                        two_pane: self.config.files.two_pane,
+                        config_path: Some(self.opts.config_path.clone()),
+                        state_dir: Some(self.opts.paths.state_dir.clone()),
+                    },
+                ))
             }
-            Command::MonitorOpen => Box::new(termos_apps::SystemMonitor::open()),
+            Command::MonitorOpen => {
+                let mut m = termos_apps::SystemMonitor::open();
+                m.set_confirm(self.config.processes.confirm);
+                Box::new(m)
+            }
+            Command::ProcessesOpen(pid) => Box::new(termos_apps::SystemMonitor::processes(
+                pid.parse().ok(),
+                self.config.processes.confirm,
+            )),
             Command::NetworkOpen => Box::new(termos_apps::NetworkPage::open()),
             Command::SettingsOpen => {
                 Box::new(termos_apps::Settings::open(self.opts.config_path.clone()))
@@ -1409,6 +1425,33 @@ impl Desktop {
                 hooked: None,
             },
         );
+    }
+
+    /// `file.open-system PATH`: the system's own program for a file, on
+    /// this machine (D-122): `xdg-open`, `open` or `explorer`, the path as
+    /// one argument.
+    fn open_system(&mut self, path: &std::path::Path) {
+        let program = if cfg!(target_os = "macos") {
+            "open"
+        } else if cfg!(windows) {
+            "explorer.exe"
+        } else {
+            "xdg-open"
+        };
+        let spawned = std::process::Command::new(program)
+            .arg(path)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn();
+        match spawned {
+            Ok(mut child) => {
+                std::thread::spawn(move || {
+                    let _ = child.wait();
+                });
+            }
+            Err(e) => self.notify(Level::Error, format!("cannot run {program}: {e}")),
+        }
     }
 
     /// The program `file.edit` runs (before the file): `$VISUAL` or
@@ -3032,7 +3075,7 @@ impl Desktop {
             }
             Command::Task(name) => self.open_task(&name, area),
             Command::GitOpen => self.open_git(area),
-            Command::MonitorOpen | Command::NetworkOpen => {
+            Command::MonitorOpen | Command::NetworkOpen | Command::ProcessesOpen(_) => {
                 if let Some(app) = self.build_app(&cmd) {
                     self.open_app(app);
                 }
@@ -3208,6 +3251,10 @@ impl Desktop {
                     Err(e) => self.notify(Level::Error, format!("cannot start {program}: {e}")),
                 }
             }
+            Command::FileOpenSystem(path) => {
+                let path = self.resolve_path(&path);
+                self.open_system(&path);
+            }
             Command::ThemeSelect(base) => {
                 // The client that asked (the control API acts as the
                 // session's newest client); without one, every client.
@@ -3321,6 +3368,7 @@ impl Desktop {
                 | Command::MarkdownOpen(_)
                 | Command::FileOpen(_)
                 | Command::FileEdit(_)
+                | Command::FileOpenSystem(_)
                 | Command::LayoutOpen(_)
                 | Command::LayoutSave(_)
                 | Command::SnippetRun(_)

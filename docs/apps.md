@@ -44,9 +44,64 @@ of text files, or what is inside a folder.
 | `y`, `x`, then `p` | Copy or cut, then paste into the folder shown |
 | `d` or `Delete` | Move to the trash (asks first) |
 | `e` | Edit in your editor |
-| `R` or `F5` | Reload |
+| `R` or `F5` | Reload (`F5` copies to the other pane when there are two) |
+| `Space`, `*` | Mark the entry (and move on), or invert the marks |
+| `?` | Find files and folders by name, below this folder |
+| `Ctrl+F` | Find text in the files below this folder |
+| `X` | Extract an archive (or, inside one, what is marked) |
+| `z` | Make a zip of what is marked |
+| `F2` on marks | Rename them in your editor (see below); `u` undoes |
+| `D` | Disk usage: what takes the room in this folder |
+| `O` | Open with: TermOS's viewer, the editor or the system's program |
+| `Tab` | A second pane (and then switch between the two) |
+| `F5`, `F6` | Copy or move to the other pane |
+| `b`, `'` | Bookmark this folder (again: take it away); list the places |
 
 A click selects; a click on the selected entry opens it.
+
+**Marks:** copying (`y`, `x`, `F5`, `F6`), trashing (`d`) and zipping work on
+the marked entries, or on the selected one when nothing is marked.
+
+**Two panes:** `Tab` opens a second pane on the same folder, then switches
+between them; `F5` copies and `F6` moves what is marked to the other pane,
+as Midnight Commander does. `[files] two-pane = true` starts with two.
+Extracting and zipping put their result in the other pane's folder when
+there is one.
+
+**Places:** with one pane and room for it, a sidebar lists Home, your
+bookmarks and the trash (Linux and macOS); `'` lets you choose one with the
+keys. `b` adds the folder shown to `[files] bookmarks` in your config file
+(the rest of the file is kept as it is), or takes it away.
+
+**Searching** lists the results in place of the folder: `Enter` opens one
+(a text match opens your editor at its line), `Esc` goes back. Both kinds
+honour `.gitignore`, and look in hidden files only when they are shown
+(`.`). At most 1000 results.
+
+**Archives** (zip, tar, tar.gz, tar.zst) open like folders, read-only:
+`Enter` goes in, `h` goes up and out. Opening a file inside one extracts it
+to a temporary folder first. Names that would leave the folder they are
+extracted into (`../`, absolute paths) are left out, and so are links.
+
+**Git:** in a repository, a column shows each entry's state: `M` changed,
+`A` added, `R` renamed, `D` deleted, `U` in conflict, `?` untracked, `!`
+ignored. A folder shows the strongest state inside it.
+
+**Bulk rename:** mark the entries, press `F2`: their names open in your
+editor, one numbered line each. Change the names (keep every line and its
+number), save, close the editor, and press `Enter` in Files. It checks the
+new names (two the same, one that exists already, a `/`), shows what will
+change and asks; renaming goes through temporary names, so swaps work and
+nothing is overwritten. `u` undoes the last bulk rename.
+
+**Disk usage** (`D`) sizes each entry of the folder with everything inside
+it, biggest first, with bars. `Enter` goes into a folder, `h` up, `d` moves
+an entry to the trash (asks first), `Esc` goes back to the list. It counts
+while it works, on its own thread.
+
+**Open with** (`O`) remembers your choice for that kind of file (by
+extension, in `~/.local/state/termos/open-with`): `Enter` on such a file
+opens it that way from then on.
 
 **Opening** picks the app by kind: folders open in Files, pictures in the
 image viewer, markdown in the markdown viewer, and anything else in your
@@ -79,6 +134,33 @@ CPU (a chart of the last two minutes and a meter per core), memory, GPUs
 (load, video memory, temperature and power where the system reports them),
 network traffic, temperatures, disks and the busiest processes. `s` sorts the
 processes by CPU or by memory.
+
+### Processes
+
+`Tab` (or `processes.open`, ◆ Menu → Apps → Processes) switches to every
+process: PID, user, CPU, memory, time, the TCP ports it listens on (Linux)
+and its command line. Right-click a terminal → Show its processes opens it
+with only that pane's program and what it started.
+
+| Key | What it does |
+| --- | --- |
+| `↑` `↓`, `j` `k`, `PgUp` `PgDn`, `g` `G` | Move |
+| `/` | Filter by name, command line or PID (`Esc` clears) |
+| `s` | Sort by CPU, memory, time, PID or name |
+| `t` | A tree by parent |
+| `a` | All processes again, after a pane's |
+| `e` | End (SIGTERM; on Windows, terminate) |
+| `K` | Kill (SIGKILL) |
+| `z` | Pause or resume (SIGSTOP, SIGCONT; not on Windows) |
+| `+` `-` | Raise or lower the priority (renice; not on Windows) |
+| `Tab` | Back to the overview |
+
+Each action asks first; `[processes] confirm = false` stops asking.
+Another user's process gives the system's refusal: there is no sudo from
+here. Raising a priority usually needs that too. TermOS never touches its
+own server or the system's first process.
+
+The user column is filled on Linux; elsewhere it shows `-`.
 
 It reads the machine once a second, and only while you can see it: a
 minimized monitor, or one on another workspace, costs nothing.

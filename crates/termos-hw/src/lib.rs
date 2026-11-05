@@ -27,9 +27,11 @@ mod gpu;
 pub mod net;
 #[cfg(any(target_os = "linux", windows))]
 mod nvidia;
+pub mod procs;
 pub mod sysfs;
 
 pub use gpu::GpuVendor;
+pub use procs::{Action, ProcessInfo};
 
 /// The machine, as it is at start: what local models (M7) and the system
 /// monitor's header need.
@@ -157,6 +159,11 @@ pub struct ProcessSample {
 pub trait Source {
     fn inventory(&mut self) -> Inventory;
     fn sample(&mut self) -> Sample;
+    /// Every process, for the process manager (D-122), as of the last
+    /// [`Source::sample`]; with the ports they listen on when asked.
+    fn processes(&mut self, _ports: bool) -> Vec<ProcessInfo> {
+        Vec::new()
+    }
 }
 
 /// How many processes a sample lists.
@@ -265,6 +272,10 @@ impl Sampler {
 }
 
 impl Source for Sampler {
+    fn processes(&mut self, ports: bool) -> Vec<ProcessInfo> {
+        self.table(ports)
+    }
+
     fn inventory(&mut self) -> Inventory {
         use sysinfo::System;
         let mut gpus: Vec<GpuInfo> = self
@@ -317,7 +328,11 @@ impl Source for Sampler {
         self.system.refresh_processes_specifics(
             ProcessesToUpdate::All,
             true,
-            ProcessRefreshKind::nothing().with_cpu().with_memory(),
+            ProcessRefreshKind::nothing()
+                .with_cpu()
+                .with_memory()
+                // Read once per process, for the process manager.
+                .with_cmd(sysinfo::UpdateKind::OnlyIfNotSet),
         );
         if let Some(c) = &mut self.components {
             c.refresh(true);
@@ -393,6 +408,13 @@ impl Source for Sampler {
             },
             processes,
         }
+    }
+}
+
+impl Sampler {
+    /// [`Source::processes`] of the real machine.
+    fn table(&self, ports: bool) -> Vec<ProcessInfo> {
+        procs::table(&self.system, ports)
     }
 }
 
