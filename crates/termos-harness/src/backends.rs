@@ -108,6 +108,9 @@ pub struct Outcome {
     pub account: Option<String>,
     /// What it was not allowed to do.
     pub denied: Vec<String>,
+    /// Its changes conflicted with the plan's branch, even on top of it
+    /// (worktrees, D-113): the plan stops for the user.
+    pub conflict: bool,
 }
 
 /// Something to show while a task runs.

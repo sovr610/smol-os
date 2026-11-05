@@ -107,6 +107,8 @@ enum Button {
     StopAll,
     New,
     Copy,
+    /// The plan's worktree in the review window (D-113).
+    Review,
     Save,
     Cancel,
     Task(usize),
@@ -369,6 +371,11 @@ impl HarnessApp {
                     return AppEffect::Copy(r);
                 }
             }
+            Button::Review => {
+                if let Some(w) = &self.view.worktree {
+                    return AppEffect::Command(format!("worktree.review {}", w.name));
+                }
+            }
             Button::Task(n) => {
                 self.selected = n;
                 self.scroll = 0;
@@ -466,13 +473,18 @@ impl HarnessApp {
                 )
             }
             Phase::Finished { failed: 0 } => (
-                format!("✓ Done: all {} tasks finished", self.view.tasks.len()),
+                format!(
+                    "✓ Done: all {} tasks finished{}",
+                    self.view.tasks.len(),
+                    self.result_on()
+                ),
                 c.accent,
             ),
             Phase::Finished { failed } => (
                 format!(
-                    "Finished: {failed} of {} tasks did not finish",
-                    self.view.tasks.len()
+                    "Finished: {failed} of {} tasks did not finish{}",
+                    self.view.tasks.len(),
+                    self.result_on()
                 ),
                 c.warn,
             ),
@@ -865,6 +877,11 @@ impl HarnessApp {
                 ("Stop task s", Button::Stop),
                 ("Stop all S", Button::StopAll),
             ],
+            (Phase::Finished { .. }, _) if self.view.worktree.is_some() => &[
+                ("Review the result R", Button::Review),
+                ("New n", Button::New),
+                ("Copy answer c", Button::Copy),
+            ],
             (Phase::Finished { .. }, _) => {
                 &[("New n", Button::New), ("Copy answer c", Button::Copy)]
             }
@@ -885,6 +902,17 @@ impl HarnessApp {
         if x + hw + 1 < r.right() {
             buf.set_string(r.right() - hw - 1, y, hint, tui_style(theme.overlay_muted));
         }
+    }
+}
+
+impl HarnessApp {
+    /// Where the result is, for the status line: " · on termos/plan-…".
+    fn result_on(&self) -> String {
+        self.view
+            .worktree
+            .as_ref()
+            .map(|w| format!(" · on {} (R reviews it)", w.branch))
+            .unwrap_or_default()
     }
 }
 
@@ -998,6 +1026,7 @@ impl App for HarnessApp {
             KeyCode::Char('S') => return self.act(Button::StopAll),
             KeyCode::Char('n') => return self.act(Button::New),
             KeyCode::Char('c') => return self.act(Button::Copy),
+            KeyCode::Char('R') => return self.act(Button::Review),
             KeyCode::Enter if matches!(self.view.phase, Phase::Idle | Phase::Failed(_)) => {
                 return self.act(Button::Plan);
             }
@@ -1104,6 +1133,7 @@ mod tests {
             programs: Arc::new(OnlyClaude),
             api: None,
             state_dir: dir.join("state"),
+            data_dir: None,
             journal: None,
             project: dir.to_owned(),
         })

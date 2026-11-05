@@ -8,10 +8,15 @@
 //! - **plans:** the planning route's backend, read-only, answers with a
 //!   JSON plan ([`crate::plan`]); the plan then waits for approval, unless
 //!   it is small enough for `[harness] auto-run`;
-//! - **runs:** a task starts when the tasks it depends on (and every
-//!   earlier task that changes files) are done. Tasks that change files
-//!   run one at a time; read-only ones alongside, up to `[harness]
-//!   parallel`;
+//! - **runs:** a task starts when the tasks it depends on are done, up to
+//!   `[harness] parallel` at a time. In a git repository (D-113) the plan
+//!   gets a worktree and branch of its own; each task that changes files
+//!   runs in a worktree of its own made from that branch, and its changes
+//!   are committed and merged into it when it finishes (a conflict runs
+//!   the task again on top, once; a second stops the plan). Read-only
+//!   tasks look at the plan's worktree. The result is reviewed there.
+//!   Elsewhere (or with `[harness] worktrees = false`) tasks that change
+//!   files run one at a time in the project, after every earlier one;
 //! - **routes each task when it starts:** a backend that cannot run, has
 //!   spent the plan's API budget, or whose CLI reached its plan limit in
 //!   this run is passed over. A CLI that reaches its limit is not used
@@ -33,6 +38,7 @@ use termos_core::app::AppWaker;
 use termos_core::config::Config;
 use termos_core::config::harness::{BackendKind, TaskKind};
 use termos_core::journal::{self, Journal};
+use termos_devkit::worktrees::{self, NewWorktree, Repo, Store, Worktree, WorktreeError};
 use tokio::sync::{mpsc, watch};
 
 use crate::backends::{self, ApiContext, Attempt, Outcome, Programs, Progress};
@@ -52,6 +58,9 @@ pub struct Context {
     pub journal: Option<Arc<Journal>>,
     /// The project folder.
     pub project: PathBuf,
+    /// TermOS's data folder, where worktrees are recorded (`None`: tasks
+    /// edit the project in place).
+    pub data_dir: Option<PathBuf>,
 }
 
 impl std::fmt::Debug for Context {
@@ -180,8 +189,18 @@ pub struct RunView {
     pub raw_plan: Option<String>,
     /// Warnings about settings.
     pub notes: Vec<String>,
+    /// The plan's worktree, where its result is (D-113).
+    pub worktree: Option<PlanTree>,
     /// Bumped on every change.
     pub generation: u64,
+}
+
+/// The worktree a plan's changes are merged into.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlanTree {
+    pub name: String,
+    pub branch: String,
+    pub path: PathBuf,
 }
 
 impl RunView {
@@ -196,6 +215,7 @@ impl RunView {
             planner: None,
             raw_plan: None,
             notes: Vec::new(),
+            worktree: None,
             generation: 0,
         }
     }
@@ -682,6 +702,8 @@ async fn attempt_all(
     // Backends to try after the others (a review's authors).
     others_first: &[String],
     stop: watch::Receiver<bool>,
+    // Where it works: the project, or a worktree.
+    project: &Path,
 ) -> (Outcome, Option<Choice>) {
     let all = route::backends(&ctx.config);
     let mut tried: Vec<String> = Vec::new();
@@ -758,9 +780,9 @@ async fn attempt_all(
             choice: choice.clone(),
             prompt: prompt.clone(),
             writes: kind.writes(),
-            project: ctx.project.clone(),
+            project: project.to_owned(),
             commands: if kind.writes() {
-                allowed_commands(&ctx.config, &ctx.project)
+                allowed_commands(&ctx.config, project)
             } else {
                 Vec::new()
             },
@@ -848,6 +870,7 @@ async fn make_plan(ctx: &Arc<Context>, shared: &Shared, goal: &str) -> bool {
         &records,
         &[],
         stop,
+        &ctx.project,
     )
     .await;
     if !out.ok {
@@ -891,9 +914,251 @@ async fn make_plan(ctx: &Arc<Context>, shared: &Shared, goal: &str) -> bool {
     }
 }
 
-/// What a task waits for: its dependencies and every earlier task that
-/// changes files.
-fn needs(tasks: &[TaskView], i: usize) -> Vec<usize> {
+/// A plan's worktree, and where its tasks' worktrees come from (D-113).
+struct PlanTrees {
+    store: Store,
+    repo: Repo,
+    plan: Worktree,
+    /// Merges into the plan's branch, one at a time.
+    merging: tokio::sync::Mutex<()>,
+}
+
+/// Runs `f` (git's work) off the worker's thread.
+async fn blocking<T: Send + 'static>(
+    f: impl FnOnce() -> Result<T, WorktreeError> + Send + 'static,
+) -> Result<T, WorktreeError> {
+    tokio::task::spawn_blocking(f)
+        .await
+        .unwrap_or_else(|e| Err(WorktreeError::Invalid(format!("git's work stopped: {e}"))))
+}
+
+/// A worktree name for a plan's task (`plan-<id>-<task>`, `-2` for its
+/// second attempt).
+fn tree_name(plan: &str, task: &str, attempt: usize) -> String {
+    let task: String = worktrees::name_from(task).chars().take(12).collect();
+    let task = if task.is_empty() {
+        "task".to_owned()
+    } else {
+        task
+    };
+    if attempt == 0 {
+        format!("{plan}-{task}")
+    } else {
+        format!("{plan}-{task}-{}", attempt + 1)
+    }
+}
+
+/// The plan's worktree, when the project is in a git repository and
+/// `[harness] worktrees` is on; else the tasks edit the project in place.
+async fn plan_trees(
+    ctx: &Arc<Context>,
+    shared: &Shared,
+    id: &str,
+    goal: &str,
+    records: &Records,
+) -> Option<Arc<PlanTrees>> {
+    if !ctx.config.harness.worktrees {
+        return None;
+    }
+    let data_dir = ctx.data_dir.clone()?;
+    let project = ctx.project.clone();
+    let config = ctx.config.worktrees.clone();
+    let (name, title, origin) = (
+        format!("plan-{id}"),
+        events::one_line(goal, 120),
+        format!("harness:{id}"),
+    );
+    let made = blocking(move || {
+        let repo = Repo::find(&project)?;
+        let store = Store::new(&data_dir, &config);
+        let dirty = worktrees::has_changes(&project);
+        let from = worktrees::current_branch_at(&project);
+        let plan = store.create(
+            &repo,
+            &NewWorktree {
+                name: Some(name),
+                from,
+                branch: None,
+                title,
+                origin,
+                ports: false,
+            },
+        )?;
+        Ok((repo, store, plan, dirty))
+    })
+    .await;
+    match made {
+        Ok((repo, store, plan, dirty)) => {
+            records.note(format!(
+                "worktree: {} on {} from {}",
+                plan.name, plan.branch, plan.base
+            ));
+            shared.update(|v| {
+                if dirty {
+                    v.notes.push(format!(
+                        "Changes not committed in {} are not in the plan's worktree: it starts from {}'s last commit.",
+                        ctx.project.display(),
+                        plan.base
+                    ));
+                }
+                v.worktree = Some(PlanTree {
+                    name: plan.name.clone(),
+                    branch: plan.branch.clone(),
+                    path: plan.path.clone(),
+                });
+            });
+            Some(Arc::new(PlanTrees {
+                store,
+                repo,
+                plan,
+                merging: tokio::sync::Mutex::new(()),
+            }))
+        }
+        // Not a repository: in place, as always.
+        Err(WorktreeError::NotARepo(_)) => None,
+        Err(e) => {
+            records.note(format!("no worktree ({e}); editing in place"));
+            shared.update(|v| {
+                v.notes.push(format!(
+                    "The plan's worktree could not be made ({e}); its tasks edit the project in place."
+                ));
+            });
+            None
+        }
+    }
+}
+
+/// What a task in a worktree needs from the run.
+struct TreeRun<'a> {
+    ctx: &'a Arc<Context>,
+    shared: &'a Shared,
+    index: usize,
+    task: &'a Task,
+    goal: &'a str,
+    inputs: &'a [(String, String)],
+    exhausted: &'a Arc<Mutex<BTreeSet<String>>>,
+    records: &'a Records,
+    authors: &'a [String],
+}
+
+/// A task that changes files, in a worktree of its own made from the
+/// plan's branch: run, committed, merged into the plan's branch. A
+/// conflict runs it again on top of the branch as it is now, once; a
+/// second leaves the plan to the user (D-113).
+async fn run_in_tree(
+    r: &TreeRun<'_>,
+    trees: &Arc<PlanTrees>,
+    stop: watch::Receiver<bool>,
+) -> (Outcome, Option<Choice>) {
+    let note = |line: String| {
+        r.shared.update(|v| v.tasks[r.index].note(line));
+    };
+    let mut again = String::new();
+    for attempt in 0..2 {
+        let name = tree_name(&trees.plan.name, &r.task.id, attempt);
+        let (store, repo) = (trees.store.clone(), trees.repo.clone());
+        let req = NewWorktree {
+            name: Some(name),
+            from: Some(trees.plan.branch.clone()),
+            branch: None,
+            title: r.task.title.clone(),
+            origin: trees.plan.origin.clone(),
+            ports: false,
+        };
+        let wt = match blocking(move || store.create(&repo, &req)).await {
+            Ok(w) => w,
+            Err(e) => {
+                let out = Outcome {
+                    text: format!("its worktree could not be made: {e}"),
+                    ..Outcome::default()
+                };
+                return (out, None);
+            }
+        };
+        note(format!("worktree {}", wt.name));
+        let mut prompt = task_prompt(r.goal, &wt.path, r.task, r.inputs);
+        prompt.push_str(&again);
+        let (mut out, choice) = attempt_all(
+            r.ctx,
+            r.shared,
+            Some(r.index),
+            &r.task.id,
+            r.task.kind,
+            r.task.backend.as_deref(),
+            prompt,
+            r.exhausted,
+            r.records,
+            r.authors,
+            stop.clone(),
+            &wt.path,
+        )
+        .await;
+        let store = trees.store.clone();
+        if !out.ok {
+            // Kept for a look (`termos worktree restore`).
+            let gone = wt.clone();
+            let _ = blocking(move || store.discard(&gone)).await;
+            return (out, choice);
+        }
+        let message = format!("{}: {}", r.task.id, r.task.title);
+        let committed = {
+            let w = wt.clone();
+            blocking(move || worktrees::commit_all(&w, &message)).await
+        };
+        let merged = match committed {
+            Ok(None) => Ok(None),
+            Ok(Some(_)) => {
+                let _one = trees.merging.lock().await;
+                let w = wt.clone();
+                blocking(move || worktrees::merge(&w).map(Some)).await
+            }
+            Err(e) => Err(e),
+        };
+        let gone = wt.clone();
+        let tidy = trees.store.clone();
+        let _ = blocking(move || {
+            tidy.discard(&gone)?;
+            tidy.forget(&gone)
+        })
+        .await;
+        match merged {
+            Ok(None) => {
+                note("no changes to merge".into());
+                return (out, choice);
+            }
+            Ok(Some(_)) => {
+                note(format!("merged into {}", trees.plan.branch));
+                return (out, choice);
+            }
+            Err(e @ WorktreeError::Conflict { .. }) if attempt == 0 => {
+                note(format!("{e}; again on top of {}", trees.plan.branch));
+                again = format!(
+                    "\n\nA first attempt at this task conflicted with changes that other tasks made meanwhile ({e}). \
+                     The folder now has their changes: do the task on top of them.\n"
+                );
+            }
+            Err(e) => {
+                out.ok = false;
+                out.conflict = matches!(e, WorktreeError::Conflict { .. });
+                out.text = format!(
+                    "its changes could not be merged into {}: {e}",
+                    trees.plan.branch
+                );
+                return (out, choice);
+            }
+        }
+    }
+    let out = Outcome {
+        text: "it conflicted twice".into(),
+        conflict: true,
+        ..Outcome::default()
+    };
+    (out, None)
+}
+
+/// What a task waits for: its dependencies, and (editing in place) every
+/// earlier task that changes files.
+fn needs(tasks: &[TaskView], i: usize, in_place: bool) -> Vec<usize> {
     let mut out: Vec<usize> = tasks[i]
         .task
         .depends_on
@@ -901,7 +1166,7 @@ fn needs(tasks: &[TaskView], i: usize) -> Vec<usize> {
         .filter_map(|d| tasks[..i].iter().position(|t| &t.task.id == d))
         .collect();
     for (j, t) in tasks[..i].iter().enumerate() {
-        if t.task.kind.writes() && !out.contains(&j) {
+        if in_place && t.task.kind.writes() && !out.contains(&j) {
             out.push(j);
         }
     }
@@ -930,6 +1195,7 @@ async fn execute(ctx: &Arc<Context>, shared: &Shared, rx: &mut mpsc::UnboundedRe
             .collect::<Vec<_>>()
             .join(", ")
     ));
+    let trees = plan_trees(ctx, shared, &id, &goal, &records).await;
     let exhausted = Arc::new(Mutex::new(BTreeSet::new()));
     let parallel = ctx.config.harness.parallel.max(1);
     let mut stops: Vec<watch::Sender<bool>> =
@@ -948,6 +1214,10 @@ async fn execute(ctx: &Arc<Context>, shared: &Shared, rx: &mut mpsc::UnboundedRe
             .filter(|t| t.state == TaskState::Running && !t.task.kind.writes())
             .count();
         let mut started_write = false;
+        let mut running_now = snapshot
+            .iter()
+            .filter(|t| t.state == TaskState::Running)
+            .count();
         for i in 0..snapshot.len() {
             if snapshot[i].state != TaskState::Waiting {
                 continue;
@@ -956,7 +1226,7 @@ async fn execute(ctx: &Arc<Context>, shared: &Shared, rx: &mut mpsc::UnboundedRe
                 shared.update(|v| v.tasks[i].state = TaskState::Stopped);
                 continue;
             }
-            let deps = needs(&snapshot, i);
+            let deps = needs(&snapshot, i, trees.is_none());
             if let Some(&d) = deps.iter().find(|&&d| {
                 matches!(
                     snapshot[d].state,
@@ -981,10 +1251,15 @@ async fn execute(ctx: &Arc<Context>, shared: &Shared, rx: &mut mpsc::UnboundedRe
                 continue;
             }
             let writes = snapshot[i].task.kind.writes();
-            if writes && (writes_running || started_write) {
-                continue;
-            }
-            if !writes && reads_running >= parallel {
+            if trees.is_some() {
+                // Each in its own worktree: as many as `parallel`.
+                if running_now >= parallel {
+                    continue;
+                }
+                running_now += 1;
+            } else if (writes && (writes_running || started_write))
+                || (!writes && reads_running >= parallel)
+            {
                 continue;
             }
             if writes {
@@ -1011,7 +1286,7 @@ async fn execute(ctx: &Arc<Context>, shared: &Shared, rx: &mut mpsc::UnboundedRe
                     )
                 })
                 .collect();
-            let prompt = task_prompt(&goal, &ctx.project, &task, &inputs);
+            let goal2 = goal.clone();
             // A review goes first to someone other than its authors, unless
             // the user or the route chose the backend.
             let authors: Vec<String> = if task.kind == TaskKind::Review
@@ -1038,21 +1313,46 @@ async fn execute(ctx: &Arc<Context>, shared: &Shared, rx: &mut mpsc::UnboundedRe
                 records.clone(),
             );
             let stop = stops[i].subscribe();
+            let trees2 = trees.clone();
             running.spawn_local(async move {
-                let (out, choice) = attempt_all(
-                    &ctx2,
-                    &shared2,
-                    Some(i),
-                    &task.id,
-                    task.kind,
-                    task.backend.as_deref(),
-                    prompt,
-                    &exhausted2,
-                    &records2,
-                    &authors,
-                    stop,
-                )
-                .await;
+                let (out, choice) = match &trees2 {
+                    Some(t) if task.kind.writes() => {
+                        let run = TreeRun {
+                            ctx: &ctx2,
+                            shared: &shared2,
+                            index: i,
+                            task: &task,
+                            goal: &goal2,
+                            inputs: &inputs,
+                            exhausted: &exhausted2,
+                            records: &records2,
+                            authors: &authors,
+                        };
+                        run_in_tree(&run, t, stop).await
+                    }
+                    _ => {
+                        // Read-only tasks look at the plan's worktree.
+                        let project = trees2
+                            .as_ref()
+                            .map_or_else(|| ctx2.project.clone(), |t| t.plan.path.clone());
+                        let prompt = task_prompt(&goal2, &project, &task, &inputs);
+                        attempt_all(
+                            &ctx2,
+                            &shared2,
+                            Some(i),
+                            &task.id,
+                            task.kind,
+                            task.backend.as_deref(),
+                            prompt,
+                            &exhausted2,
+                            &records2,
+                            &authors,
+                            stop,
+                            &project,
+                        )
+                        .await
+                    }
+                };
                 (i, out, choice)
             });
         }
@@ -1085,6 +1385,11 @@ async fn execute(ctx: &Arc<Context>, shared: &Shared, rx: &mut mpsc::UnboundedRe
                         TaskState::Failed(events::one_line(&out.text, 200))
                     };
                 });
+                if out.conflict && !stopping {
+                    // Two attempts conflicted: the user decides (D-113).
+                    stopping = true;
+                    records.note(format!("stopped: {}", events::one_line(&out.text, 300)));
+                }
             }
             cmd = rx.recv() => match cmd {
                 Some(Command::Stop(None)) | None => {
@@ -1121,5 +1426,13 @@ async fn execute(ctx: &Arc<Context>, shared: &Shared, rx: &mut mpsc::UnboundedRe
         "finished: {failed} of {} tasks did not finish",
         tasks.len()
     ));
+    if let Some(t) = &trees {
+        records.note(format!(
+            "result: branch {} in worktree {} ({})",
+            t.plan.branch,
+            t.plan.name,
+            t.plan.path.display()
+        ));
+    }
     shared.update(|v| v.phase = Phase::Finished { failed });
 }

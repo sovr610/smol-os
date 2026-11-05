@@ -218,8 +218,13 @@ pub struct HarnessConfig {
     /// Plans of at most this many tasks start without approval (0: always
     /// ask).
     pub auto_run: usize,
-    /// Read-only tasks that may run at the same time.
+    /// Tasks that may run at the same time: read-only ones, and in
+    /// worktrees editing ones too.
     pub parallel: usize,
+    /// In a git repository, each editing task runs in a worktree of its
+    /// own, merged into the plan's branch, which is reviewed at the end
+    /// (D-113). `false`: tasks edit the project in place, one at a time.
+    pub worktrees: bool,
     /// The most tasks a plan may have.
     pub max_tasks: usize,
     /// US dollars the API backends may spend on one plan (0: no limit).
@@ -245,6 +250,7 @@ impl Default for HarnessConfig {
             cross_review: true,
             auto_run: 0,
             parallel: 3,
+            worktrees: true,
             max_tasks: 8,
             budget_usd: 0.0,
             task_minutes: 30,

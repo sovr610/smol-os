@@ -137,6 +137,7 @@ fn context(
         programs: Arc::new(ShimPrograms {
             paths: paths.clone(),
         }),
+        data_dir: Some(paths.data_dir.clone()),
         state_dir: paths.state_dir.clone(),
         journal: Some(journal),
         project,
@@ -404,6 +405,14 @@ fn run_to_end(h: &Harness, rx: &std::sync::mpsc::Receiver<()>) -> anyhow::Result
         }
     );
     println!("Hand-offs: `termos audit show harness-{}`", v.id);
+    if let Some(w) = &v.worktree {
+        println!(
+            "The result is on branch {} in {}: `termos worktree status {}`, then merge, pr or discard it.",
+            w.branch,
+            w.path.display(),
+            w.name
+        );
+    }
     for t in v.tasks.iter().filter(|t| t.state == TaskState::Done) {
         if let Some(r) = &t.result {
             println!();

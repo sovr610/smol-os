@@ -245,7 +245,8 @@ pub fn planner_prompt(goal: &str, project: &Path, max_tasks: usize) -> String {
          what to do, where, and what done looks like. Prefer few, substantial tasks; add none the \
          goal does not need. A small, clear goal can be one task. When code changes, end with a \
          review task that depends on the changes. Use depends_on for every task that needs an \
-         earlier task's result.\n\n\
+         earlier task's result. Tasks that change files may run at the same time, each in its own \
+         copy of the project, so a task that builds on another's changes must depend on it.\n\n\
          Answer with only this JSON, and no other text:\n\
          {{\"summary\": \"one sentence\", \"tasks\": [{{\"id\": \"t1\", \"kind\": \"coding\", \
          \"title\": \"a few words\", \"prompt\": \"the full instruction\", \"depends_on\": []}}]}}",

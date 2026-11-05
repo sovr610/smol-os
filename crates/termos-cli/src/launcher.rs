@@ -112,6 +112,7 @@ impl Launcher for Windows {
                         paths: ctx.paths.clone(),
                     }),
                     state_dir: ctx.paths.state_dir.clone(),
+                    data_dir: Some(ctx.paths.data_dir.clone()),
                     journal: Some(Arc::clone(&self.journal)),
                     project,
                 };

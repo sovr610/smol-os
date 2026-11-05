@@ -118,6 +118,7 @@ fn context(dir: &Path, config: Config, programs: Arc<dyn Programs>, api: bool) -
         config,
         programs,
         state_dir: p.state_dir.clone(),
+        data_dir: Some(p.data_dir.clone()),
         journal: Some(Arc::new(termos_core::journal::Journal::new(
             &p.state_dir,
             7,
@@ -658,4 +659,221 @@ fn a_review_goes_to_another_backend_than_its_author() {
             "cross-review = {cross}"
         );
     }
+}
+
+#[cfg(unix)]
+fn git(dir: &Path, args: &[&str]) -> String {
+    let out = std::process::Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(args)
+        .output()
+        .expect("git");
+    assert!(
+        out.status.success(),
+        "git {}: {}",
+        args.join(" "),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8_lossy(&out.stdout).into_owned()
+}
+
+/// The project as a git repository with `files`, committed on `main`.
+#[cfg(unix)]
+fn repository(project: &Path, files: &[(&str, &str)]) {
+    git(project, &["init", "-q", "-b", "main"]);
+    git(project, &["config", "user.name", "Fixture"]);
+    git(project, &["config", "user.email", "fixture@example.com"]);
+    git(project, &["config", "commit.gpgsign", "false"]);
+    for (name, body) in files {
+        std::fs::write(project.join(name), body).expect("write");
+    }
+    git(project, &["add", "-A"]);
+    git(project, &["commit", "-q", "-m", "first"]);
+}
+
+/// In a git repository (D-113): two edits at the same time, each in its
+/// own worktree, merged into the plan's branch, which the review sees;
+/// the project itself stays as it was.
+#[cfg(unix)]
+#[test]
+fn edits_run_at_once_in_worktrees_and_land_on_the_plans_branch() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let bin = dir.path().join("bin");
+    std::fs::create_dir_all(bin.join("answers")).expect("bin");
+    stand_in(
+        &bin,
+        "claude",
+        &[
+            "Answer with only this JSON",
+            "task t1 ",
+            "task t2 ",
+            "task t3 ",
+        ],
+    );
+    let plan = serde_json::json!({"summary": "Two notes", "tasks": [
+        {"id": "t1", "kind": "coding", "title": "First", "prompt": "Add to a.txt."},
+        {"id": "t2", "kind": "coding", "title": "Second", "prompt": "Add to b.txt."},
+        {"id": "t3", "kind": "review", "title": "Review", "prompt": "Review both.", "depends_on": ["t1", "t2"]}
+    ]})
+    .to_string();
+    let answers = bin.join("answers");
+    std::fs::write(
+        answers.join("claude-Answer with only this JSON"),
+        claude_result(&plan, false),
+    )
+    .expect("w");
+    for t in ["t1", "t2", "t3"] {
+        std::fs::write(
+            answers.join(format!("claude-task {t} ")),
+            claude_result("done", false),
+        )
+        .expect("w");
+    }
+    // Each waits a while for the other to start: they overlap only if
+    // they run at the same time.
+    let b = bin.display();
+    script(
+        &bin.join("do-claude-task t1 "),
+        &format!(
+            "touch '{b}/t1-on'; i=0; while [ $i -lt 50 ] && [ ! -e '{b}/t2-on' ]; do sleep 0.1; i=$((i+1)); done\n\
+             [ -e '{b}/t2-on' ] && touch '{b}/overlapped'\necho first >> a.txt\npwd > '{b}/t1-dir'\n"
+        ),
+    );
+    script(
+        &bin.join("do-claude-task t2 "),
+        &format!(
+            "touch '{b}/t2-on'; i=0; while [ $i -lt 50 ] && [ ! -e '{b}/t1-on' ]; do sleep 0.1; i=$((i+1)); done\n\
+             echo second >> b.txt\n"
+        ),
+    );
+    script(
+        &bin.join("do-claude-task t3 "),
+        &format!("cat a.txt b.txt > '{b}/review-saw'\npwd > '{b}/t3-dir'\n"),
+    );
+    let ctx = context(
+        dir.path(),
+        config(""),
+        Arc::new(StandIns { bin: bin.clone() }),
+        false,
+    );
+    let project = ctx.project.clone();
+    repository(&project, &[("a.txt", "a\n"), ("b.txt", "b\n")]);
+    std::fs::write(project.join("scratch.txt"), "not committed\n").expect("w");
+    let data = paths(dir.path()).data_dir;
+    let h = Harness::start(ctx).expect("start");
+    h.plan("two notes");
+    wait(&h, "the plan", |v| v.phase == Phase::Review);
+    h.run();
+    let v = wait(&h, "the run", |v| matches!(v.phase, Phase::Finished { .. }));
+    assert_eq!(v.phase, Phase::Finished { failed: 0 }, "{:#?}", v.tasks);
+    assert!(
+        bin.join("overlapped").exists(),
+        "the edits ran at the same time"
+    );
+    let tree = v.worktree.clone().expect("the plan's worktree");
+    assert!(tree.branch.starts_with("termos/plan-"), "{tree:?}");
+    // Each edit worked in a worktree of its own; the review in the plan's.
+    let t1_dir = std::fs::read_to_string(bin.join("t1-dir")).expect("t1");
+    assert!(t1_dir.trim().ends_with("-t1"), "{t1_dir}");
+    let t3_dir = std::fs::read_to_string(bin.join("t3-dir")).expect("t3");
+    assert_eq!(Path::new(t3_dir.trim()).file_name(), tree.path.file_name());
+    assert_eq!(
+        std::fs::read_to_string(bin.join("review-saw")).expect("review"),
+        "a\nfirst\nb\nsecond\n"
+    );
+    // Both on the plan's branch; the project as it was; the tasks'
+    // worktrees gone.
+    let log = git(&tree.path, &["log", "--format=%s"]);
+    assert!(
+        log.contains("t1: First") && log.contains("t2: Second"),
+        "{log}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(project.join("a.txt")).expect("a"),
+        "a\n"
+    );
+    assert!(
+        v.notes.iter().any(|n| n.contains("not committed")),
+        "{:?}",
+        v.notes
+    );
+    let store = termos_devkit::worktrees::Store::new(&data, &Default::default());
+    let left: Vec<String> = store
+        .list()
+        .expect("list")
+        .into_iter()
+        .filter(|w| w.active())
+        .map(|w| w.name)
+        .collect();
+    assert_eq!(left, std::slice::from_ref(&tree.name));
+    assert!(
+        v.tasks[0]
+            .log
+            .iter()
+            .any(|l| l.starts_with("merged into termos/plan-"))
+    );
+}
+
+/// Two edits of one line: the second to finish conflicts, runs again on
+/// top of the first, and lands.
+#[cfg(unix)]
+#[test]
+fn a_conflicting_edit_runs_again_on_top() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let bin = dir.path().join("bin");
+    std::fs::create_dir_all(bin.join("answers")).expect("bin");
+    stand_in(
+        &bin,
+        "claude",
+        &["Answer with only this JSON", "task t1 ", "task t2 "],
+    );
+    let plan = serde_json::json!({"summary": "One line, twice", "tasks": [
+        {"id": "t1", "kind": "coding", "title": "One", "prompt": "Change the line."},
+        {"id": "t2", "kind": "coding", "title": "Two", "prompt": "Change the line too."}
+    ]})
+    .to_string();
+    let answers = bin.join("answers");
+    std::fs::write(
+        answers.join("claude-Answer with only this JSON"),
+        claude_result(&plan, false),
+    )
+    .expect("w");
+    for t in ["t1", "t2"] {
+        std::fs::write(
+            answers.join(format!("claude-task {t} ")),
+            claude_result("done", false),
+        )
+        .expect("w");
+        script(
+            &bin.join(format!("do-claude-task {t} ")),
+            &format!("printf 'one\\n{t}\\nthree\\n' > a.txt\n"),
+        );
+    }
+    let ctx = context(
+        dir.path(),
+        config(""),
+        Arc::new(StandIns { bin: bin.clone() }),
+        false,
+    );
+    repository(&ctx.project, &[("a.txt", "one\ntwo\nthree\n")]);
+    let h = Harness::start(ctx).expect("start");
+    h.plan("one line");
+    wait(&h, "the plan", |v| v.phase == Phase::Review);
+    h.run();
+    let v = wait(&h, "the run", |v| matches!(v.phase, Phase::Finished { .. }));
+    assert_eq!(v.phase, Phase::Finished { failed: 0 }, "{:#?}", v.tasks);
+    let again: Vec<&str> = v
+        .tasks
+        .iter()
+        .filter(|t| t.log.iter().any(|l| l.contains("again on top")))
+        .map(|t| t.task.id.as_str())
+        .collect();
+    assert_eq!(again.len(), 1, "{:#?}", v.tasks);
+    let prompts = std::fs::read_to_string(bin.join("prompts-claude")).expect("prompts");
+    assert!(prompts.contains("A first attempt at this task conflicted"));
+    // The one that ran again is last on the line.
+    let tree = v.worktree.expect("worktree");
+    let a = std::fs::read_to_string(tree.path.join("a.txt")).expect("a");
+    assert_eq!(a, format!("one\n{}\nthree\n", again[0]));
 }

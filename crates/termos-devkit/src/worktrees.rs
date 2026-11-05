@@ -172,6 +172,21 @@ pub fn parse_worktree_list(text: &str) -> Vec<Listed> {
     out
 }
 
+/// The branch checked out in `dir` (a repository's main checkout or one
+/// of its worktrees); `None` when detached.
+pub fn current_branch_at(dir: &Path) -> Option<String> {
+    git(dir, &["symbolic-ref", "--quiet", "--short", "HEAD"])
+        .ok()
+        .map(|s| s.trim().to_owned())
+        .filter(|s| !s.is_empty())
+}
+
+/// Whether `dir`'s checkout has changes not committed (untracked files
+/// too).
+pub fn has_changes(dir: &Path) -> bool {
+    git(dir, &["status", "--porcelain"]).is_ok_and(|s| !s.trim().is_empty())
+}
+
 /// The same folder, however it is spelled (macOS's `/var` is
 /// `/private/var`; Windows' drive letters and separators).
 pub fn same_path(a: &Path, b: &Path) -> bool {
@@ -237,10 +252,7 @@ impl Repo {
 
     /// The branch the main checkout is on (`None`: detached).
     pub fn current_branch(&self) -> Option<String> {
-        git(&self.root, &["symbolic-ref", "--quiet", "--short", "HEAD"])
-            .ok()
-            .map(|s| s.trim().to_owned())
-            .filter(|s| !s.is_empty())
+        current_branch_at(&self.root)
     }
 
     pub fn worktrees(&self) -> Result<Vec<Listed>> {
