@@ -34,7 +34,7 @@ questions (DECISIONS.md, "Open questions").
 | M11b | Skills that teach Claude Code, Codex and other CLIs to use TermOS, and `termos agent ask` (D-096, D-098) | 🔍 |
 | M11c | The harness: one coding tool over Claude Code, Codex and API models, routing each task to the model that suits it (D-096, D-099, D-100) | 🔍 |
 | M11d | AI accounts: sign-in from TermOS through each vendor's own flow, API keys per account, Gemini CLI (D-111, D-112) | 🔍 |
-| M12a | Parallel agents in git worktrees, a review window that answers the agent, best-of-N (D-111, D-113) | 🚧 |
+| M12a | Parallel agents in git worktrees, a review window that answers the agent, best-of-N (D-111, D-113, D-114) | 🔍 |
 | M12b | Agent attention and resume: "needs you" badges, jump to the waiting agent, agent panes resumed after restore, command blocks (D-111) | ⏳ |
 | M12c | Remote access: a web client with share links, remote attach with local rendering, approvals on the phone (D-111) | ⏳ |
 | M12d | Hardening: pinned Actions, seccomp, a macOS sandbox, a network allowlist for agent CLIs (D-111) | ⏳ |
@@ -1083,13 +1083,20 @@ Nothing M11a adds runs while idle: the shims run only when `claude` or `codex` s
 ---
 
 ## M12a — Parallel agents in worktrees
-**Status:** 🚧 in progress · Owner answers (D-113): the worktree only, no container; a block of ports per workspace; in a git repository the harness's editing tasks run in parallel worktrees and its result lands on a branch for review; pull requests through `gh` or `glab`.
+**Status:** 🔍 done, awaiting review · Owner answers (D-113): the worktree only, no container; a block of ports per workspace; in a git repository the harness's editing tasks run in parallel worktrees and its result lands on a branch for review; pull requests through `gh` or `glab`. Design: D-114, ARCHITECTURE.md §10 and §11; user guides [worktrees.md](docs/worktrees.md) and [harness.md](docs/harness.md).
 
 **Deliverables**
-- **Workspaces:** [ ] a workspace per task: a branch and a git worktree, a setup script, ignored files copied in (`.env`), a block of ports, panes for the agent, a shell and servers; archived after the merge.
-- **The harness in parallel:** [ ] its editing tasks each in their own worktree, merged into the plan's branch as they finish.
-- **Review:** [ ] a review window per workspace: the diff, comments sent to the agent as its next message, then commit, pull request, merge or discard.
-- **Best-of-N:** [ ] one prompt to several backends (`claude:2,codex:1`), their diffs and test results side by side, one kept.
+- **Workspaces:** [x] a workspace per task: a branch and a git worktree, a setup script, ignored files copied in (`.env`), a block of ports, panes for the agent, a shell and servers; archived after the merge. `termos worktree new|list|status|diff|env|setup|commit|merge|pr|archive|discard|restore|forget|open`; `worktree.new`, `worktree.open`, `worktree.run`.
+- **The harness in parallel:** [x] its editing tasks each in their own worktree, merged into the plan's branch as they finish; a conflict reruns a task on top once, a second stops the plan; the result reviewed in the plan's worktree.
+- **Review:** [x] a review window per workspace (`worktree.review`): the diff, comments sent to the agent as its next message (or the first of a new one), then commit, pull request, merge or discard.
+- **Best-of-N:** [x] one prompt to several backends (`claude:2,codex:1`, `harness.best`, `termos harness best`), their diffs and test results side by side, one kept.
+
+**Acceptance:** a worktree is made with its ports and setup, opens as a workspace whose panes have its ports, is reviewed with comments reaching its agent, and is merged, opened as a pull request or discarded; a plan's edits run at once in worktrees and land on its branch; best-of-N attempts are tested and one kept. Real git throughout; stand-in CLIs, `gh` and models.
+
+**What the tests cover**
+- **Unit (devkit):** worktree lists parsed; names, titles and port blocks (taken, busy, the range's end); forges and their pages; diffs with line numbers and `--name-status`/`--numstat` together; a project's `[worktree]` read alone; a worktree made, copied into (`.env`, not `node_modules`), reviewed, committed, merged into a checked-out base, archived, restored, discarded (untracked files refused for archive), restored from its ref and forgotten; merging into a base not checked out (fast-forward and `merge-tree`), and a conflict that leaves the checkout as it was. The review window's snapshot, comments on a line and a file sent as one message, its actions and buttons, and its refresh deadline. `[worktrees]` settings checked.
+- **Harness:** two edits overlapping in time in their own worktrees, merged into the plan's branch, a review that sees both in the plan's worktree, the project untouched, a note for changes not committed, nothing left in the registry; two edits of one line, the second rerun on top with what conflicted; best-of-N with Claude Code twice and Codex once, each attempt's backend, diff and test result, one kept and the rest gone; specs parsed.
+- **End to end, the real binary:** `termos worktree` made with its setup (the port it wrote), env, list, status, diff, commit, merge with archive, restore, discard, forget (on every platform); `pr` pushing to a bare remote and running a stand-in `gh` with the title and commits, then the forge's page with only git on `PATH` (Unix); in the desktop, `worktree.open` making a named workspace whose server and shell print the worktree's port, opened once, and its review window listing the change; review comments typed into a running stand-in agent, then starting a new one with them as its first message; `termos harness best` listing two attempts with their tests and worktrees.
 
 ---
 

@@ -1226,6 +1226,49 @@ rewrite history.
   - **Pull requests through `gh` or `glab`** when installed: the branch is pushed and `gh pr create` or `glab mr create` runs with the title and body filled in; without them TermOS pushes and shows the compare link. TermOS stores no forge token.
 - **Alternatives:** the dev rootfs or a Podman container per workspace (isolated, but slower, Linux-centred or needing Podman, and the CLIs and their accounts would have to be mounted in); a free port at each start (changes after a restart) or a network namespace per workspace (Linux only); harness edits in place as now, or chosen per run; GitHub's API with a token in TermOS's secret store, or no pull requests.
 
+
+## D-114: Worktrees, their workspaces and review, parallel harness edits, best-of-N
+- **Status:** Accepted · 2026-11-05
+- **Context:** D-113's answers: a worktree per task without a container, a block of ports each, the harness's edits in parallel worktrees with the result on a branch, pull requests through `gh` and `glab`.
+- **Decision:**
+  - **Worktrees (`termos_devkit::worktrees`)** go through the user's `git` (their configuration, hooks, editor and credentials):
+    - **Where:** `<root>/<repository folder name>-<8 hex of its path's SHA-256>/<name>`; root is `[worktrees] root`, default `worktrees` in TermOS's data folder, outside the repository so tools that look upwards do not find the main checkout's settings.
+    - **The record:** `worktrees/registry.toml` there, changed under an exclusive file lock (std's `File::lock`) and written by rename. It holds each worktree's repository, branch (`[worktrees] branch-prefix` plus its name), base and base commit, title, ports, origin (the user, `harness:<plan>`, `best:<run>`), state, last commit and pull request.
+    - **Ports:** a block of `[worktrees] ports` (10) from `port-range` (20000–29999, below every system's range for outgoing connections), the first block that overlaps no active worktree's and whose ports can all be bound on 127.0.0.1 when it is made. Programs get `PORT`, `TERMOS_PORT_<n>`, `TERMOS_PORTS` and `TERMOS_WORKTREE*`.
+    - **Setting up:** a project's `termos.toml` has `[worktree]`: `setup` commands (run in a shell with the ports, stopping at the first failure), `copy` globs (`globset`) over what `git ls-files --others --ignored --exclude-standard --directory` lists (ignored files, and ignored folders as a whole; default: `.env` files at any depth), and `servers`.
+    - **Finishing:**
+      - review data is the diff against the merge base, edits not committed included, with untracked files listed and shown whole;
+      - commit is `git add -A` and git's own commit;
+      - merge happens in the folder where the base is checked out (which must be clean), else without a checkout (`git merge-tree --write-tree`, git 2.38+, then `commit-tree` and `update-ref` against the old value), and a conflict changes nothing;
+      - archive removes the folder and keeps the branch; discard removes both; both keep the last commit as `refs/termos/archive/<name>`, so restore works even after a discard; forget drops the record and the ref.
+    - **`termos worktree`:** `new list status diff env setup commit merge pr archive discard restore forget open`.
+  - **Pull requests:** `pr` pushes the branch to its upstream's remote (else `origin`, else the only one), then runs `gh pr create` or `glab mr create` with the title and the commits as body. The forge is told from the remote's URL. Without the tool, TermOS shows the forge's page for a new pull request. The pull request's address is recorded.
+  - **The desktop:**
+    - **`worktree.open`** makes a workspace named after the worktree (its name no longer follows its programs). The agent goes on the left: `[worktrees] agent` (`auto`: the first installed of Claude Code, Codex and Gemini CLI as the account in use; or `termos` for TermOS's agent window). A shell goes on the right, and each `servers` command is typed into a shell below it, so it can be run again.
+    - **The worktree's environment** reaches every pane started in its folder: the launcher's `worktree_env` looks the folder up when a pane is made, so splits and restored panes get it too.
+    - **`worktree.new`** runs `termos worktree new --open` in a window that shows the setup and stays open on an error. `worktree.run` runs any `termos worktree` command in a window.
+  - **The review window (`termos_devkit::review_app`):**
+    - **What it shows:** files and numbered diff lines, refreshed every 3 s while on screen (the app's deadline; git runs on threads).
+    - **Comments** on lines or files become one message with paths, lines and the lines' text. A new `AppEffect::TellAgent` gives it to the desktop, which pastes it (bracketed when the program asks) and presses Enter in the worktree's agent pane: the one in its workspace, else one whose folder is inside it.
+    - **No agent running:** a new agent pane starts in the worktree with the message as its first prompt (Claude Code's and Codex's prompt argument, Gemini CLI's `--prompt-interactive`). With no CLI agent, the message goes to the clipboard.
+    - **Its life:** it closes when it sends, so the agent is in view. A second `worktree.review` of the same worktree brings the open one forward.
+    - **Actions** run `termos worktree …` in windows.
+  - **The harness (supersedes D-100's order for git repositories):**
+    - **The plan's branch:** `[harness] worktrees` (on) gives a plan in a git repository the worktree `plan-<id>` from the branch the project is on.
+    - **Editing tasks:**
+      - each runs in `plan-<id>-<task>`, made from the plan's branch when it starts;
+      - when it succeeds, its changes are committed there (`--no-verify`, as TermOS when git has no name set) and merged into the plan's branch under an async lock, then the worktree is discarded and forgotten;
+      - git's work runs in `spawn_blocking`.
+    - **Scheduling:** tasks wait only for their dependencies, up to `[harness] parallel` at once, and read-only tasks look at the plan's worktree. The planner is told that edits may run at once, so a task that builds on another must depend on it.
+    - **Conflicts:** a conflict reruns the task once in a new worktree from the branch as it is, its prompt saying what conflicted. A second marks the outcome `conflict` and stops the plan from starting more tasks.
+    - **The result:** the view carries the plan's worktree; the window's `R` reviews it and `termos harness run` prints it. A project with changes not committed gets a note.
+    - **Fallback:** outside git, or when the worktree cannot be made (with a note), tasks edit in place as before.
+  - **Best-of-N (`termos_harness::runner::best`):**
+    - **The spec:** `claude:2,codex:1` (backends from `route::backends`, 2 to 8 attempts in all). Each attempt is a coding task pinned to its backend, in `best-<id>-a<n>` with ports, from the project's branch, all at once.
+    - **After an attempt:** a successful one is committed, its diff counted, and the project's test task (`tasks::find`'s `test`) run in its worktree with its environment and `task-minutes` as the limit. The last 30 lines are kept. A failed attempt's worktree goes.
+    - **Keeping:** discards and forgets the others. In the window Enter keeps and `R` reviews; `harness.best SPEC PROMPT` and `termos harness best --with SPEC` start it.
+- **Alternatives:** libgit2 or gitoxide (no user hooks, editor or credential helpers; merges and worktrees less complete); worktrees inside the repository (`.git`-ignored) or beside it; the ports set only on the workspace's first panes; a merge-resolving agent for conflicts (M12e's checkpoints and hand-offs would carry it); keeping best-of-N attempts' conversations to continue them.
+
 ---
 
 ## Open questions (the owner will be asked before the milestone that needs each one)

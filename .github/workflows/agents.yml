@@ -18,7 +18,9 @@ name: Agent CLIs
 # CLI (M11d, D-112) is installed the same way (Google's bundle, checked
 # against GitHub's digest, run by Node.js from mise), with TermOS's server
 # in its settings and an account of its own; each CLI is asked who each
-# account is signed in as (no one, here).
+# account is signed in as (no one, here). In a git repository (M12a,
+# D-113) the harness gives the plan a branch and each edit a worktree of
+# its own: the CLIs work there.
 # No account and no API key: nothing here signs in. Runs when the
 # installer, the MCP server or the skills change, nightly (the vendors
 # release often) and on demand.
@@ -44,6 +46,8 @@ on:
       - ".github/scripts/claude-skills.sh"
       - "crates/termos-harness/**"
       - "crates/termos-cli/src/harness_cmd.rs"
+      - "crates/termos-devkit/src/worktrees.rs"
+      - "crates/termos-cli/src/worktree_cmd.rs"
       - ".github/workflows/agents.yml"
   workflow_dispatch:
 
@@ -235,6 +239,40 @@ jobs:
           $termos audit show "$id" | tee handoffs.txt
           grep -q "fell-back\|failed" handoffs.txt
           $termos audit verify
+      - name: In a git repository the harness works in worktrees
+        env:
+          DISABLE_AUTOUPDATER: "1"
+        run: |
+          termos=target/debug/termos
+          py=$(command -v python3 || command -v python)
+          # The same stand-ins; the project is a repository now (D-113):
+          # the plan gets a branch, its edit a worktree of its own.
+          "$py" .github/scripts/refusing-model.py 8770 "$RUNNER_TEMP/worktree-requests.jsonl" &
+          "$py" .github/scripts/refusing-model.py 8765 &
+          sleep 2
+          proj="$RUNNER_TEMP/repo"
+          mkdir -p "$proj"
+          git -C "$proj" init -q -b main
+          git -C "$proj" config user.name CI
+          git -C "$proj" config user.email ci@example.com
+          echo hello > "$proj/README.md"
+          git -C "$proj" add -A
+          git -C "$proj" commit -qm first
+          ANTHROPIC_BASE_URL=http://127.0.0.1:8770 ANTHROPIC_API_KEY=fixture-key \
+            CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 \
+            $termos harness run --yes --project "$proj" "write a note" < /dev/null | tee harness.txt
+          grep -q "2 of 2 tasks done" harness.txt
+          grep -q "The result is on branch termos/plan-" harness.txt
+          # Claude Code worked in the edit's own worktree, the review in
+          # the plan's.
+          grep "This is task t1 (coding)" "$RUNNER_TEMP/worktree-requests.jsonl" | grep -q 'plan-[0-9-]*[0-9a-f]*-t1'
+          cd "$proj"
+          $termos worktree list | tee list.txt
+          grep -c "^  plan-" list.txt | grep -qx 1
+          plan=$(sed -n 's/^  \(plan-[^ ]*\) .*/\1/p' list.txt)
+          $termos worktree status "$plan"
+          $termos worktree discard "$plan" --yes
+          $termos worktree forget "$plan"
       - name: Update and remove
         run: |
           termos=target/debug/termos
