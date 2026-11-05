@@ -978,7 +978,15 @@ pub fn hooks_file(tool: Tool) -> &'static str {
 
 /// The command a hook runs: `termos agent event --cli claude`.
 pub fn hook_command(termos: &Path, tool: Tool) -> String {
+    // Forward slashes on Windows: Claude Code runs hooks in Git Bash,
+    // which would read backslashes as escapes; cmd and PowerShell take
+    // either.
     let path = termos.display().to_string();
+    let path = if cfg!(windows) {
+        path.replace('\\', "/")
+    } else {
+        path
+    };
     // Quoted only when it must be: PowerShell would take a quoted path
     // as a string, not a command.
     let plain = path

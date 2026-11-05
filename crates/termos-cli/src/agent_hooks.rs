@@ -118,11 +118,14 @@ pub(crate) fn event(cli: &str, json_arg: Option<&str>) -> ExitCode {
 }
 
 fn report(cli: &str, json_arg: Option<&str>) -> anyhow::Result<()> {
-    let (Some((socket, session)), Some(pane)) = (crate::inside_termos(), crate::tos::pane_id())
-    else {
+    let inside = crate::inside_termos().zip(crate::tos::pane_id());
+    // `TERMOS_HOOK_LOG`: also write what the hook reported to that file
+    // (to see a CLI's hooks reach TermOS, as CI does).
+    let log = std::env::var_os("TERMOS_HOOK_LOG").map(std::path::PathBuf::from);
+    if inside.is_none() && log.is_none() {
         // Not in a TermOS pane.
         return Ok(());
-    };
+    }
     let input = match json_arg {
         Some(j) => j.to_owned(),
         None => {
@@ -137,6 +140,20 @@ fn report(cli: &str, json_arg: Option<&str>) -> anyhow::Result<()> {
     };
     let v: Value = serde_json::from_str(&input).context("the hook's JSON")?;
     let Some(r) = translate(cli, &v) else {
+        return Ok(());
+    };
+    if let Some(log) = log {
+        use std::io::Write as _;
+        // Names and ids only, never what the agent said.
+        let line = json!({ "cli": cli, "kind": r.kind, "conversation": r.conversation });
+        let mut f = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&log)
+            .with_context(|| format!("cannot write {}", log.display()))?;
+        writeln!(f, "{line}")?;
+    }
+    let Some(((socket, session), pane)) = inside else {
         return Ok(());
     };
     let account = Tool::from_name(cli)

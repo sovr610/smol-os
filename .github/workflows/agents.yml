@@ -48,6 +48,7 @@ on:
       - "crates/termos-cli/src/harness_cmd.rs"
       - "crates/termos-devkit/src/worktrees.rs"
       - "crates/termos-cli/src/worktree_cmd.rs"
+      - "crates/termos-cli/src/agent_hooks.rs"
       - ".github/workflows/agents.yml"
   workflow_dispatch:
 
@@ -119,6 +120,22 @@ jobs:
           bin="$XDG_DATA_HOME/termos/bin"
           ext=""; [ "$RUNNER_OS" = Windows ] && ext=.exe
           bash .github/scripts/claude-skills.sh "$bin/claude$ext" 8766
+      # TermOS's hooks (D-116): the real CLIs run them, with the JSON TermOS
+      # reads (TERMOS_HOOK_LOG records what reached `termos agent event`).
+      - name: Claude Code runs TermOS's hooks
+        env:
+          DISABLE_AUTOUPDATER: "1"
+        run: |
+          termos=target/debug/termos
+          bin="$XDG_DATA_HOME/termos/bin"
+          ext=""; [ "$RUNNER_OS" = Windows ] && ext=.exe
+          $termos agent hooks claude | tee hooks.txt
+          export TERMOS_HOOK_LOG="$RUNNER_TEMP/claude-hooks.jsonl"
+          rm -f "$TERMOS_HOOK_LOG"
+          bash .github/scripts/claude-skills.sh "$bin/claude$ext" 8769
+          cat "$TERMOS_HOOK_LOG"
+          grep '"kind":"started"' "$TERMOS_HOOK_LOG" | grep -q '"cli":"claude"'
+          grep '"kind":"working"' "$TERMOS_HOOK_LOG" | grep -q '"cli":"claude"'
       - name: Codex CLI connects to TermOS's MCP server and lists its skills
         run: |
           bin="$XDG_DATA_HOME/termos/bin"
@@ -141,6 +158,22 @@ jobs:
           for _ in $(seq 1 120); do kill -0 $pid 2>/dev/null || break; sleep 1; done
           kill $pid 2>/dev/null || true
           cat codex.txt
+          # Its hooks, which Codex runs only once trusted: trusted here for
+          # the run (where this Codex has the flag).
+          if "$bin/codex$ext" exec --help | grep -q -- --dangerously-bypass-hook-trust; then
+            export TERMOS_HOOK_LOG="$RUNNER_TEMP/codex-hooks.jsonl"
+            rm -f "$TERMOS_HOOK_LOG"
+            "$bin/codex$ext" exec --dangerously-bypass-hook-trust --skip-git-repo-check "say hello" < /dev/null > codex-hooks.txt 2>&1 &
+            pid=$!
+            for _ in $(seq 1 120); do kill -0 $pid 2>/dev/null || break; sleep 1; done
+            kill $pid 2>/dev/null || true
+            cat codex-hooks.txt
+            cat "$TERMOS_HOOK_LOG"
+            grep '"kind":"started"' "$TERMOS_HOOK_LOG" | grep -q '"cli":"codex"'
+            unset TERMOS_HOOK_LOG
+          else
+            echo "this Codex has no --dangerously-bypass-hook-trust; its hooks are not run here"
+          fi
           cd "$GITHUB_WORKSPACE"
           bash .github/scripts/mcp-audited.sh codex
           # Its request to the model lists TermOS's skills (~/.agents/skills).
