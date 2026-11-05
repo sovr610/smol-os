@@ -45,6 +45,8 @@ pub struct StatusInfo<'a> {
     pub clock: Option<String>,
     /// The battery (`▮ 84%`, `⚡ 62%`), and whether it is low (D-124).
     pub battery: Option<(String, bool)>,
+    /// The volume (`◁ 45%`, `◁ muted`) on an image with sound (D-128).
+    pub volume: Option<String>,
     /// Plugin widgets (styled runs; default colours mean the status line's).
     pub widgets: &'a [Vec<(String, termos_render::cell::Style)>],
     /// An open prompt: (label, input). Replaces the whole line, like tmux.
@@ -229,6 +231,9 @@ pub fn draw(
         }
         widget_spans.push((first, right.len()));
         right.push((" ".into(), theme.status));
+    }
+    if let Some(volume) = &info.volume {
+        right.push((format!(" {volume} "), theme.status));
     }
     if let Some((battery, low)) = &info.battery {
         let style = if *low {
@@ -503,17 +508,18 @@ mod tests {
     }
 
     #[test]
-    fn the_battery_sits_before_the_clock() {
+    fn the_volume_and_battery_sit_before_the_clock() {
         let mut g = Grid::new(40, 1);
         let info = StatusInfo {
             session: "main",
             clock: Some("12:34".into()),
             battery: Some(("▮ 15%".into(), true)),
+            volume: Some("◁ 40%".into()),
             ..StatusInfo::default()
         };
         draw(&mut g, 0, &Theme::default(), &info);
         assert!(
-            g.row_text(0).trim_end().ends_with("▮ 15%  12:34"),
+            g.row_text(0).trim_end().ends_with("◁ 40%  ▮ 15%  12:34"),
             "{:?}",
             g.row_text(0)
         );

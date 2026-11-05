@@ -1,0 +1,14 @@
+---
+source: crates/termos-apps/src/displays.rs
+expression: "crate::testing::render_text(&mut page, 80, 10)"
+---
+ Extended: each display shows its own workspace
+
+   Display       State      Mode          Text
+   HDMI-A-1      on         preferred     auto
+   eDP-1         on         preferred     auto
+
+ Left to right as listed; ● the primary, where the first workspace starts.
+
+
+ Space on/off · ←→ mode · s text · p primary · [ ] move · x mirror/extend · Esc

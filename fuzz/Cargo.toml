@@ -167,6 +167,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "wpctl_parse"
+path = "fuzz_targets/wpctl_parse.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "gallery_index"
 path = "fuzz_targets/gallery_index.rs"
 test = false

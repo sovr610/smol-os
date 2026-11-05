@@ -37,13 +37,20 @@ trash.workspace = true
 tracing.workspace = true
 unicode-width.workspace = true
 
+# iwd and BlueZ over D-Bus (D-081, D-128); the Bluetooth agent's answers
+# wait on tokio's oneshot (it needs no tokio runtime).
 [target.'cfg(target_os = "linux")'.dependencies]
+tokio.workspace = true
 zbus.workspace = true
 
 [dev-dependencies]
 insta.workspace = true
 proptest.workspace = true
 tempfile.workspace = true
+
+# The Bluetooth agent is tested over a socket pair, with no bus.
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+zbus = { workspace = true, features = ["p2p"] }
 
 [lints]
 workspace = true

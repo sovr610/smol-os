@@ -418,6 +418,7 @@ impl Desktop {
                     // A workspace it was alone in goes.
                     if self.session.workspaces[i].is_empty() {
                         self.session.remove(i);
+                        self.workspace_removed(i);
                     }
                 }
                 self.session.active_mut().add_float(id, area);

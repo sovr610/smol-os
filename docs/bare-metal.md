@@ -71,6 +71,108 @@ as dots); TermOS saves it and joins it whenever it is in range. `d` forgets
 a saved network, `r` scans again. Enterprise (802.1X) networks are not
 supported here yet.
 
+## Bluetooth
+
+> New in M13e (D-128): tested against a stand-in BlueZ, not yet on a built
+> image with a real device.
+
+**Network**'s second page (`Tab`, or ◆ Menu → Apps → Bluetooth, or
+`bluetooth.open`) lists the adapter and its devices: connected first, then
+paired, then by signal.
+
+| Key | |
+| --- | --- |
+| `s` | scan, or stop; put the device in pairing mode and it appears |
+| `Enter` | pair (then trust and connect), or connect a paired device |
+| `d` | disconnect |
+| `f` | forget a paired device |
+| `p` | turn Bluetooth on or off (kept as `[bluetooth] enabled`) |
+
+Pairing may ask a question on the page: whether a number shows on the
+device (`y` / `n`), a PIN or passkey to type, or a code to type on the
+keyboard being paired. `Esc` refuses. Keyboards and mice work as soon as
+they connect; headsets and speakers appear in **Sound**. Paired devices
+reconnect by themselves when they turn on, and the pairings are kept on
+the data partition.
+
+```toml
+[bluetooth]
+enabled = true           # turn Bluetooth on at start
+```
+
+The image has firmware for Intel, Realtek (87xx, 88xx) and MediaTek
+(MT7921, MT7922) adapters on PCs, and for the Raspberry Pi's own chip.
+Other adapters may need firmware the image does not carry.
+
+## Sound
+
+> New in M13e (D-128): tested against stand-ins and in the QEMU boot test
+> (an HD Audio card); not yet on real speakers.
+
+The image plays sound through PipeWire. The status line shows the volume
+(`◁ 45%`, `◁ muted`); the volume and mute keys change it, as do
+`sound.volume +5`, `sound.volume -5` and `sound.mute` in the palette.
+
+**Sound** (◆ Menu → Apps, Settings → Hardware, or `sound.open`) lists the
+outputs (speakers, HDMI, a Bluetooth headset) with their volumes. `←` and
+`→` change the selected one, `m` mutes it, and `Enter` makes it the one
+that plays, which is also kept for the next start:
+
+```toml
+[sound]
+device = "WH-1000XM4"    # the output to use at start, by name or part of it
+
+[kms]
+audible-bell = false     # beep for the bell, as well as flashing
+```
+
+The volume in the status line is read at start and after each change
+TermOS makes, not on a timer: a program that changes it itself shows at
+the next change.
+
+## Displays
+
+> New in M13e (D-128): tested with stand-ins and one QEMU display; two
+> screens and plugging in have not been tried on hardware yet.
+
+Every connected display is used. By default they **extend** the desktop:
+the first shows the session's workspace, as a terminal would, and each
+other display shows a workspace of its own. Switching a display to a
+workspace another one shows swaps the two. The pointer moves across the
+displays left to right, and keys go to the display it is on. Plugging a
+display in or out sets them up again; if the first one goes, the console
+starts again (the desktop keeps running).
+
+**Displays** (◆ Menu → Apps, Settings → Hardware, or `displays.open`)
+lists them in their order:
+
+| Key | |
+| --- | --- |
+| `Space` | turn the display on or off |
+| `←` `→` | its mode (`preferred`, or one of those it offers) |
+| `s` | its text size: auto, 1× … 3× |
+| `p` | make it the primary (first, where the first workspace starts) |
+| `[` `]` | move it left or right |
+| `x` | mirror or extend |
+
+Each change is saved to the config and takes effect at once:
+
+```toml
+[kms]
+displays = "extend"      # extend | mirror (every display shows the first)
+
+[[kms.display]]
+name = "HDMI-A-1"        # the connector, as the kernel names it
+mode = "1920x1080@60"    # preferred | WxH | WxH@HZ
+scale = 1.5              # text size on top of the density's
+enabled = true
+primary = true
+```
+
+Text is sized for each display's density (from its size in mm), times its
+`scale`. Mirroring copies the first display's picture as it is, from the
+top-left corner, so mirrored displays look best in the same mode.
+
 ## Building an image
 
 On a Linux machine with Buildroot's usual host tools (`build-essential`,
@@ -114,7 +216,11 @@ takes a screenshot (`target/image/<target>-boot/screen-*.png`), and checks
 the memory in use once the desktop has settled (the budget is 150 MB),
 that the data partition grew into a disk 1 GiB bigger than the image, and
 that the image's `curl` is the mbedTLS build TermOS downloads with, and
-that the dev rootfs can run (`termos devroot status`).
+that the dev rootfs can run (`termos devroot status`). It also checks that
+the console reports its displays, that a volume set through PipeWire (40%,
+muted) reads back, and that BlueZ answers the desktop's user. The test
+machine has an HD Audio card with no host audio behind it and a second
+display head, which QEMU leaves off without a window.
 `--update` then puts a newer version on the same disk with `termos update`
 and starts it, then a broken one, which falls back; `--install` starts the
 live ISO with an empty disk, installs onto it with `termos install`, and
@@ -134,6 +240,15 @@ To use the desktop yourself, run QEMU with a window:
 qemu-system-x86_64 -M q35 -m 2048 -accel kvm -bios /usr/share/ovmf/OVMF.fd \
   -drive file=target/image/x86_64/images/disk.img,format=raw,if=virtio,snapshot=on \
   -vga none -device virtio-gpu-pci -device virtio-keyboard-pci -device virtio-tablet-pci
+```
+
+For two displays, give the GPU two heads and open both in QEMU's window
+(View → the second display); for sound, add a card with your host's
+audio:
+
+```sh
+  -device virtio-gpu-pci,max_outputs=2 -display gtk \
+  -audiodev pa,id=snd -device intel-hda -device hda-duplex,audiodev=snd
 ```
 
 ## Writing it to a disk or SD card
@@ -236,6 +351,7 @@ volumes among the places.
 | Ctrl+Shift+V / Shift+Insert | paste the text last copied in TermOS |
 | Ctrl+Alt+F1…F12 | another virtual terminal (TermOS is on tty1) |
 | brightness keys | the screen's backlight |
+| volume and mute keys | the sound (D-128) |
 | the lock key | lock the screen |
 
 Everything else is the desktop's (`C-b` is the prefix, Ctrl+Space the
@@ -252,6 +368,7 @@ keyboard-options = ""    # "ctrl:nocaps,compose:ralt"…
 repeat-delay = 400       # ms before a held key repeats
 repeat-rate = 25         # repeats per second
 visual-bell = true       # the bell flashes a frame around the screen
+audible-bell = false     # and beeps
 # font = "/data/fonts/MyFont.ttf"        # default: built-in DejaVu Sans Mono
 # bold-font = "/data/fonts/MyFont-Bold.ttf"
 # fallback-fonts = ["/data/fonts/NotoSansCJK-Regular.ttc"]
@@ -306,11 +423,12 @@ their firmware needs. The partitions, by name (GPT) or number (MBR):
 
 - The system partition is read-only; what you keep lives on the data
   partition, mounted on `/data`, with `/home`, iwd's networks, D-Bus's
-  machine ID and dhcpcd's leases bound from it.
-- BusyBox init starts udev, D-Bus, iwd (Wi-Fi), dhcpcd (addresses) and
-  seatd, then runs TermOS's console on tty1 as the user `termos`. If the
-  console stops, init starts it again and it reattaches to the running
-  desktop.
+  machine ID, dhcpcd's leases and BlueZ's pairings bound from it.
+- BusyBox init starts udev, D-Bus, iwd (Wi-Fi), dhcpcd (addresses),
+  bluetoothd and seatd, then runs TermOS's console on tty1 as the user
+  `termos`, after a session bus and PipeWire (which starts WirePlumber).
+  If the console stops, init starts it again and it reattaches to the
+  running desktop.
 - Logs are in `~/.local/state/termos/log/` (on the data partition) and on
   the system console.
 - `curl`, built with mbedTLS and the image's CA certificates, is what
@@ -327,6 +445,12 @@ their firmware needs. The partitions, by name (GPT) or number (MBR):
   vendors' cards that need firmware (NVIDIA) get the UEFI framebuffer
   (simpledrm).
 - Some old BIOSes do not start GPT disks; UEFI machines and QEMU's BIOS do.
+- Sound: recent Intel laptops whose audio needs Sound Open Firmware (SOF)
+  have no sound yet; HD Audio, USB and HDMI audio work.
+- Bluetooth pairs only while its page is open (that is where pairing asks
+  its questions); devices paired before connect by themselves.
+- Two displays cost two frames' drawing on the CPU; the Pi 4's latency
+  budget with two displays is yet to be measured on a board.
 - The Raspberry Pi images are built on request and have not been tested on
   hardware by CI, nor have their updates.
 - How fast keys reach the screen is measured by the console itself: every

@@ -1481,11 +1481,17 @@ fn attach_kms(paths: &Paths, config_path: &Path, t: &Target) -> anyhow::Result<E
     hello.create = true;
     hello.cwd = std::env::var_os("HOME").map(|h| PathBuf::from(h).display().to_string());
     let runtime = runtime()?;
-    let (_, end) = runtime
+    let (reply, end) = runtime
         .block_on(connect_frontend(&t.socket, &hello))
         .map_err(|e| explain(t, e))?;
+    // Further displays connect to the same session (D-128).
+    let connect = kms::Connect {
+        socket: t.socket.clone(),
+        session: reply.session.unwrap_or_else(|| "main".into()),
+        config_path: config_path.to_owned(),
+    };
     let ended = runtime
-        .block_on(kms::run(end, &config, &paths.state_dir))
+        .block_on(kms::run(end, connect, &config, &paths.state_dir))
         .inspect_err(|e| tracing::error!("the console stopped: {e:#}"))?;
     match ended {
         client::Ended::Detached(session) => println!("[detached (from session {session})]"),

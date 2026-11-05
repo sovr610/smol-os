@@ -24,6 +24,12 @@ pub(super) struct Pointer {
 }
 
 impl Pointer {
+    /// The pointer moved to another display: the next move reports its
+    /// cell there, whatever it was here.
+    pub(super) fn entered_another(&mut self) {
+        self.cell = None;
+    }
+
     fn at(&self, layout: &Layout, m: &CellMetrics) -> (u16, u16) {
         layout.cell_at(m, self.x.max(0.0) as u32, self.y.max(0.0) as u32)
     }

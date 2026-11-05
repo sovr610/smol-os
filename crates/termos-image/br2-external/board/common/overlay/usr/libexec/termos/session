@@ -20,4 +20,5 @@ export HOME=/home/termos USER=termos LOGNAME=termos SHELL=/bin/sh
 export PATH=/usr/bin:/bin:/usr/sbin:/sbin
 export XDG_RUNTIME_DIR="$run"
 cd "$HOME" || exit 1
-exec su -p -s /bin/sh -c 'exec /usr/bin/termos --kms' termos > /dev/console 2>&1
+# Sound and the session bus first (user-session), then the console.
+exec su -p -s /bin/sh -c 'exec /usr/libexec/termos/user-session' termos > /dev/console 2>&1

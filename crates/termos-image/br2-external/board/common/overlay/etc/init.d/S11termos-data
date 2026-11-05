@@ -1,6 +1,6 @@
 #!/bin/sh
 # The data partition (D-075): homes, iwd's networks, D-Bus's machine ID,
-# dhcpcd's leases, RAUC's records, the users' passwords and the time zone
+# dhcpcd's leases, BlueZ's pairings (D-128), RAUC's records, the users' passwords and the time zone
 # (D-124), and later the dev rootfs, models and containers. The root file
 # system is read-only. Also the boot partition, on /boot/esp, for RAUC and
 # the boot loader (D-078), and a tmpfs on /media for USB drives.
@@ -110,7 +110,7 @@ start() {
 
 data_binds() {
 	mkdir -p /data/home/termos /data/iwd /data/dbus /data/dhcpcd /data/rauc \
-		/data/dev-rootfs /data/models /data/containers
+		/data/dev-rootfs /data/models /data/containers /data/bluetooth
 	chown termos:termos /data/home/termos
 	chmod 0700 /data/home/termos
 	mount --bind /data/home /home
@@ -119,6 +119,9 @@ data_binds() {
 	mkdir -p /tmp/dbus
 	mount --bind /data/dbus /tmp/dbus
 	mount --bind /data/dhcpcd /var/db/dhcpcd
+	# BlueZ's pairings (D-128).
+	chmod 0700 /data/bluetooth
+	mount --bind /data/bluetooth /var/lib/bluetooth
 	# The users' passwords (D-124): /etc/shadow links here, and a newer
 	# image's new users get their entries (passwords already set stay).
 	mkdir -p /data/etc

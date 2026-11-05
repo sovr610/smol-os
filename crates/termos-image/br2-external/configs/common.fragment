@@ -39,6 +39,23 @@ BR2_PACKAGE_DBUS=y
 BR2_PACKAGE_IWD=y
 BR2_PACKAGE_DHCPCD=y
 
+# Sound and Bluetooth (M13e, D-127, D-128): PipeWire on ALSA, with
+# WirePlumber (its session manager, scripted in Lua) and pw-play for the
+# console's bell (libsndfile); BlueZ with audio, keyboards and mice (HID,
+# and HID over GATT), and PipeWire's Bluetooth audio (sbc). D-Bus is
+# iwd's already.
+BR2_PACKAGE_ALSA_LIB=y
+BR2_PACKAGE_LIBSNDFILE=y
+BR2_PACKAGE_PIPEWIRE=y
+BR2_PACKAGE_LUA=y
+BR2_PACKAGE_LUA_5_4=y
+BR2_PACKAGE_WIREPLUMBER=y
+BR2_PACKAGE_BLUEZ5_UTILS=y
+BR2_PACKAGE_BLUEZ5_UTILS_PLUGINS_AUDIO=y
+BR2_PACKAGE_BLUEZ5_UTILS_PLUGINS_HID=y
+BR2_PACKAGE_BLUEZ5_UTILS_PLUGINS_HOG=y
+BR2_PACKAGE_SBC=y
+
 # The data partition is ext4.
 BR2_PACKAGE_E2FSPROGS=y
 

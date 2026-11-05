@@ -196,6 +196,19 @@ pub enum Command {
     SystemPowerOff,
     /// The screen's backlight up or down, in percent (an image).
     DisplayBrightness(i8),
+    /// The displays' modes, scale, order and mirroring (an image, D-128).
+    DisplaysOpen,
+    /// The default output's volume up or down, in percent (an image).
+    SoundVolume(i8),
+    /// Mute or unmute the default output (an image).
+    SoundMute,
+    /// Read the volume again for the status line (the Sound page asks
+    /// after changing it).
+    SoundRefresh,
+    /// The outputs and their volumes (an image).
+    SoundOpen,
+    /// The Network window on its Bluetooth page (an image).
+    BluetoothOpen,
     /// The image's time zone (`Europe/Paris`).
     ClockZone(String),
 }
@@ -545,6 +558,25 @@ pub const COMMANDS: &[CommandInfo] = &[
         description: "Change the screen's brightness, in percent (TermOS images)",
         arg: Some("+10"),
     },
+    info(
+        "displays.open",
+        "Displays: modes, scale, order, mirror or extend (TermOS images)",
+    ),
+    CommandInfo {
+        name: "sound.volume",
+        description: "Change the volume, in percent (TermOS images)",
+        arg: Some("+5"),
+    },
+    info("sound.mute", "Mute or unmute the sound (TermOS images)"),
+    info("sound.refresh", "Show the volume again in the status line"),
+    info(
+        "sound.open",
+        "Sound: outputs and their volumes (TermOS images)",
+    ),
+    info(
+        "bluetooth.open",
+        "Bluetooth: pair and connect devices (TermOS images)",
+    ),
     CommandInfo {
         name: "file.open",
         description: "Open a file",
@@ -910,6 +942,17 @@ impl FromStr for Command {
                     "`display.brightness` takes a change in percent: +10 or -10".into(),
                 )),
             },
+            "displays.open" => no_arg(Command::DisplaysOpen),
+            "sound.volume" => match arg.map(|a| a.trim_start_matches('+').parse::<i8>()) {
+                Some(Ok(d)) if (-100..=100).contains(&d) && d != 0 => Ok(Command::SoundVolume(d)),
+                _ => Err(CommandError(
+                    "`sound.volume` takes a change in percent: +5 or -5".into(),
+                )),
+            },
+            "sound.mute" => no_arg(Command::SoundMute),
+            "sound.refresh" => no_arg(Command::SoundRefresh),
+            "sound.open" => no_arg(Command::SoundOpen),
+            "bluetooth.open" => no_arg(Command::BluetoothOpen),
             "processes.open" => match arg {
                 None => Ok(Command::ProcessesOpen(String::new())),
                 Some(a) if a.parse::<u32>().is_ok() => Ok(Command::ProcessesOpen(a.to_owned())),
@@ -1066,6 +1109,12 @@ impl fmt::Display for Command {
             Command::SystemRestart => f.write_str("system.restart"),
             Command::SystemPowerOff => f.write_str("system.power-off"),
             Command::DisplayBrightness(d) => write!(f, "display.brightness {d:+}"),
+            Command::DisplaysOpen => f.write_str("displays.open"),
+            Command::SoundVolume(d) => write!(f, "sound.volume {d:+}"),
+            Command::SoundMute => f.write_str("sound.mute"),
+            Command::SoundRefresh => f.write_str("sound.refresh"),
+            Command::SoundOpen => f.write_str("sound.open"),
+            Command::BluetoothOpen => f.write_str("bluetooth.open"),
             Command::ProcessesOpen(a) if a.is_empty() => f.write_str("processes.open"),
             Command::ProcessesOpen(a) => write!(f, "processes.open {a}"),
             Command::PackagesOpen => f.write_str("packages.open"),
@@ -1208,6 +1257,15 @@ mod tests {
             assert!(bad.parse::<Command>().is_err(), "{bad}");
         }
         assert_eq!("session.lock".parse::<Command>(), Ok(Command::SessionLock));
+        assert_eq!(
+            "sound.volume +5".parse::<Command>(),
+            Ok(Command::SoundVolume(5))
+        );
+        assert_eq!(Command::SoundVolume(-5).to_string(), "sound.volume -5");
+        assert!("sound.volume loud".parse::<Command>().is_err());
+        assert!("sound.volume 0".parse::<Command>().is_err());
+        assert_eq!("sound.mute".parse::<Command>(), Ok(Command::SoundMute));
+        assert!("sound.mute now".parse::<Command>().is_err());
         assert_eq!(
             "clock.zone America/New_York".parse::<Command>(),
             Ok(Command::ClockZone("America/New_York".into()))

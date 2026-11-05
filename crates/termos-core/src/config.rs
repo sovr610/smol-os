@@ -23,7 +23,7 @@ pub mod worktrees;
 
 pub use agents::{AgentsConfig, SecretsConfig};
 pub use harness::HarnessConfig;
-pub use kms::KmsConfig;
+pub use kms::{DisplayConfig, DisplaysMode, KmsConfig};
 pub use models::ModelsConfig;
 pub use worktrees::WorktreesConfig;
 
@@ -91,6 +91,10 @@ pub struct Config {
     pub power: PowerConfig,
     /// Time sync and the status clock's format (M13d, D-124).
     pub clock: ClockConfig,
+    /// Sound on TermOS images (M13e, D-128).
+    pub sound: SoundConfig,
+    /// Bluetooth on TermOS images (M13e, D-128).
+    pub bluetooth: BluetoothConfig,
     /// The gallery of themes, layouts and widgets (M13g, D-126).
     pub gallery: GalleryConfig,
     /// The coding harness (M11c, D-099).
@@ -135,6 +139,8 @@ impl Default for Config {
             lock: LockConfig::default(),
             power: PowerConfig::default(),
             clock: ClockConfig::default(),
+            sound: SoundConfig::default(),
+            bluetooth: BluetoothConfig::default(),
             gallery: GalleryConfig::default(),
             harness: HarnessConfig::default(),
             worktrees: WorktreesConfig::default(),
@@ -535,6 +541,31 @@ impl Default for ClockConfig {
             ntp_servers: vec!["pool.ntp.org".into()],
             time_format: TimeFormat::H24,
         }
+    }
+}
+
+/// Sound on a TermOS image (`[sound]`, D-128): PipeWire with WirePlumber.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(default, deny_unknown_fields, rename_all = "kebab-case")]
+pub struct SoundConfig {
+    /// The output to make the default at start, by name or part of it
+    /// (`"HDMI"`, a headset's name); empty: the one WirePlumber chose
+    /// last.
+    pub device: String,
+}
+
+/// Bluetooth on a TermOS image (`[bluetooth]`, D-128): BlueZ.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(default, deny_unknown_fields, rename_all = "kebab-case")]
+pub struct BluetoothConfig {
+    /// Turn the adapter on at start (the Bluetooth page turns it on and
+    /// off while running).
+    pub enabled: bool,
+}
+
+impl Default for BluetoothConfig {
+    fn default() -> Self {
+        Self { enabled: true }
     }
 }
 
@@ -1093,6 +1124,12 @@ critical = 5             # percent: suspend after a 30-second countdown (0: neve
 ntp-servers = ["pool.ntp.org"]   # the image's time sync
 time-format = "24h"      # 24h | 12h, for the status clock
 
+[sound]
+device = ""              # the output to use at start, by name or part of it ("" : the last one)
+
+[bluetooth]
+enabled = true           # turn Bluetooth on at start
+
 [gallery]
 # Themes, layouts and widgets, signed (termos gallery list; docs/gallery.md).
 index = "https://raw.githubusercontent.com/sovr610/termos-gallery/main/index.json"
@@ -1236,6 +1273,14 @@ repeat-rate = 25         # repeats per second
 # font = "/usr/share/fonts/myfont.ttf"   # default: built-in DejaVu Sans Mono
 # bold-font = "/usr/share/fonts/myfont-bold.ttf"
 # fallback-fonts = ["/usr/share/fonts/noto/NotoSansCJK-Regular.ttc"]
+audible-bell = false     # the bell also beeps (through PipeWire)
+displays = "extend"      # several displays: extend (a workspace each) | mirror
+# [[kms.display]]        # one per display to set up, by connector name
+# name = "HDMI-A-1"
+# mode = "1920x1080@60"  # or "preferred"
+# scale = 1.25           # text size, relative to the display's density
+# enabled = true
+# primary = true         # the first workspace, keys and pointer start here
 
 # WASM status-line widgets (see docs/widgets.md). Each runs sandboxed: no
 # network, no files except the folders in `dirs` (read-only).
@@ -1456,6 +1501,11 @@ position = "top"
         assert_eq!(c.clock.time_format.pattern(), "%-I:%M %p");
         assert!(parse("[power]\nlid = \"hibernate\"\n").is_err());
         assert!(parse("[clock]\ntime-format = \"25h\"\n").is_err());
+        let c = parse("[sound]\ndevice = \"HDMI\"\n[bluetooth]\nenabled = false\n").expect("valid");
+        assert_eq!(c.sound.device, "HDMI");
+        assert!(!c.bluetooth.enabled);
+        assert!(Config::default().bluetooth.enabled);
+        assert!(parse("[sound]\nvolume = 50\n").is_err());
         assert!(valid_ntp_server("pool.ntp.org"));
         assert!(valid_ntp_server("2001:db8::1"));
         assert!(!valid_ntp_server("-q"));

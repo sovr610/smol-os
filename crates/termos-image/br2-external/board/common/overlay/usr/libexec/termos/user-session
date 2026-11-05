@@ -1,0 +1,19 @@
+#!/bin/sh
+# As the user termos, from the session (D-075): what the console's
+# desktop needs running first, then the console. tty1 respawns the session
+# when the console stops; what is already running here is left alone.
+#
+# The session bus (WirePlumber and PipeWire use it), then PipeWire, which
+# starts its session manager, WirePlumber, itself (D-128: the image has no
+# systemd to start them).
+run=$XDG_RUNTIME_DIR
+bus="$run/bus"
+if [ ! -S "$bus" ]; then
+	dbus-daemon --session --address="unix:path=$bus" --fork --nopidfile ||
+		echo "termos: no session bus" >&2
+fi
+export DBUS_SESSION_BUS_ADDRESS="unix:path=$bus"
+if [ ! -S "$run/pipewire-0" ] && command -v pipewire >/dev/null; then
+	pipewire >/dev/null 2>&1 &
+fi
+exec /usr/bin/termos --kms

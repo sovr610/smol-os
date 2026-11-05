@@ -1,0 +1,13 @@
+---
+source: crates/termos-apps/src/bluetooth.rs
+expression: render(&mut tab)
+---
+ Bluetooth (termos: on, scanning)
+
+   MX Keys                     keyboard    connected
+   WH-1000XM4                  headset     ▂▄▆█
+
+
+
+
+ ↑↓ choose · Enter pair/connect · d disconnect · f forget · s scan · p power

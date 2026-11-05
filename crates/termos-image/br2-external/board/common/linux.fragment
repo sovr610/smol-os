@@ -83,6 +83,28 @@ CONFIG_USB_STORAGE=y
 CONFIG_USB_XHCI_HCD=y
 CONFIG_USB_EHCI_HCD=y
 
+# Sound (D-128): ALSA for PipeWire; HD Audio (PCs, and QEMU's intel-hda
+# in the boot tests), USB audio, virtio sound. HDMI audio comes with the
+# display drivers.
+CONFIG_SOUND=y
+CONFIG_SND=y
+CONFIG_SND_HDA_INTEL=y
+CONFIG_SND_HDA_GENERIC=y
+CONFIG_SND_HDA_CODEC_REALTEK=y
+CONFIG_SND_HDA_CODEC_HDMI=y
+CONFIG_SND_USB_AUDIO=y
+CONFIG_SND_VIRTIO=y
+
+# Bluetooth (D-128): BlueZ's kernel side, classic and LE; keyboards and
+# mice (HID, and HID over GATT through uhid); headsets (RFCOMM for their
+# controls). The boards add their adapters' drivers.
+CONFIG_BT=y
+CONFIG_BT_BREDR=y
+CONFIG_BT_LE=y
+CONFIG_BT_RFCOMM=y
+CONFIG_BT_HIDP=y
+CONFIG_UHID=y
+
 # The image as a computer (D-124): suspend to RAM or idle; the backlight;
 # the lid as a switch for libinput; USB drives with FAT, exFAT, ext4 and
 # NTFS (the kernel's ntfs3); GPT disks.

@@ -2,6 +2,8 @@
 source: crates/termos-apps/src/network.rs
 expression: render(&mut page)
 ---
+ Connections   Bluetooth   (Tab switches)
+
  Connections
    eth0      wired   connected       10.0.2.15/24  fec0::5054:ff:fe12:
    wlan0     Wi-Fi   not connected
@@ -10,8 +12,6 @@ expression: render(&mut page)
    Home                      WPA     ▂▄▆█  saved
    Library                   open    ▂▄▆
    Neighbours                WPA     ▂
-
-
 
 
 

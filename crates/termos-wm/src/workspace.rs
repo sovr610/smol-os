@@ -616,6 +616,14 @@ impl Session {
         idx
     }
 
+    /// Makes `idx` active without counting it as a switch (no `last`):
+    /// the desktop showing one client's own workspace (D-128).
+    pub fn set_active(&mut self, idx: usize) {
+        if idx < self.workspaces.len() {
+            self.active = idx;
+        }
+    }
+
     pub fn select(&mut self, idx: usize) -> bool {
         if idx >= self.workspaces.len() {
             return false;

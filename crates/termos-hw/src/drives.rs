@@ -234,6 +234,13 @@ impl Uevent {
     pub fn is_block(&self) -> bool {
         self.subsystem == "block" && matches!(self.action.as_str(), "add" | "remove" | "change")
     }
+
+    /// A display was plugged in or out (a DRM card's hotplug, D-128).
+    pub fn is_display_hotplug(&self) -> bool {
+        self.subsystem == "drm"
+            && self.action == "change"
+            && self.properties.get("HOTPLUG").map(String::as_str) == Some("1")
+    }
 }
 
 /// udev's netlink header: "libudev\0", a magic number, then the header's
@@ -289,8 +296,16 @@ pub fn parse_uevent(msg: &[u8]) -> Option<Uevent> {
 /// Listens to udev's events on a thread of its own, which sleeps in the
 /// kernel until one comes, and passes each block device's to `on_event`.
 /// It stops when `on_event` returns `false`.
-#[cfg(target_os = "linux")]
 pub fn listen(
+    on_event: impl FnMut(Uevent) -> bool + Send + 'static,
+) -> std::io::Result<std::thread::JoinHandle<()>> {
+    listen_where(Uevent::is_block, on_event)
+}
+
+/// [`listen`] for the events `wanted` picks.
+#[cfg(target_os = "linux")]
+pub fn listen_where(
+    wanted: fn(&Uevent) -> bool,
     mut on_event: impl FnMut(Uevent) -> bool + Send + 'static,
 ) -> std::io::Result<std::thread::JoinHandle<()>> {
     use rustix::net::netlink::{self, SocketAddrNetlink};
@@ -317,7 +332,7 @@ pub fn listen(
                     }
                 };
                 if let Some(ev) = parse_uevent(&buf[..n.min(buf.len())])
-                    && ev.is_block()
+                    && wanted(&ev)
                     && !on_event(ev)
                 {
                     return;
@@ -328,7 +343,8 @@ pub fn listen(
 
 /// Elsewhere there are no udev events.
 #[cfg(not(target_os = "linux"))]
-pub fn listen(
+pub fn listen_where(
+    _wanted: fn(&Uevent) -> bool,
     _on_event: impl FnMut(Uevent) -> bool + Send + 'static,
 ) -> std::io::Result<std::thread::JoinHandle<()>> {
     Err(std::io::Error::new(
@@ -442,6 +458,9 @@ mod tests {
             Some("STICK")
         );
         assert!(ev.is_block());
+        assert!(!ev.is_display_hotplug());
+        let drm = b"change@/devices/x/drm/card0\0ACTION=change\0SUBSYSTEM=drm\0HOTPLUG=1\0DEVNAME=dri/card0\0";
+        assert!(parse_uevent(drm).expect("drm").is_display_hotplug());
 
         let kernel = b"remove@/devices/x/sdb\0ACTION=remove\0SUBSYSTEM=block\0DEVNAME=sdb\0";
         let ev = parse_uevent(kernel).expect("the kernel's");

@@ -394,6 +394,16 @@ fn image(args: &[String]) -> Result<()> {
                         )
                     )
                 );
+                println!(
+                    "xtask: {} ({}): displays {}; sound {}; Bluetooth {}",
+                    t.name,
+                    f.name(),
+                    r.displays
+                        .as_ref()
+                        .map_or_else(|| "not reported".to_owned(), |d| d.join(", ")),
+                    r.sound.as_deref().unwrap_or("not reported"),
+                    r.bluetooth.as_deref().unwrap_or("not reported"),
+                );
                 let problems = r.problems();
                 if !problems.is_empty() {
                     println!("xtask: the serial log ends with:\n{}", r.tail);

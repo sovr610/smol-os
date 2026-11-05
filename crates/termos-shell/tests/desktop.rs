@@ -1900,3 +1900,86 @@ async fn sessions_start_on_the_desktop() {
         "a new workspace is a desktop too"
     );
 }
+
+#[tokio::test]
+async fn displays_of_their_own_show_their_own_workspaces() {
+    let mut h = Harness::new("");
+    let display = |cols, rows| ClientMsg::Hello {
+        version: termos_core::proto::PROTOCOL_VERSION,
+        caps: Caps {
+            own_workspace: true,
+            term: "termos-kms".into(),
+            ..Caps::default()
+        },
+        cols,
+        rows,
+    };
+    const D1: ClientId = ClientId(5);
+    const D2: ClientId = ClientId(6);
+    h.desktop.handle_client(D1, display(100, 30));
+    h.desktop.handle_client(D2, display(80, 24));
+    // The terminal shows the session's workspace; each display gets a new
+    // one of its own.
+    assert_eq!(h.desktop.session().workspaces.len(), 3);
+    assert_eq!(
+        h.desktop.shown_workspace(C),
+        0,
+        "the terminal follows the session"
+    );
+    assert_eq!(h.desktop.shown_workspace(D1), 1);
+    assert_eq!(h.desktop.shown_workspace(D2), 2);
+    // Each is drawn at its own size.
+    let mut g = Grid::new(1, 1);
+    h.desktop.render(D1, &mut g);
+    assert_eq!((g.cols(), g.rows()), (100, 30));
+    h.desktop.render(D2, &mut g);
+    assert_eq!((g.cols(), g.rows()), (80, 24));
+    h.screen();
+    assert_eq!(
+        (h.grid.cols(), h.grid.rows()),
+        (COLS, ROWS),
+        "the session keeps the terminal's size"
+    );
+    // The first display picks the second's workspace: they swap.
+    for spec in ["C-b", "2"] {
+        let k: KeyEvent = spec.parse().expect("key");
+        h.desktop.handle_client(D1, ClientMsg::Key(k));
+    }
+    assert_eq!(h.desktop.shown_workspace(D1), 2);
+    assert_eq!(h.desktop.shown_workspace(D2), 1);
+    assert_eq!(h.desktop.shown_workspace(C), 0, "the terminal is not moved");
+    // A display that goes leaves the other as it was.
+    h.desktop.detach_client(D2);
+    assert_eq!(h.desktop.shown_workspace(D1), 2);
+}
+
+/// The console's keys run commands (the volume keys, D-128), and a config
+/// reload tells every client to read the config again.
+#[tokio::test]
+async fn clients_run_commands_and_hear_of_reloads() {
+    let mut h = Harness::new("");
+    let before = h.desktop.session().workspaces.len();
+    h.desktop
+        .handle_client(C, ClientMsg::Command("workspace.new".into()));
+    assert_eq!(h.desktop.session().workspaces.len(), before + 1);
+    h.desktop
+        .handle_client(C, ClientMsg::Command("no.such-command".into()));
+    assert!(
+        h.desktop.toast().is_some(),
+        "an unknown command is reported"
+    );
+    // Off an image the volume is the host's: said, not done.
+    h.desktop
+        .handle_client(C, ClientMsg::Command("sound.mute".into()));
+    if !std::path::Path::new("/etc/termos/board").exists() {
+        assert_eq!(h.desktop.toast(), Some("the volume is the host system's"));
+    }
+    h.desktop.take_outbox();
+    h.desktop.reload_config();
+    let out = h.desktop.take_outbox();
+    assert!(
+        out.iter()
+            .any(|(to, m)| to.is_none() && matches!(m, ServerMsg::Reconfigure)),
+        "{out:?}"
+    );
+}

@@ -55,6 +55,7 @@ mod attend;
 mod find;
 mod menus;
 pub(crate) mod power;
+mod sound;
 mod tools;
 mod wall;
 
@@ -358,6 +359,9 @@ enum Hover {
 #[derive(Debug)]
 struct ClientUi {
     caps: Caps,
+    /// The workspace this client shows, when it has one of its own (a
+    /// display in extend mode, D-128); `None`: the session's.
+    own: Option<usize>,
     /// This client's theme: `[theme]` for its terminal's background, or
     /// the one it picked with `theme.select`.
     theme: Theme,
@@ -408,6 +412,7 @@ impl Default for ClientUi {
     fn default() -> Self {
         Self {
             caps: Caps::default(),
+            own: None,
             theme: Theme::default(),
             theme_pick: None,
             pixel_images: Vec::new(),
@@ -547,11 +552,16 @@ pub struct Desktop {
     sync: std::collections::BTreeSet<PaneId>,
     /// Panes being recorded.
     recordings: BTreeMap<PaneId, tools::Recording>,
+    /// While a client with its own workspace is served: the session's
+    /// active workspace and size, which [`Desktop::leave`] puts back.
+    shared: Option<(usize, u16, u16)>,
     /// The battery in the status line, and whether it is low (D-124).
     battery: Option<(String, bool)>,
     /// The machine has a battery to read (once a minute).
     battery_present: bool,
     battery_deadline: Option<Instant>,
+    /// The volume in the status line (an image with sound, D-128).
+    sound: sound::Sound,
     low: power::Low,
     /// The critical battery's countdown to suspend.
     critical_at: Option<Instant>,
@@ -704,9 +714,11 @@ impl Desktop {
             quick_back: None,
             sync: std::collections::BTreeSet::new(),
             recordings: BTreeMap::new(),
+            shared: None,
             battery: None,
             battery_present: false,
             battery_deadline: None,
+            sound: sound::Sound::default(),
             low: power::Low::Fine,
             critical_at: None,
             config,
@@ -717,6 +729,25 @@ impl Desktop {
         if d.opts.power {
             d.battery_present = !termos_hw::power::read().batteries.is_empty();
             d.read_battery(Instant::now());
+            if power::on_image() {
+                d.start_sound();
+                // `[bluetooth] enabled`, once (bluetoothd starts before
+                // the session on the image).
+                let on = d.config.bluetooth.enabled;
+                let spawned = std::thread::Builder::new()
+                    .name("termos-bluetooth".into())
+                    .spawn(move || {
+                        if let Err(e) = termos_apps::bluetooth::set_power(on) {
+                            tracing::info!(
+                                "Bluetooth not turned {}: {e}",
+                                if on { "on" } else { "off" }
+                            );
+                        }
+                    });
+                if let Err(e) = spawned {
+                    tracing::warn!("cannot start a thread for Bluetooth: {e}");
+                }
+            }
         }
         for e in key_errors {
             d.notify(Level::Warn, e);
@@ -1068,6 +1099,17 @@ impl Desktop {
         }
     }
 
+    /// The workspace `client` shows: its own (a display in extend mode),
+    /// else the session's.
+    pub fn shown_workspace(&self, client: ClientId) -> usize {
+        self.ui_of(client)
+            .and_then(|u| u.own)
+            .unwrap_or_else(|| match self.shared {
+                Some((w, _, _)) => w,
+                None => self.session.active_index(),
+            })
+    }
+
     pub fn palette_open(&self, client: ClientId) -> bool {
         self.ui_of(client).is_some_and(|u| u.palette.is_some())
     }
@@ -1118,7 +1160,10 @@ impl Desktop {
     /// Whether `id` is one of this desktop's panes (or its wallpaper's
     /// decode, which wakes it the same way).
     pub fn has_pane(&self, id: PaneId) -> bool {
-        self.panes.contains_key(&id) || self.is_wallpaper(id)
+        self.panes.contains_key(&id)
+            || self.is_wallpaper(id)
+            || self.is_search_wake(id)
+            || self.is_sound_wake(id)
     }
 
     /// Takes messages for clients: `Some(id)` for one client, `None` for all.
@@ -1386,7 +1431,20 @@ impl Desktop {
                 pid.parse().ok(),
                 self.config.processes.confirm,
             )),
-            Command::NetworkOpen => Box::new(termos_apps::NetworkPage::open()),
+            Command::NetworkOpen => Box::new(termos_apps::NetworkPage::open(
+                termos_apps::network::Page::Connections,
+                Some(self.opts.config_path.clone()),
+            )),
+            Command::BluetoothOpen => Box::new(termos_apps::NetworkPage::open(
+                termos_apps::network::Page::Bluetooth,
+                Some(self.opts.config_path.clone()),
+            )),
+            Command::DisplaysOpen => Box::new(termos_apps::DisplaysPage::open(
+                self.opts.config_path.clone(),
+            )),
+            Command::SoundOpen => Box::new(termos_apps::SoundPage::open(Some(
+                self.opts.config_path.clone(),
+            ))),
             Command::SettingsOpen => {
                 Box::new(termos_apps::Settings::open(self.opts.config_path.clone()))
             }
@@ -2090,6 +2148,7 @@ impl Desktop {
                     self.quit = Some("the last pane was closed".into());
                 } else {
                     self.session.remove(ws_idx);
+                    self.workspace_removed(ws_idx);
                 }
             }
         }
@@ -2254,18 +2313,90 @@ impl Desktop {
             Some(ui) => {
                 self.ui = ui;
                 self.current = Some(client);
+                // A display with a workspace of its own: that workspace,
+                // at that display's size, while it is served (D-128).
+                if let Some(w) = self.ui.own {
+                    let w = w.min(self.session.workspaces.len().saturating_sub(1));
+                    self.shared = Some((self.session.active_index(), self.cols, self.rows));
+                    self.session.set_active(w);
+                    self.cols = self.ui.cols;
+                    self.rows = self.ui.rows;
+                }
                 true
             }
             None => false,
         }
     }
 
-    /// Puts the served client's UI state back.
+    /// Puts the served client's UI state back (and the session's own
+    /// workspace and size, after a client with its own).
     fn leave(&mut self) {
         if let Some(client) = self.current.take() {
-            let ui = std::mem::take(&mut self.ui);
+            let mut ui = std::mem::take(&mut self.ui);
+            if let Some((shared, cols, rows)) = self.shared.take() {
+                let now = self.session.active_index();
+                let before = ui.own.unwrap_or(now);
+                ui.own = Some(now);
+                // A workspace shows on one display at a time: the one that
+                // showed it takes this one's previous workspace.
+                if now != before {
+                    for other in self.clients.values_mut() {
+                        if other.own == Some(now) {
+                            other.own = Some(before);
+                        }
+                    }
+                }
+                let last = self.session.workspaces.len().saturating_sub(1);
+                self.session.set_active(shared.min(last));
+                self.cols = cols;
+                self.rows = rows;
+            }
             self.clients.insert(client, ui);
         }
+    }
+
+    /// After workspace `removed` went: the displays' own workspaces that
+    /// came after it move down one.
+    fn workspace_removed(&mut self, removed: usize) {
+        let last = self.session.workspaces.len().saturating_sub(1);
+        if let Some((w, _, _)) = self.shared.as_mut() {
+            if *w > removed {
+                *w -= 1;
+            }
+            *w = (*w).min(last);
+        }
+        for ui in self
+            .clients
+            .values_mut()
+            .chain(std::iter::once(&mut self.ui))
+        {
+            if let Some(w) = ui.own.as_mut() {
+                if *w > removed {
+                    *w -= 1;
+                }
+                *w = (*w).min(last);
+            }
+        }
+    }
+
+    /// A workspace for a new display of its own: one no other display
+    /// shows (nor the clients that follow the session), else a new one.
+    fn own_workspace_for_new_display(&mut self) -> usize {
+        let mut shown: Vec<usize> = self.clients.values().filter_map(|u| u.own).collect();
+        if self.clients.values().any(|u| u.own.is_none()) {
+            shown.push(self.session.active_index());
+        }
+        let first_free = std::iter::once(self.session.active_index())
+            .chain(0..self.session.workspaces.len())
+            .find(|w| !shown.contains(w));
+        if let Some(w) = first_free {
+            return w;
+        }
+        let before = self.session.active_index();
+        self.run(Command::WorkspaceNew);
+        let new = self.session.active_index();
+        self.session.set_active(before);
+        new
     }
 
     /// Detaches a client (it disconnected or was detached).
@@ -2323,20 +2454,45 @@ impl Desktop {
     /// The session size under the `window-size` policy (and the panes'
     /// default colours, which follow the same client).
     fn recompute_size(&mut self) {
+        // A display with its own size is being served: the session's size
+        // is worked out with the session's own state in place.
+        if self.shared.is_some() {
+            let current = self.current;
+            self.leave();
+            self.recompute_size();
+            if let Some(c) = current {
+                self.enter(c);
+            }
+            return;
+        }
         self.update_term_colors();
-        let sizes: Vec<(u16, u16)> = self
+        let all: Vec<&ClientUi> = self
             .clients
             .values()
             .chain(self.current.map(|_| &self.ui))
+            .collect();
+        // Displays with their own workspace keep their own size; the
+        // session's follows the others (or, with none, the largest).
+        let shared: Vec<(u16, u16)> = all
+            .iter()
+            .filter(|u| u.own.is_none())
             .map(|u| (u.cols, u.rows))
             .collect();
-        if sizes.is_empty() {
+        if shared.is_empty() {
+            let largest = all.iter().map(|u| (u.cols, u.rows)).max();
+            if let Some((cols, rows)) = largest
+                && (cols.max(2), rows.max(2)) != (self.cols, self.rows)
+            {
+                self.resize(cols, rows);
+            }
             return;
         }
+        let sizes = shared;
         let (cols, rows) = match self.config.session.window_size {
             WindowSize::Latest => self
                 .last_active
                 .and_then(|c| self.ui_of(c))
+                .filter(|u| u.own.is_none())
                 .map_or(sizes[sizes.len() - 1], |u| (u.cols, u.rows)),
             WindowSize::Smallest => (
                 sizes.iter().map(|s| s.0).min().unwrap_or(80),
@@ -2359,7 +2515,16 @@ impl Desktop {
         } = &msg
         {
             self.leave();
+            let own = if caps.own_workspace {
+                match self.clients.get(&client).and_then(|u| u.own) {
+                    Some(w) => Some(w),
+                    None => Some(self.own_workspace_for_new_display()),
+                }
+            } else {
+                None
+            };
             let ui = self.clients.entry(client).or_default();
+            ui.own = own;
             ui.caps = caps.clone();
             ui.theme = client_theme(&self.config, ui.theme_pick, caps);
             ui.cols = (*cols).max(2);
@@ -2438,6 +2603,12 @@ impl Desktop {
                     pty.write(bytes);
                 }
             }
+            ClientMsg::Command(text) => match text.parse::<Command>() {
+                Ok(cmd) => self.run(cmd),
+                Err(e) => self.notify(Level::Warn, e.to_string()),
+            },
+            // The server detaches the client itself.
+            ClientMsg::Bye => {}
         }
         self.after_focus_change();
         self.leave();
@@ -3113,7 +3284,12 @@ impl Desktop {
             }
             Command::Task(name) => self.open_task(&name, area),
             Command::GitOpen => self.open_git(area),
-            Command::MonitorOpen | Command::NetworkOpen | Command::ProcessesOpen(_) => {
+            Command::MonitorOpen
+            | Command::NetworkOpen
+            | Command::ProcessesOpen(_)
+            | Command::BluetoothOpen
+            | Command::SoundOpen
+            | Command::DisplaysOpen => {
                 if let Some(app) = self.build_app(&cmd) {
                     self.open_app(app);
                 }
@@ -3206,6 +3382,9 @@ impl Desktop {
             Command::SystemRestart => self.ask_power_off(crate::prompt::PowerOff::Restart),
             Command::SystemPowerOff => self.ask_power_off(crate::prompt::PowerOff::PowerOff),
             Command::DisplayBrightness(d) => self.change_brightness(d),
+            Command::SoundVolume(d) => self.sound_command(sound::SoundChange::Volume(d)),
+            Command::SoundMute => self.sound_command(sound::SoundChange::Mute),
+            Command::SoundRefresh => self.sound_command(sound::SoundChange::Refresh),
             Command::ClockZone(z) => self.set_time_zone(&z),
             Command::WorktreeReview(name) => {
                 // A review of it already open comes forward instead.
@@ -3514,6 +3693,8 @@ impl Desktop {
     /// Re-reads config.toml and applies it; a broken file keeps the
     /// current settings and reports where the problem is.
     pub fn reload_config(&mut self) {
+        // A console sets its displays up again from the new config.
+        self.outbox.push((None, ServerMsg::Reconfigure));
         match Config::load(&self.opts.config_path) {
             Ok(config) => {
                 let (keys, errors) = KeyTables::from_config(&config);
@@ -4055,6 +4236,8 @@ impl Desktop {
                     self.wallpaper_woke();
                 } else if self.is_search_wake(id) {
                     self.search_woke();
+                } else if self.is_sound_wake(id) {
+                    self.sound_woke();
                 } else if self.panes.contains_key(&id) {
                     self.dirty = true;
                 }
@@ -4350,6 +4533,7 @@ impl Desktop {
                     .to_string()
             }),
             battery: self.battery.clone(),
+            volume: self.volume_status(),
             widgets: &self.status_widgets,
             prompt: self
                 .ui

@@ -450,6 +450,37 @@ async fn control_api_drives_sessions_and_panes() {
     assert_eq!(list.as_array().map(Vec::len), Some(1));
 }
 
+/// A display the console lets go says Bye: the server detaches that
+/// client at once, though its connection is still open (D-128).
+#[tokio::test]
+async fn a_client_that_says_bye_is_let_go() {
+    let srv = start().await;
+    let mut s = Screen::attach(&srv.socket, frontend(None, true), 80, 24).await;
+    s.ready().await;
+    let display = Caps {
+        own_workspace: true,
+        ..Caps::default()
+    };
+    let second =
+        Screen::attach_with(&srv.socket, frontend(Some("main"), false), 100, 30, display).await;
+    let clients = || {
+        let socket = srv.socket.clone();
+        async move { call(&socket, "session.list", json!({})).await[0]["clients"].clone() }
+    };
+    assert_eq!(clients().await, 2);
+    second.client.tx.send(ClientMsg::Bye).expect("send");
+    let mut left = false;
+    for _ in 0..50 {
+        if clients().await == 1 {
+            left = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(left, "the display's client is still attached");
+    drop(second);
+}
+
 #[tokio::test]
 async fn clients_switch_sessions_and_move_when_one_ends() {
     let srv = start().await;

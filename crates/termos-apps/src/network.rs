@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! Network (D-081): the machine's links with their addresses and, where iwd
-//! runs (TermOS images, D-072), its Wi-Fi networks.
+//! runs (TermOS images, D-072), its Wi-Fi networks; and, on its second
+//! page, Bluetooth ([`crate::bluetooth`], D-128). Tab switches pages.
 //!
 //! Joining a network writes iwd's file for it through `termos system
 //! wifi-add`, the passphrase on its input, never in its arguments; iwd then
@@ -9,6 +10,7 @@
 //! `netdev`). Everything slow happens on a thread; the page refreshes
 //! itself only while it is on screen (D-028).
 
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -63,6 +65,13 @@ struct Shared {
     message: Option<String>,
 }
 
+/// The window's pages.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Page {
+    Connections,
+    Bluetooth,
+}
+
 pub struct NetworkPage {
     backend: Arc<dyn Backend>,
     shared: Arc<Mutex<Shared>>,
@@ -71,6 +80,11 @@ pub struct NetworkPage {
     /// The network a passphrase is being typed for, and what is typed.
     entering: Option<(String, SecretString)>,
     next: Option<Instant>,
+    page: Page,
+    /// Made when first shown.
+    bluetooth: Option<crate::bluetooth::BluetoothTab>,
+    /// Where `[bluetooth] enabled` is saved.
+    config: Option<PathBuf>,
 }
 
 impl std::fmt::Debug for NetworkPage {
@@ -93,9 +107,15 @@ pub fn bars(dbm: i16) -> &'static str {
 }
 
 impl NetworkPage {
-    /// The page for this machine.
-    pub fn open() -> Self {
-        Self::with_backend(Arc::new(System))
+    /// The window for this machine, on `page`; `config` is where the
+    /// Bluetooth page saves `[bluetooth] enabled`.
+    pub fn open(page: Page, config: Option<PathBuf>) -> Self {
+        let mut p = Self::with_backend(Arc::new(System));
+        p.config = config;
+        if page == Page::Bluetooth {
+            p.show_bluetooth(crate::bluetooth::BluetoothTab::open(p.config.clone()));
+        }
+        p
     }
 
     pub fn with_backend(backend: Arc<dyn Backend>) -> Self {
@@ -106,6 +126,37 @@ impl NetworkPage {
             selected: 0,
             entering: None,
             next: None,
+            page: Page::Connections,
+            bluetooth: None,
+            config: None,
+        }
+    }
+
+    /// Shows the Bluetooth page: `tab` the first time (tests give their
+    /// own), the one made before after that.
+    pub fn show_bluetooth(&mut self, tab: crate::bluetooth::BluetoothTab) {
+        self.page = Page::Bluetooth;
+        let waker = self.waker.lock().ok().and_then(|w| w.clone());
+        let t = self.bluetooth.get_or_insert(tab);
+        // Reads now (and registers the pairing agent the first time).
+        if let Some(w) = waker {
+            t.set_waker(w);
+        }
+    }
+
+    fn switch(&mut self) {
+        match self.page {
+            Page::Bluetooth => {
+                self.page = Page::Connections;
+                if self.waker.lock().is_ok_and(|w| w.is_some()) {
+                    self.refresh(Duration::ZERO);
+                    self.next = Some(Instant::now() + INTERVAL);
+                }
+            }
+            Page::Connections => {
+                let tab = crate::bluetooth::BluetoothTab::open(self.config.clone());
+                self.show_bluetooth(tab);
+            }
         }
     }
 
@@ -220,7 +271,13 @@ impl NetworkPage {
 
 impl App for NetworkPage {
     fn reopen(&self) -> Option<String> {
-        Some("network.open".to_owned())
+        Some(
+            match self.page {
+                Page::Connections => "network.open",
+                Page::Bluetooth => "bluetooth.open",
+            }
+            .to_owned(),
+        )
     }
 
     fn icon(&self) -> termos_render::icons::Icon {
@@ -234,6 +291,26 @@ impl App for NetworkPage {
     fn handle_key(&mut self, key: KeyEvent) -> AppEffect {
         if self.entering.is_some() {
             return self.passphrase_key(key);
+        }
+        if self.page == Page::Bluetooth
+            && let Some(t) = self.bluetooth.as_mut()
+        {
+            // A pairing question takes every key.
+            if t.asking() {
+                return t.handle_key(key);
+            }
+            return match key.code {
+                KeyCode::Tab => {
+                    self.switch();
+                    AppEffect::Redraw
+                }
+                KeyCode::Esc | KeyCode::Char('q') => AppEffect::Close,
+                _ => t.handle_key(key),
+            };
+        }
+        if key.code == KeyCode::Tab {
+            self.switch();
+            return AppEffect::Redraw;
         }
         let networks = self.networks();
         match key.code {
@@ -303,6 +380,75 @@ impl App for NetworkPage {
     }
 
     fn render(&mut self, area: TuiRect, buf: &mut Buffer, theme: &Theme) {
+        if area.height < 6 || area.width < 30 {
+            return;
+        }
+        // The pages, then the one shown.
+        let c = &theme.colors;
+        let mut x = area.x + 1;
+        for (p, name) in [
+            (Page::Connections, "Connections"),
+            (Page::Bluetooth, "Bluetooth"),
+        ] {
+            let style = if p == self.page {
+                Style::new()
+                    .fg(c.accent)
+                    .attrs(Attrs::BOLD | Attrs::UNDERLINE)
+            } else {
+                Style::new().fg(c.muted)
+            };
+            buf.set_stringn(x, area.y, name, usize::from(area.width), tui_style(style));
+            x += name.len() as u16 + 3;
+        }
+        buf.set_stringn(
+            x,
+            area.y,
+            "(Tab switches)",
+            usize::from((area.x + area.width).saturating_sub(x)),
+            tui_style(Style::new().fg(c.muted)),
+        );
+        let body = TuiRect::new(area.x, area.y + 2, area.width, area.height - 2);
+        match (self.page, self.bluetooth.as_mut()) {
+            (Page::Bluetooth, Some(t)) => t.render(body, buf, theme),
+            _ => self.render_connections(body, buf, theme),
+        }
+    }
+
+    fn set_waker(&mut self, waker: AppWaker) {
+        if let Ok(mut w) = self.waker.lock() {
+            *w = Some(waker.clone());
+        }
+        match (self.page, self.bluetooth.as_mut()) {
+            (Page::Bluetooth, Some(t)) => t.set_waker(waker),
+            _ => {
+                self.refresh(Duration::ZERO);
+                self.next = Some(Instant::now() + INTERVAL);
+            }
+        }
+    }
+
+    fn deadline(&self) -> Option<Instant> {
+        match (self.page, self.bluetooth.as_ref()) {
+            (Page::Bluetooth, Some(t)) => t.next,
+            _ => self.next,
+        }
+    }
+
+    fn on_timer(&mut self, now: Instant) -> AppEffect {
+        match (self.page, self.bluetooth.as_mut()) {
+            (Page::Bluetooth, Some(t)) => t.on_timer(now),
+            _ => {
+                self.refresh(Duration::ZERO);
+                self.next = Some(now + INTERVAL);
+            }
+        }
+        AppEffect::None
+    }
+}
+
+impl NetworkPage {
+    /// The Connections page: the links, then Wi-Fi.
+    fn render_connections(&mut self, area: TuiRect, buf: &mut Buffer, theme: &Theme) {
         if area.height < 4 || area.width < 30 {
             return;
         }
@@ -475,24 +621,6 @@ impl App for NetworkPage {
             width,
             tui_style(Style::new().fg(c.muted)),
         );
-    }
-
-    fn set_waker(&mut self, waker: AppWaker) {
-        if let Ok(mut w) = self.waker.lock() {
-            *w = Some(waker);
-        }
-        self.refresh(Duration::ZERO);
-        self.next = Some(Instant::now() + INTERVAL);
-    }
-
-    fn deadline(&self) -> Option<Instant> {
-        self.next
-    }
-
-    fn on_timer(&mut self, now: Instant) -> AppEffect {
-        self.refresh(Duration::ZERO);
-        self.next = Some(now + INTERVAL);
-        AppEffect::None
     }
 }
 

@@ -24,7 +24,7 @@ use crate::input::{KeyEvent, MouseEvent};
 /// - 5: system notifications (`ServerMsg::Notify`).
 /// - 6: links (`Cell::link`, `FrameUpdate::links`, `ServerMsg::Open`;
 ///   M13a, D-118).
-pub const PROTOCOL_VERSION: u32 = 6;
+pub const PROTOCOL_VERSION: u32 = 7;
 
 /// A frame for one client: the cells that changed since the last frame this
 /// client received, plus where the cursor goes.
@@ -88,6 +88,12 @@ pub enum ClientMsg {
         kind: KeyKind,
         alternates: KeyAlternates,
     },
+    /// A desktop command for this client, as typed in the palette: keys
+    /// the desktop has no key for, such as a console's media keys (M13e,
+    /// D-128).
+    Command(String),
+    /// The client is going (a display unplugged): detach it now.
+    Bye,
 }
 
 /// Server → frontend.
@@ -138,6 +144,9 @@ pub enum ServerMsg {
     /// critical battery). The console does both, so the lock is up before
     /// the machine sleeps.
     Suspend,
+    /// The config was reloaded: a console sets its displays up again
+    /// (M13e, D-128).
+    Reconfigure,
     /// The Kitty keyboard flags beyond disambiguation (2, 4, 8, 16) the
     /// program in this client's focused pane asked for. A client whose
     /// terminal speaks the protocol sets them there (D-103).

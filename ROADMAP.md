@@ -42,10 +42,10 @@ questions (DECISIONS.md, "Open questions").
 | M13a | Links, hints, search and finished commands: programs' links and paths clickable, hint mode, search across panes, alerts when a long command finishes (D-117, D-118) | 🚧 |
 | M13b | Layouts and workspace tools: layout files, a drop-down terminal, typing into several panes, saved commands, SSH hosts, pane recording (D-117, D-119, D-120) | 🚧 |
 | M13c | Processes and files: a process manager; bookmarks, two panes, search, archives, git status, bulk rename and disk usage in Files (D-117, D-121, D-122) | 🚧 |
-| M13d | The image as a computer: lock screen, power menu, battery, brightness and lid, clock and time zones, USB drives, GPT disks, AMD graphics (D-117) | ⏳ |
-| M13e | The image's hardware: several displays and hotplug, Bluetooth, sound (D-117) | ⏳ |
+| M13d | The image as a computer: lock screen, power menu, battery, brightness and lid, clock and time zones, USB drives, GPT disks, AMD graphics (D-117, D-123, D-124) | 🚧 |
+| M13e | The image's hardware: several displays and hotplug, Bluetooth, sound (D-117, D-127, D-128) | 🚧 |
 | M13f | Accessibility and translations: a screen-reader mode, speech on the console, the interface in other languages (D-117) | ⏳ |
-| M13g | Packages, a gallery, settings that move: Homebrew, winget, Scoop, .deb, .rpm, AUR, Nix; plugins, widgets and themes to install; settings export and import (D-117) | ⏳ |
+| M13g | Packages, a gallery, settings that move: Homebrew, winget, Scoop, .deb, .rpm, AUR, Nix; plugins, widgets and themes to install; settings export and import (D-117, D-125, D-126) | 🚧 |
 | M9b | Platform gaps: the Windows agent sandbox and input, snapshots and sensors on macOS and Windows, Kitty keyboard flags, app windows in sessions, the KMS console's clipboard, bell and images (D-077, D-101–D-108) | 🔍 |
 
 Unfinished work in code is always a `TODO(M<n>)` marker (D-018). The
@@ -1235,12 +1235,14 @@ Nothing M11a adds runs while idle: the shims run only when `claude` or `codex` s
 ---
 
 ## M13e — The image's hardware
-**Status:** ⏳ proposed (D-117; plan: [docs/plans/m13-os.md](docs/plans/m13-os.md#m13e--on-the-image-displays-bluetooth-sound)) · Ask first: several displays extended or mirrored; ALSA or PipeWire; Bluetooth audio in this milestone or input devices only.
+**Status:** 🚧 in progress: built and tested here (`cargo xtask ci` green); the image is not built or booted with it yet · Owner answers (D-127): extend by default, PipeWire, Bluetooth audio in this milestone. Design: D-128, ARCHITECTURE.md §5.9, §6, §9 and §13; user guide [bare-metal.md](docs/bare-metal.md#bluetooth).
 
 **Deliverables**
 - [ ] Every connected display driven, with hotplug, per-display mode and scale, a Displays page; extend or mirror.
 - [ ] Bluetooth: power, scan, pair, connect and forget, from the Network app.
 - [ ] Sound: volume and mute in the status line, media keys, a Sound page, an audible bell.
+
+**Still to do:** build the images (the `images` workflow) and boot them, which runs the new boot-test checks (the displays report, the volume read back, BlueZ answering); two lit displays, plugging in and out, real Bluetooth keyboards, mice and headsets, and speakers, by hand, listed in bare-metal.md as they are tried; the Pi 4's latency with two displays.
 
 ---
 

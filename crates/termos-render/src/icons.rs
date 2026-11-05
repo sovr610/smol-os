@@ -85,6 +85,9 @@ pub enum Icon {
     ImageViewer,
     Markdown,
     Git,
+    /// Sound and Displays (M13e).
+    Sound,
+    Display,
     // Actions.
     Build,
     Run,
@@ -163,6 +166,8 @@ impl Icon {
             Icon::ImageViewer | Icon::Image => "▧",
             Icon::Markdown | Icon::Text => "≡",
             Icon::Git => "±",
+            Icon::Sound => "◁",
+            Icon::Display => "▯",
             Icon::Build => "▲",
             Icon::Run => "▷",
             Icon::Test => "✓",
@@ -214,6 +219,8 @@ impl Icon {
             Icon::ImageViewer | Icon::Image => "\u{f03e}",
             Icon::Markdown | Icon::Text => "\u{f15c}",
             Icon::Git => "\u{f1d3}",
+            Icon::Sound => "\u{f028}",
+            Icon::Display => "\u{f26c}",
             Icon::Build => "\u{f0ad}",
             Icon::Run => "\u{f04b}",
             Icon::Test => "\u{f00c}",
@@ -257,6 +264,8 @@ impl Icon {
             Icon::Keys => "k",
             Icon::ImageViewer | Icon::Image => "~",
             Icon::Git => "+",
+            Icon::Sound => ")",
+            Icon::Display => "[",
             Icon::Run => ">",
             Icon::Test => "v",
             Icon::Rename => "e",
@@ -297,7 +306,7 @@ impl Icon {
     }
 
     /// Every icon (for tests and previews).
-    pub const ALL: [Icon; 50] = [
+    pub const ALL: [Icon; 52] = [
         Icon::Menu,
         Icon::Terminal,
         Icon::FloatingTerminal,
@@ -327,6 +336,8 @@ impl Icon {
         Icon::ImageViewer,
         Icon::Markdown,
         Icon::Git,
+        Icon::Sound,
+        Icon::Display,
         Icon::Build,
         Icon::Run,
         Icon::Test,

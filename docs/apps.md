@@ -11,6 +11,9 @@ move, resize, minimize or tile like any other. Open them from the palette
 | System monitor | "System monitor" | `monitor.open` | |
 | Clipboard history | "Clipboard history" | `clipboard.open` | prefix `=` |
 | Network | "Network: connections and Wi-Fi" | `network.open` | |
+| Bluetooth (Network's second page; TermOS images) | "Bluetooth: pair and connect devices" | `bluetooth.open` | |
+| Sound (TermOS images) | "Sound: outputs and their volumes" | `sound.open` | |
+| Displays (TermOS images) | "Displays: modes, scale, order, mirror or extend" | `displays.open` | |
 | Updates (a window running `termos update install`) | "Updates: install a newer TermOS" | `update.open` | |
 | Settings | "Settings" | `settings.open` | |
 | Packages ([packages.md](packages.md)) | "Packages" | `packages.open` | |
@@ -220,6 +223,11 @@ range follow, strongest first, with their security and signal.
 A saved network is joined whenever it is in range. Elsewhere (TermOS in a
 terminal) Wi-Fi belongs to the system's own network tools, and the page
 shows the connections only.
+
+`Tab` switches to the Bluetooth page, and back. Bluetooth, Sound and
+Displays are for TermOS machines and are described in
+[bare-metal.md](bare-metal.md#bluetooth); in a terminal they say the host
+system has them.
 
 ## Gallery
 

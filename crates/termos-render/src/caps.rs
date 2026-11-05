@@ -110,6 +110,10 @@ pub struct Caps {
     pub remote: bool,
     /// The user asked for reduced motion (`TERMOS_REDUCED_MOTION=1`).
     pub reduced_motion: bool,
+    /// A display of the image's console in extend mode (M13e, D-128): it
+    /// shows a workspace of its own, laid out at its own size, instead of
+    /// the session's.
+    pub own_workspace: bool,
 }
 
 impl Default for Caps {
@@ -128,6 +132,7 @@ impl Default for Caps {
             in_tmux: false,
             remote: false,
             reduced_motion: false,
+            own_workspace: false,
         }
     }
 }

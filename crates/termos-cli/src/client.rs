@@ -234,7 +234,7 @@ pub(crate) async fn run(
                 Some(ServerMsg::Open { url }) => crate::opener::open(&url),
                 // The host system locks and sleeps a terminal's machine
                 // (D-123); the desktop sends these only to a console.
-                Some(ServerMsg::Lock | ServerMsg::Suspend) => {}
+                Some(ServerMsg::Lock | ServerMsg::Suspend | ServerMsg::Reconfigure) => {}
                 Some(ServerMsg::Title(t)) => {
                     out.write_all(&set_title(&t))?;
                     out.flush()?;

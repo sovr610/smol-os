@@ -1,0 +1,12 @@
+---
+source: crates/termos-apps/src/sound.rs
+expression: "crate::testing::render_text(&mut page, 72, 8)"
+---
+ Outputs
+
+ ● Built-in Audio Analog Stereo          ██████░░░░░░░░░░ 40%
+   WH-1000XM4                            ░░░░░░░░░░░░░░░░ muted
+
+
+
+ ↑↓ choose · Enter play here · ←→ volume · m mute · Esc close

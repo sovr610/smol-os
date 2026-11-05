@@ -1600,6 +1600,11 @@ impl Server {
                     _ => {}
                 }
                 let key = conn.session;
+                if matches!(msg, ClientMsg::Bye) {
+                    // A display that went (D-128): as if it disconnected.
+                    self.remove_client(client);
+                    return;
+                }
                 let hello = matches!(msg, ClientMsg::Hello { .. });
                 let question = (hello && self.ask == Ask::Pending && !self.saved.is_empty())
                     .then(|| self.restore_question());

@@ -158,26 +158,33 @@ impl Desktop {
             Entry::item("Rename this session", Command::SessionRename),
             Entry::item("Restore saved sessions", Command::SessionRestore),
         ]);
+        let mut apps = vec![
+            Entry::item("Files", Command::FilesOpen(String::new())),
+            Entry::item("System monitor", Command::MonitorOpen),
+            Entry::item("Processes", Command::ProcessesOpen(String::new())),
+            Entry::item("Clipboard history", Command::ClipboardOpen),
+            Entry::item("Packages", Command::PackagesOpen),
+            Entry::item("Network", Command::NetworkOpen),
+        ];
+        // The machine's hardware is the host system's in a terminal.
+        if power::on_image() {
+            apps.extend([
+                Entry::item("Bluetooth", Command::BluetoothOpen),
+                Entry::item("Sound", Command::SoundOpen),
+                Entry::item("Displays", Command::DisplaysOpen),
+            ]);
+        }
+        apps.extend([
+            Entry::item("Updates", Command::UpdateOpen),
+            Entry::item("Settings", Command::SettingsOpen),
+            Entry::item("Gallery", Command::GalleryOpen),
+        ]);
         let mut v = vec![
             Entry::item("New terminal", Command::Split(SplitHow::Auto)),
             Entry::item("New floating terminal", Command::NewFloat),
             Entry::item("Drop-down terminal", Command::QuickToggle),
             Entry::Separator,
-            Entry::submenu(
-                "Apps",
-                vec![
-                    Entry::item("Files", Command::FilesOpen(String::new())),
-                    Entry::item("System monitor", Command::MonitorOpen),
-                    Entry::item("Processes", Command::ProcessesOpen(String::new())),
-                    Entry::item("Clipboard history", Command::ClipboardOpen),
-                    Entry::item("Packages", Command::PackagesOpen),
-                    Entry::item("Network", Command::NetworkOpen),
-                    Entry::item("Updates", Command::UpdateOpen),
-                    Entry::item("Settings", Command::SettingsOpen),
-                    Entry::item("Gallery", Command::GalleryOpen),
-                ],
-            )
-            .icon(Icon::Apps),
+            Entry::submenu("Apps", apps).icon(Icon::Apps),
             Entry::submenu("AI agents", agents).icon(Icon::Agent),
             Entry::item("Command center", Command::CenterOpen),
             Entry::submenu(

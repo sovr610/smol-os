@@ -20,7 +20,10 @@
 //! manager UI (M5).
 
 pub mod archive;
+pub mod bluetooth;
 pub mod clipboard;
+pub mod config_edit;
+pub mod displays;
 pub mod drives;
 pub mod du;
 pub mod files;
@@ -36,14 +39,17 @@ pub mod procs;
 pub mod rename;
 pub mod settings;
 pub mod settings_io;
+pub mod sound;
 
 pub use clipboard::ClipboardManager;
+pub use displays::DisplaysPage;
 pub use files::{FileManager, Files, FilesOptions};
 pub use image_viewer::ImageViewer;
 pub use markdown::MarkdownViewer;
 pub use monitor::SystemMonitor;
 pub use network::NetworkPage;
 pub use settings::Settings;
+pub use sound::SoundPage;
 
 /// Drawing apps in tests: the text of an app rendered at a size.
 #[cfg(test)]

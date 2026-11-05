@@ -231,6 +231,8 @@ text). For each client and image the desktop decides how to show it:
 - **Devices:** libseat for the display and input devices (VT switches give them up and take them back), libinput and XKB for the keyboard and mouse; the hardware cursor for the pointer.
 - **Damage:** only changed cells are repainted, and only their rows are copied out.
 - **The lock screen (M13d, D-124):** the console draws it into pixels of its own (the clock, the date, a password field), sends the server nothing while it shows, and refuses VT switches (`termos system vt-lock` sets `VT_LOCKSWITCH` too). It locks on `ServerMsg::Lock`, the lock key, `[lock] after-minutes` without input, the lid (libinput's switch) and before suspending (`ServerMsg::Suspend`), and a file in the runtime folder keeps it locked across restarts. Passwords are checked by `sudo termos system check-password` (sha512crypt against `/etc/shadow`) on a thread, with longer waits after three failures. The console also owns the brightness keys and, on battery, idle suspend: deadlines, not polls; none without a battery.
+- **Several displays (M13e, D-127, D-128):** every connected display is driven, in the order and modes `[[kms.display]]` gives (`kms/outputs.rs`: primary first, preferred mode, text sized for each display's density). In `extend` mode (the default) the first display is the console's own client of the session and each further one opens a client of its own whose `Caps.own_workspace` gets it a workspace of its own (§6); in `mirror` mode the first display's changed rows are copied to the others. The pointer moves across them left to right and the keys follow it; the lock screen covers all of them. udev's DRM hotplug events (the drive watcher's netlink socket) and `ServerMsg::Reconfigure` after a config reload make it plan again; a display that goes says `ClientMsg::Bye`, and the console starts again if the first one goes or mirror and extend switch.
+- **Media keys (D-128):** the volume keys become `sound.volume ±5` and `sound.mute` (`ClientMsg::Command`); `[kms] audible-bell` also beeps through PipeWire's `pw-play`.
 
 ---
 
@@ -258,6 +260,7 @@ Window = { id, title, source: Pty | App | Plugin | Agent, state: normal | minimi
   - **Menus** (`termos_shell::menu`): the TermOS menu behind the status line's start button (and prefix `Enter`, the `menu` command), and context menus on a right-click in a pane, on a floating title bar or on a tab. A menu is a stack of levels; the pointer selects, an item with a submenu opens it beside, a press runs an item and a press elsewhere closes. Every item is a named command and shows its key. Menus are per client and take all input while open.
   - **Hover:** each client keeps what the pointer is over (a menu row, a window button, a status-line target); a motion event redraws only when that changes, so a still or slowly moving pointer costs nothing.
   - **Double clicks** (two presses on one cell within 400 ms): a floating title maximizes or restores (the size before is remembered), a tab opens its rename prompt. The palette and the key list take clicks and the wheel; the status line has `+` (new workspace) and a clickable message (the notification center).
+- **Clients and workspaces:** a session's clients share its active workspace and its size (the smallest client's, or the latest's), as tmux's do. A client whose capabilities say `own_workspace` (a further display of the console in extend mode, D-128) gets a workspace no other display shows, and its own size; the desktop swaps them in while it handles that client, and switching to a workspace another such display shows swaps the two.
 - **Snapping:** drag a window to a screen edge or corner to get halves or quarters; snap commands do the same from the keyboard. Minimized windows go to a task strip in the status bar.
 - **Commands:** every action is a named command, such as `pane.split-right`, `pane.resize-left 5` or `layout.select tiled`. Commands can be bound in config, run from the palette (Ctrl+Space or prefix `:`, fuzzy-matched) and called over JSON-RPC (`termos msg pane.split-right`). The which-key overlay lists the bindings available after the prefix.
 - **tmux-style keys (D-023):** prefix `C-b`, then tmux's default keys (`%`, `"`, arrows, `z`, `x`, `c`, `n`, `p`, `0`–`9`, `[`, `]`, …), plus TermOS keys for floats (`f`, `F`, `m`, `M`). Resize keys repeat without the prefix for `repeat-time-ms`. A TermOS *workspace* is a tmux *window* (a tab in the status line); a *pane* is a tmux *pane*.
@@ -329,6 +332,8 @@ Window = { id, title, source: Pty | App | Plugin | Agent, state: normal | minimi
 - **Agents (§11):** `[agents]` (providers, profiles, MCP servers, external agents) and `[secrets] store`; keys are named (`keyring:<name>`), never written.
 - **Settings app:** writes config.toml itself (toml_edit, comments kept), only after the result parses as a config.
 - **Network app (D-081):** links from `termos_hw::net` (sysfs and `sysinfo`); on images, Wi-Fi through iwd's D-Bus interface (zbus), networks saved as iwd's files through `termos system wifi-add`, the passphrase on its standard input.
+  - **Bluetooth (D-128),** its second page: BlueZ over zbus (power, scan, pair, trust, connect, forget). While the page is open TermOS serves BlueZ's pairing agent (`org.bluez.Agent1`), whose questions are asked and answered on the page.
+- **Sound and Displays (D-128):** the Sound page lists PipeWire's outputs through `wpctl` (`termos_hw::sound`) and makes one the default (`[sound] device`); the Displays page edits `[[kms.display]]` and `[kms] displays` from sysfs's connectors (`termos_apps::config_edit` keeps the file's comments). The desktop shows the volume in the status line on images, read at start and after each change, never on a timer.
 - **Selected rows** draw their text in the theme's `fg` (`ThemeColors::selected`): every preset's text colours are tested against their backgrounds, AAA for high contrast and AA otherwise.
 - **Session persistence (D-011, D-033):**
   - **Where:** snapshots go to `$XDG_STATE_HOME/termos/sessions/<server>/<session>.json`, with a versioned schema, mode 0600, written atomically.
@@ -483,7 +488,7 @@ termos-ai holds all of it; the CLI hands the server a launcher for its windows (
 
 ---
 
-## 13. Bare-metal image (M8–M9, M13d; D-072, D-074–D-080, D-124)
+## 13. Bare-metal image (M8–M9, M13d–M13e; D-072, D-074–D-080, D-124, D-128)
 
 - **Build (D-074):** Buildroot 2026.02.1 (pinned, checksum-checked) with the `BR2_EXTERNAL` tree in `crates/termos-image/br2-external/`. Each target is one of Buildroot's board defconfigs plus TermOS fragments (the Bootlin glibc toolchain, D-014; packages; overlay; layout); every fragment setting is checked after `olddefconfig`. `termos` (with `kms`) is built by cargo with the pinned Rust, linked by Buildroot's GCC against the image's sysroot, and installed by a small package. `cargo xtask image list|build|boot`.
 - **Targets:**
@@ -495,18 +500,20 @@ termos-ai holds all of it; the CLI hands the server a launcher for its windows (
   1. firmware → GRUB2 (a Pi: its firmware) → the kernel on the boot partition (KMS drivers: virtio-gpu, simpledrm, bochs, vc4/v3d; i915 and amdgpu as the board configs have them);
   2. BusyBox init (D-072);
   3. mounts: the read-only squashfs root in the chosen slot, the data partition on `/data` (`/home`, iwd's networks, D-Bus's machine ID and dhcpcd's leases bound from it; `/etc/shadow` and `/etc/localtime` link into `/data/etc`, D-124), a tmpfs on `/media` for USB drives;
-  4. eudev, D-Bus, BusyBox ntpd (`[clock] ntp-servers`), iwd, dhcpcd, seatd;
-  5. `termos --kms` on tty1 as the user `termos`, respawned if it stops;
+  4. eudev, D-Bus, BusyBox ntpd (`[clock] ntp-servers`), iwd, dhcpcd, BlueZ's bluetoothd (pairings on the data partition, D-128), seatd;
+  5. on tty1 as the user `termos`, respawned if it stops: a session bus and PipeWire, which starts WirePlumber (D-128), then `termos --kms`;
   6. first-run setup (the tutorial);
   7. once the console's first frame is up, the booted slot is marked good (D-078).
 - **Partitions (D-124):** GPT on x86_64 (with a BIOS boot partition for GRUB's core image) and aarch64-virt, MBR on Pis (and on disks installed before M13d): boot, rootfs A, rootfs B, data (label `termos-data`). GRUB passes the `PARTUUID` of the slot on its own disk (`probe --part-uuid`); boot scripts find that disk's other partitions by GPT name or MBR number, and RAUC's configuration is written from them at boot. `termos install` gives an installed GPT disk new ids. The data partition holds home, Wi-Fi networks, the dev rootfs (under the home), and later models and containers. Updates (M9) are atomic A/B with RAUC (D-078): signed bundles, the kernel inside each slot, and boot-loader fallback (GRUB's environment; the Pi's tryboot).
 - **Updates (D-078):** `termos update` checks GitHub Releases only when asked, downloads a RAUC bundle (verity, signed, `compatible=termos-<target>`) and has `termos system` (root, through one sudo rule) install it into the other slot. GRUB runs RAUC's slot-selection script over a `grubenv` on the boot partition and loads the kernel from the chosen slot's squashfs; a Pi uses RAUC's custom backend over the firmware's tryboot, with each slot's boot files under `slot-a/` and `slot-b/`. A slot that is not marked good within five minutes, or panics, is tried once and then left for the other.
 - **Install (D-080):** the x86_64 live ISO (xorriso after the disk image; GRUB for BIOS, USB and UEFI) runs the root file system as an initramfs (`termos.live`: no disk touched) and carries the disk image, which `termos install` writes to a whole disk. Any image grows its data partition to the end of its disk on first boot.
 - **The machine (D-124):** a lock screen in the console (§5.9); a Power menu (lock, suspend, restart, shut down); the battery in the status line (`termos_hw::power`) with low-battery steps; brightness through the backlight's sysfs file (group `video`, a udev rule); tzdata with `termos system set-time-zone`; USB drives from udev's netlink events and sysfs (`termos_hw::drives`), mounted by `termos system mount` on `/media/LABEL`; amdgpu as a module with its firmware on x86_64.
-- **QEMU boot tests (D-076):** x86_64 (OVMF and SeaBIOS) and aarch64 virt (AAVMF) with virtio-gpu as the only display.
+- **Displays, sound and Bluetooth (D-128):** every connected display (§5.9); PipeWire with WirePlumber on ALSA (HD Audio, USB, virtio and HDMI audio); BlueZ with its audio, HID and HoG plugins, so keyboards, mice and headsets pair; Intel, Realtek and MediaTek Bluetooth firmware on PCs and the Broadcom chip's on Pis, their drivers as modules.
+- **QEMU boot tests (D-076):** x86_64 (OVMF and SeaBIOS) and aarch64 virt (AAVMF) with virtio-gpu (two heads, of which QEMU lights only the first without a window) and an HD Audio card with no host audio (D-128).
   - TermOS prints `TERMOS-READY` on the serial console after its first frame.
   - The harness takes a QMP `screendump` and checks the desktop's structure: not blank, and the status bar row present.
   - Idle RAM is reported by the image after it settles, asked for through `fw_cfg`, and must stay under 150 MB (D-019).
+  - The console reports its displays; the desktop's user sets the volume and mutes through PipeWire and must read them back; BlueZ must answer that user (D-128).
   - The disk is a qcow2 overlay 1 GiB bigger than the image, so the data partition's growth is checked too. `--update` installs a newer bundle over HTTP and starts it, then a broken one and sees the fallback; `--install` installs from the ISO onto an empty disk, which then starts alone with each firmware.
 
 ---

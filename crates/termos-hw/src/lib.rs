@@ -30,6 +30,7 @@ pub mod net;
 mod nvidia;
 pub mod power;
 pub mod procs;
+pub mod sound;
 pub mod sysfs;
 
 pub use gpu::GpuVendor;

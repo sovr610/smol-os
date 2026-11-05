@@ -147,10 +147,83 @@ fn read(path: &Path) -> Option<String> {
     std::fs::read_to_string(path).ok()
 }
 
+/// A display connector (`/sys/class/drm/card0-HDMI-A-1`), for the
+/// Displays page (D-128); the console itself asks the card.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DrmConnector {
+    /// `HDMI-A-1`, as the kernel names it.
+    pub name: String,
+    pub connected: bool,
+    /// `1920x1080`, …, the preferred first, each once.
+    pub modes: Vec<String>,
+}
+
+/// Every connector of every card under `root` (normally `/`), by card,
+/// then name.
+pub fn drm_connectors(root: &Path) -> Vec<DrmConnector> {
+    let Ok(entries) = std::fs::read_dir(root.join("sys/class/drm")) else {
+        return Vec::new();
+    };
+    let mut found: Vec<(u32, DrmConnector)> = entries
+        .flatten()
+        .filter_map(|e| {
+            let dir = e.file_name().to_string_lossy().into_owned();
+            let (card, name) = dir.strip_prefix("card")?.split_once('-')?;
+            let card: u32 = card.parse().ok()?;
+            let status = read(&e.path().join("status"))?;
+            let mut modes: Vec<String> = Vec::new();
+            for m in read(&e.path().join("modes")).unwrap_or_default().lines() {
+                let m = m.trim();
+                if !m.is_empty() && !modes.iter().any(|x| x == m) {
+                    modes.push(m.to_owned());
+                }
+            }
+            Some((
+                card,
+                DrmConnector {
+                    name: name.to_owned(),
+                    connected: status.trim() == "connected",
+                    modes,
+                },
+            ))
+        })
+        .collect();
+    found.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.name.cmp(&b.1.name)));
+    found.into_iter().map(|(_, c)| c).collect()
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
     use std::path::PathBuf;
+
+    #[test]
+    fn connectors_are_read_with_their_modes() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let drm = dir.path().join("sys/class/drm");
+        let put = |c: &str, status: &str, modes: &str| {
+            let d = drm.join(c);
+            std::fs::create_dir_all(&d).expect("mkdir");
+            std::fs::write(d.join("status"), status).expect("write");
+            std::fs::write(d.join("modes"), modes).expect("write");
+        };
+        put(
+            "card1-HDMI-A-1",
+            "connected\n",
+            "1920x1080\n1920x1080\n1280x720\n",
+        );
+        put("card1-DP-1", "disconnected\n", "");
+        put("card0-Virtual-1", "connected\n", "1024x768\n");
+        std::fs::create_dir_all(drm.join("card0")).expect("a card, not a connector");
+        std::fs::create_dir_all(drm.join("renderD128")).expect("not a connector");
+        let c = drm_connectors(dir.path());
+        let names: Vec<&str> = c.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(names, ["Virtual-1", "DP-1", "HDMI-A-1"]);
+        assert!(c[0].connected);
+        assert!(!c[1].connected);
+        assert_eq!(c[2].modes, ["1920x1080", "1280x720"]);
+        assert!(drm_connectors(&dir.path().join("none")).is_empty());
+    }
 
     /// Writes a fake `/sys/class/drm/<card>/device` tree.
     pub(crate) fn card(root: &Path, card: &str, files: &[(&str, &str)]) -> PathBuf {

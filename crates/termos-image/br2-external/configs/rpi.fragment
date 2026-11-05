@@ -1,3 +1,8 @@
 # Raspberry Pi (64-bit): Buildroot's board support, TermOS's partitions.
 BR2_TOOLCHAIN_EXTERNAL_BOOTLIN_AARCH64_GLIBC_STABLE=y
 BR2_LINUX_KERNEL_CONFIG_FRAGMENT_FILES="$(BR2_EXTERNAL_TERMOS_PATH)/board/common/linux.fragment $(BR2_EXTERNAL_TERMOS_PATH)/board/rpi/linux.fragment"
+# The Broadcom chip's firmware (D-128): Bluetooth, and Wi-Fi, which the
+# board's defconfig left out.
+BR2_PACKAGE_BRCMFMAC_SDIO_FIRMWARE_RPI=y
+BR2_PACKAGE_BRCMFMAC_SDIO_FIRMWARE_RPI_BT=y
+BR2_PACKAGE_BRCMFMAC_SDIO_FIRMWARE_RPI_WIFI=y

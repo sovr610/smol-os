@@ -403,6 +403,7 @@ mod tests {
             ServerMsg::KeyboardFlags(2 | 4),
             ServerMsg::Lock,
             ServerMsg::Suspend,
+            ServerMsg::Reconfigure,
             ServerMsg::Bell,
             ServerMsg::Notify {
                 title: "claude needs you".into(),
@@ -460,6 +461,10 @@ mod tests {
         };
         d.push(&encode_frame(&detail).expect("encodes"));
         assert_eq!(d.next_frame::<ClientMsg>(), Ok(Some(detail)));
+        for msg in [ClientMsg::Command("sound.volume +5".into()), ClientMsg::Bye] {
+            d.push(&encode_frame(&msg).expect("encodes"));
+            assert_eq!(d.next_frame::<ClientMsg>(), Ok(Some(msg)));
+        }
     }
 
     #[test]

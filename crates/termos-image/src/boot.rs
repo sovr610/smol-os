@@ -10,7 +10,9 @@
 //!    status bar row at the bottom;
 //! 3. the image reports `MemTotal − MemAvailable` after settling, under
 //!    the budget (150 MB, D-019);
-//! 4. the data partition has grown into the extra space (D-080).
+//! 4. the data partition has grown into the extra space (D-080);
+//! 5. the console reports its displays, the volume set through PipeWire
+//!    reads back, and BlueZ answers the desktop's user (D-128).
 //!
 //! QEMU asks for those reports through `fw_cfg` (`opt/termos/boottest`, the
 //! seconds to wait), so the image itself is not changed for the test.
@@ -123,14 +125,23 @@ pub fn qemu_args(
     a.extend([
         "-vga".into(),
         "none".into(),
+        // Two heads (D-128): QEMU turns on only the first without a display
+        // window, so the console sees one connected, one not.
         "-device".into(),
-        "virtio-gpu-pci".into(),
+        "virtio-gpu-pci,max_outputs=2".into(),
         "-device".into(),
         "virtio-keyboard-pci".into(),
         "-device".into(),
         "virtio-tablet-pci".into(),
         "-nic".into(),
         "user,model=virtio-net-pci".into(),
+        // A sound card with no host audio behind it (D-128).
+        "-audiodev".into(),
+        "none,id=snd".into(),
+        "-device".into(),
+        "intel-hda".into(),
+        "-device".into(),
+        "hda-duplex,audiodev=snd".into(),
         "-display".into(),
         "none".into(),
         "-serial".into(),
@@ -202,6 +213,11 @@ pub struct Report {
     pub curl: Option<String>,
     /// Whether the desktop's user can make the dev rootfs (D-110).
     pub devroot: Option<String>,
+    /// The console's displays, the volume read back, BlueZ's answer
+    /// (D-128).
+    pub displays: Option<Vec<String>>,
+    pub sound: Option<String>,
+    pub bluetooth: Option<String>,
     /// The end of the serial log, shown when something failed.
     pub tail: String,
 }
@@ -461,6 +477,9 @@ pub fn boot(images: &Path, t: &Target, firmware: Firmware, dir: &Path) -> Result
         slot: serial::slot(&log),
         curl: serial::curl(&log),
         devroot,
+        displays: serial::displays(&log),
+        sound: serial::sound(&log),
+        bluetooth: serial::bluetooth(&log),
         tail: serial::tail(&log, 40),
     })
 }
@@ -495,6 +514,21 @@ impl Report {
             Some(d) if d == "bubblewrap: ready" => {}
             Some(d) => p.push(format!("the dev rootfs cannot run: {d}")),
             None => p.push("no TERMOS-DEVROOT report".into()),
+        }
+        match &self.displays {
+            Some(d) if !d.is_empty() => {}
+            Some(_) => p.push("the console drives no display".into()),
+            None => p.push("no TERMOS-DISPLAYS line".into()),
+        }
+        match self.sound.as_deref() {
+            Some("volume=40 muted=yes") => {}
+            Some(s) => p.push(format!("the volume did not read back as set: {s}")),
+            None => p.push("no TERMOS-SOUND report".into()),
+        }
+        match self.bluetooth.as_deref() {
+            Some("ok") => {}
+            Some(b) => p.push(format!("Bluetooth: {b}")),
+            None => p.push("no TERMOS-BLUETOOTH report".into()),
         }
         match &self.slot {
             Some(s) if s.good => {}
@@ -822,7 +856,14 @@ mod tests {
             "{s}"
         );
         assert!(s.ends_with("-no-reboot"), "{s}");
-        assert!(s.contains("-vga none -device virtio-gpu-pci"), "{s}");
+        assert!(
+            s.contains("-vga none -device virtio-gpu-pci,max_outputs=2"),
+            "{s}"
+        );
+        assert!(
+            s.contains("-audiodev none,id=snd -device intel-hda -device hda-duplex,audiodev=snd"),
+            "{s}"
+        );
         assert!(s.contains("-serial file:/w/serial-uefi.log"), "{s}");
         assert!(
             s.contains("-fw_cfg name=opt/termos/boottest,string=60"),

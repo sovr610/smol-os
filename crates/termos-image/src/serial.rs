@@ -6,7 +6,9 @@
 //! when the booted slot is marked; `TERMOS-UPDATE installed into slot …`
 //! after `termos update install`; `TERMOS-CURL` and curl's version line
 //! (D-109); `TERMOS-DEVROOT` and whether the dev rootfs can be made
-//! (D-110).
+//! (D-110); `TERMOS-DISPLAYS n names…` each time the console plans its
+//! displays, `TERMOS-SOUND volume=… muted=…` and `TERMOS-BLUETOOTH ok`
+//! (D-128).
 
 /// The console's first frame is up.
 pub const READY: &str = "TERMOS-READY";
@@ -61,6 +63,31 @@ pub fn curl(log: &str) -> Option<String> {
 /// (`bubblewrap: ready`, or why not).
 pub fn devroot(log: &str) -> Option<String> {
     report(log, "TERMOS-DEVROOT ")
+}
+
+/// The console's displays, from its last `TERMOS-DISPLAYS` line (it plans
+/// them before its first frame, and again when one is plugged in).
+pub fn displays(log: &str) -> Option<Vec<String>> {
+    let line = log
+        .lines()
+        .rev()
+        .find_map(|l| l.split_once("TERMOS-DISPLAYS "))?
+        .1;
+    let mut words = line.split_whitespace();
+    let n: usize = words.next()?.parse().ok()?;
+    let names: Vec<String> = words.map(str::to_owned).collect();
+    (names.len() == n).then_some(names)
+}
+
+/// The volume and mute read back after setting them
+/// (`volume=40 muted=yes`), or what went wrong.
+pub fn sound(log: &str) -> Option<String> {
+    report(log, "TERMOS-SOUND ")
+}
+
+/// Whether BlueZ answered the desktop's user (`ok`).
+pub fn bluetooth(log: &str) -> Option<String> {
+    report(log, "TERMOS-BLUETOOTH ")
 }
 
 /// The rest of the first `tag` line after `READY`.
@@ -204,6 +231,30 @@ mod tests {
         assert_eq!(
             memory("TERMOS-READY\nTERMOS-MEM used_kb=x total_kb=2\n"),
             None
+        );
+    }
+
+    #[test]
+    fn displays_sound_and_bluetooth_are_read() {
+        let log = "TERMOS-DISPLAYS 1 Virtual-1\r\nTERMOS-READY\r\n\
+                   TERMOS-DISPLAYS 2 Virtual-1 Virtual-2\r\n\
+                   TERMOS-SOUND volume=40 muted=yes\r\nTERMOS-BLUETOOTH ok\r\n";
+        assert_eq!(
+            displays(log),
+            Some(vec!["Virtual-1".to_owned(), "Virtual-2".to_owned()])
+        );
+        assert_eq!(
+            displays("TERMOS-DISPLAYS 2 Virtual-1\n"),
+            None,
+            "a count that does not match"
+        );
+        assert_eq!(displays("TERMOS-READY\n"), None);
+        assert_eq!(sound(log).as_deref(), Some("volume=40 muted=yes"));
+        assert_eq!(bluetooth(log).as_deref(), Some("ok"));
+        assert_eq!(
+            sound("TERMOS-SOUND volume=40 muted=yes\nTERMOS-READY\n"),
+            None,
+            "only after READY"
         );
     }
 }

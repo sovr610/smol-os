@@ -22,6 +22,19 @@ mkdir -p /run/termos
 	df -kP /data | awk 'NR == 2 { printf "TERMOS-DATA size_kb=%d\n", $2 }' >/dev/console
 	# The HTTPS client TermOS downloads with (D-109).
 	echo "TERMOS-CURL $(curl --version 2>&1 | head -n 1)" >/dev/console
+	# Sound (D-128): the desktop's user sets the volume and mutes through
+	# PipeWire, then reads them back (QEMU gives an HD Audio card).
+	out=$(su -s /bin/sh -c 'export XDG_RUNTIME_DIR=/run/user/$(id -u)
+		s=@DEFAULT_AUDIO_SINK@
+		wpctl set-volume $s 0.40 && wpctl set-mute $s 1 && wpctl get-volume $s' termos 2>&1 | tail -n 1)
+	echo "TERMOS-SOUND $(echo "$out" | awk '/^Volume:/ { printf "volume=%d muted=%s", $2 * 100 + 0.5, (/MUTED/ ? "yes" : "no"); next } { print }')" >/dev/console
+	# Bluetooth (D-128): BlueZ answers the desktop's user (QEMU has no
+	# adapter, so this is the daemon and its D-Bus policy).
+	if su -s /bin/sh -c 'dbus-send --system --print-reply --dest=org.bluez / org.freedesktop.DBus.ObjectManager.GetManagedObjects' termos >/dev/null 2>&1; then
+		echo "TERMOS-BLUETOOTH ok" >/dev/console
+	else
+		echo "TERMOS-BLUETOOTH bluetoothd did not answer" >/dev/console
+	fi
 	# Whether the desktop's user can make the dev rootfs (D-110).
 	echo "TERMOS-DEVROOT $(su -s /bin/sh -c 'termos devroot status' termos 2>&1 | grep bubblewrap:)" >/dev/console
 	if [ -r "$cfg/boottest-update/raw" ]; then

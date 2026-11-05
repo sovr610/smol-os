@@ -1621,6 +1621,73 @@ rewrite history.
   - **A themes folder TermOS scans:** `[theme] name` names one, so nothing changes by itself.
   - **Exporting the accounts index:** it holds budgets and labels only, but importing it would describe folders and sign-ins the new machine does not have.
 
+
+---
+
+## D-127: M13e owner answers: extend, PipeWire, Bluetooth audio now
+- **Status:** Accepted · 2026-11-05
+- **Context:** M13e's "Ask first" questions (D-117, docs/plans/m13-os.md).
+- **Decision:** the plan's answers, chosen by the owner:
+  - **Several displays extend** the desktop by default: each display after the first shows a workspace of its own. `[kms] displays = "mirror"` shows the first display's picture on all of them.
+  - **Sound is PipeWire** with WirePlumber, on ALSA: larger than ALSA alone, but Bluetooth audio needs it.
+  - **Bluetooth audio is in this milestone**, with keyboards and mice: headsets and speakers pair and play.
+- **Alternatives:** mirror by default (simpler, but a second screen then adds nothing); ALSA alone (a few MB smaller, no Bluetooth audio); Bluetooth input devices only for now.
+
+---
+
+## D-128: The image's hardware: several displays, sound, Bluetooth
+- **Status:** Accepted · 2026-11-05
+- **Context:** M13e (D-117) with D-127's answers.
+- **Decision:**
+  - **Planning the displays (`kms/outputs.rs`):**
+    - **Which:** every connected connector with modes, minus those `[[kms.display]]` turns off (`enabled = false`). If all are off, the first stays on.
+    - **Order:** the `primary` one first, then the configured ones in their order, then the rest in the card's order. They sit left to right in that order.
+    - **Mode:** `mode` is `preferred` (the default), `WxH` (its fastest refresh) or `WxH@HZ`; an unknown one falls back to the preferred mode, with a warning.
+    - **Text size:** `[kms] font-size` is for 96 dpi. Each display scales it by its density (its width in pixels over its width in mm, in quarter steps from 1× to 3×), times its own `scale`.
+  - **Extend (the default):**
+    - **Clients:** the first display is the console's existing connection, a client like a terminal, sharing the session's active workspace. Each further display opens a connection of its own to the same session and says `own_workspace` in its capabilities (`Caps`).
+    - **Workspaces:** the server gives such a client a workspace of its own: one no other display shows, or a new one. `Desktop::enter` and `leave` swap the session's active workspace and size for that client's while its input and frames are handled, so the rest of the desktop is unchanged.
+    - **Switching:** a display that switches to a workspace another display shows swaps with it. Closing a workspace moves the displays that showed it.
+    - **Size:** the session's size is taken from the shared clients only.
+  - **Mirror:** only the first display has a connection; the rows of its picture that changed are copied to the others from the top-left corner, unscaled. A smaller display shows part of it, so mirrored displays are best given the same `mode`.
+  - **Input:** the keyboard goes to the display under the pointer. The pointer moves across the displays' span, staying within each display's height, and its cursor plane moves to the display it is on.
+  - **Plugging in and out:**
+    - **Hotplug:** udev's `drm` `change` events with `HOTPLUG=1`, from the netlink socket the drive watcher already reads (`termos_hw::drives::listen_where`), make the console plan again. A display that went sends `ClientMsg::Bye` and the server lets that client go; a new one connects. A display whose mode changed is closed and opened again.
+    - **The first display:** if it goes or changes, the console ends and init starts it again, so the session's own client is never torn down underneath it. Switching between extend and mirror does the same.
+  - **Config reloads:** the server sends `ServerMsg::Reconfigure` to every client after `config.reload`. The console reads the config again and plans again. Settings' Displays page and `[[kms.display]]` edits reach the screens this way.
+  - **The lock screen** covers every display and is typed on wherever the pointer is.
+  - **Protocol 7** adds `ClientMsg::Command` (the console's keys can run desktop commands), `ClientMsg::Bye` and `ServerMsg::Reconfigure`.
+  - **The Displays page (`termos_apps::displays`):** lists sysfs's connectors (`/sys/class/drm/cardN-NAME/{status,modes}`) and `[[kms.display]]`, in the console's order. Keys turn a display on or off, step its mode and text scale, make it the primary, move it left or right, and switch mirror and extend. Each change rewrites `[kms] displays` and the `[[kms.display]]` array with toml_edit (comments kept, checked as a config first), then reloads.
+  - **Sound (`termos_hw::sound`):**
+    - **The tool:** WirePlumber's `wpctl`, rather than PipeWire's protocol: `get-volume`, `set-volume -l 1.0` (TermOS stops at 100%), `set-mute`, `status` (its Audio/Sinks section) and `set-default`. Its output is parsed by functions a fuzz target covers (`wpctl_parse`).
+    - **The bell:** `[kms] audible-bell` plays a 120 ms, 880 Hz WAV TermOS writes once to the runtime folder, through `pw-play`. A bell while one plays is dropped.
+    - **On the desktop:** `sound.volume ±N`, `sound.mute` and `sound.open` run `wpctl` on a thread, which wakes the desktop with the result. The status line shows `◁ 45%` or `◁ muted` before the battery, on an image only.
+    - **No polling:** the volume is read at start and after each change TermOS makes. Another program's change shows at the next one.
+    - **Media keys:** XF86AudioRaiseVolume, LowerVolume and Mute become `sound.volume +5`, `-5` and `sound.mute` in the console (the volume keys repeat).
+    - **The Sound page:** lists the outputs with volume bars. ←→ change the selected one, `m` mutes it, Enter makes it the default and saves `[sound] device`, which is applied at start (by name, or part of it). After a change to the default output it asks the desktop to read the volume again (`sound.refresh`).
+  - **Bluetooth (`termos_apps::bluetooth`, the Network window's second page):**
+    - **BlueZ** on the system bus through zbus (blocking API, one connection per page): ObjectManager for the adapter and its devices; `Powered` and `Trusted` through Properties; `StartDiscovery`, `StopDiscovery`, `Pair`, `Connect`, `Disconnect` and `RemoveDevice`.
+    - **Pairing** pairs, then trusts (so a headset reconnects by itself at power-on), then connects. The page reads the devices every 5 s while it is shown, every 2 s while scanning.
+    - **`[bluetooth] enabled`** (default on) is applied at the desktop's start and saved when the page turns the adapter on or off.
+    - **The agent:** an `org.bluez.Agent1` object TermOS serves while the page is open, registered as the default agent with capability `KeyboardDisplay`. Each of BlueZ's questions (confirm a passkey, authorize, a PIN or passkey to type, a code to type on a keyboard, cancel) goes to the page through a channel and wakes it. The D-Bus reply waits, asynchronously, on a tokio oneshot (no tokio runtime is needed for it) for the answer typed there. Unanswered is no. Services from untrusted devices are asked about, not allowed silently.
+  - **The image:**
+    - **Packages:** Buildroot's `alsa-lib`, `libsndfile` (for `pw-play`), `pipewire`, `lua` 5.4, `wireplumber`, `bluez5_utils` with the audio, HID and HoG plugins, and `sbc`.
+    - **Firmware:** Intel, Realtek and MediaTek Bluetooth firmware on PCs. On Pis, the Broadcom chip's Bluetooth firmware, and its Wi-Fi firmware, which was missing.
+    - **The kernel:** ALSA with HD Audio, USB audio and virtio sound. Bluetooth with LE, RFCOMM, HIDP and uhid. USB adapters (PCs) and the Broadcom UART (Pis) as modules, so their firmware is on the mounted root when they load. vc4's HDMI audio on Pis.
+    - **Services:** BlueZ's own `S40bluetoothd`, after D-Bus. BlueZ's default D-Bus policy already lets the desktop's user call it, and lets it call the agent. Its pairings live on the data partition (`/data/bluetooth`, bound onto `/var/lib/bluetooth`).
+    - **The session:** `user-session` starts a session bus and PipeWire as the desktop's user before the console. PipeWire starts WirePlumber (`context.exec`), since there is no systemd. The user is already in `audio`.
+  - **Tests:**
+    - **Units:** display planning, mode choice, text size and the pointer across displays; the desktop with two own-workspace clients (their sizes, swapping, a display leaving); the media keys; `wpctl` parsing and the bell's WAV; the Sound, Displays and Bluetooth pages with stand-in backends (snapshots, config written).
+    - **The agent:** run over a socket pair with zbus's peer-to-peer mode, the test playing BlueZ: a confirmed passkey, a typed PIN, and a refusal that BlueZ sees as `org.bluez.Error.Rejected`.
+    - **The QEMU boot test** adds an HD Audio card (`intel-hda`, `hda-duplex`, no host audio) and a second virtio-gpu head (`max_outputs=2`). It checks the console's `TERMOS-DISPLAYS` report, a volume set to 40% and muted that reads back so, and that BlueZ answers the desktop's user.
+    - **By hand:** without a display window QEMU turns on only the first head, so two lit displays, hotplug and real Bluetooth devices are tested by hand and listed in docs/bare-metal.md.
+- **Alternatives:**
+  - **One client drawing every display:** simpler on the console, but the desktop would have to lay out several screens in one grid, and every display would show the same workspace.
+  - **PipeWire's protocol through a crate (pipewire-rs):** C bindings and a larger build, for what `wpctl` says in a line.
+  - **Polling the volume for the status line:** a timer while idle, against the idle-cost rule.
+  - **bluer (the BlueZ crate):** a second D-Bus stack beside zbus, which iwd's page already uses.
+  - **A pairing agent always registered:** pairing a device that starts it while no page is open needs a place to ask, which only the page has.
+
 ---
 
 ## Open questions (the owner will be asked before the milestone that needs each one)

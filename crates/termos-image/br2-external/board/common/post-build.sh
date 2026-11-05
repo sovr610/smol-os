@@ -9,11 +9,11 @@ VERSION=${TERMOS_IMAGE_VERSION:?set by cargo xtask image build}
 KEYRING=${TERMOS_RAUC_KEYRING:?set by cargo xtask image build}
 
 # Mount points for the data partition and what is bound from it: iwd's
-# networks, dhcpcd's leases and DUID. (D-Bus's /var/lib/dbus is Buildroot's
+# networks, dhcpcd's leases and DUID, BlueZ's pairings. (D-Bus's /var/lib/dbus is Buildroot's
 # link to /tmp/dbus, which the data partition is bound onto at boot.) The
 # boot partition is mounted on /boot/esp, for RAUC and the boot loader.
 mkdir -p "$TARGET_DIR/data" "$TARGET_DIR/var/lib/iwd" "$TARGET_DIR/var/db/dhcpcd" \
-	"$TARGET_DIR/boot/esp" "$TARGET_DIR/media"
+	"$TARGET_DIR/var/lib/bluetooth" "$TARGET_DIR/boot/esp" "$TARGET_DIR/media"
 
 # The time zone (D-124): /etc/localtime links to the data partition,
 # where `termos system set-time-zone` changes it (S11termos-data starts it

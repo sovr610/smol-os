@@ -209,7 +209,9 @@ impl Console {
             }
         }
         self.last_input = Instant::now();
-        self.screen.repaint();
+        for o in &mut self.outputs {
+            o.screen.repaint();
+        }
         self.show()
     }
 
@@ -286,55 +288,60 @@ impl Console {
                 self.last_input = now;
                 self.suspend_checked = now;
                 tracing::info!("awake again");
-                // The display may have lost its mode while asleep.
-                self.display.modeset()?;
-                self.lock_dirty = true;
-                self.screen.repaint();
+                // The displays may have lost their modes while asleep.
+                for o in &mut self.outputs {
+                    o.display.modeset()?;
+                    o.lock_dirty = true;
+                    o.screen.repaint();
+                }
             }
         }
         self.draw_lock();
         self.show()
     }
 
-    /// Draws the lock screen into its own pixels; the desktop's stay as
-    /// they are, out of sight.
+    /// Draws the lock screen on every display, into pixels of its own; the
+    /// desktop's stay as they are, out of sight.
     pub(super) fn draw_lock(&mut self) {
         let Some(lock) = &self.lock else { return };
-        let layout = self.screen.layout;
-        if self.lock_grid.cols() != layout.cols || self.lock_grid.rows() != layout.rows {
-            self.lock_grid = Grid::new(layout.cols, layout.rows);
-        }
-        let len = self.screen.width as usize * self.screen.height as usize;
-        if self.lock_pixels.len() != len {
-            self.lock_pixels = vec![0; len];
-        }
         let now = jiff::Zoned::now();
         let time = now
             .strftime(self.settings.time_format.pattern())
             .to_string();
         let date = now.strftime("%A %-d %B").to_string();
-        lock.draw(&mut self.lock_grid, &time, &date);
-        let mut canvas = Canvas {
-            pixels: &mut self.lock_pixels,
-            stride: self.screen.width as usize,
-            width: self.screen.width,
-            height: self.screen.height,
-        };
-        self.screen
-            .raster
-            .paint_all(&mut canvas, layout, &self.lock_grid);
-        self.lock_dirty = true;
+        for o in &mut self.outputs {
+            let layout = o.screen.layout;
+            if o.lock_grid.cols() != layout.cols || o.lock_grid.rows() != layout.rows {
+                o.lock_grid = Grid::new(layout.cols, layout.rows);
+            }
+            let len = o.screen.width as usize * o.screen.height as usize;
+            if o.lock_pixels.len() != len {
+                o.lock_pixels = vec![0; len];
+            }
+            lock.draw(&mut o.lock_grid, &time, &date);
+            let mut canvas = Canvas {
+                pixels: &mut o.lock_pixels,
+                stride: o.screen.width as usize,
+                width: o.screen.width,
+                height: o.screen.height,
+            };
+            o.screen.raster.paint_all(&mut canvas, layout, &o.lock_grid);
+            o.lock_dirty = true;
+        }
         self.lock_minute = Some(super::next_minute());
     }
 
-    /// Puts the lock screen on the display (instead of the desktop).
-    pub(super) fn show_lock(&mut self) -> io::Result<()> {
-        let damage = if std::mem::take(&mut self.lock_dirty) {
-            Damage::all(self.screen.height)
+    /// Puts the lock screen on display `i` (instead of the desktop).
+    pub(super) fn show_lock(&mut self, i: usize) -> io::Result<()> {
+        let Some(o) = self.outputs.get_mut(i) else {
+            return Ok(());
+        };
+        let damage = if std::mem::take(&mut o.lock_dirty) {
+            Damage::all(o.screen.height)
         } else {
             Damage::default()
         };
-        self.display.present(&self.lock_pixels, &damage)?;
+        o.display.present(&o.lock_pixels, &damage)?;
         Ok(())
     }
 

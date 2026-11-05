@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//! The display: a DRM device driven through its "dumb" buffers, so any KMS
-//! driver works (virtio-gpu, simpledrm, i915, amdgpu, vc4) and no GPU code
-//! is needed (ARCHITECTURE.md §5.9).
+//! The displays: a DRM device driven through its "dumb" buffers, so any
+//! KMS driver works (virtio-gpu, simpledrm, i915, amdgpu, vc4) and no GPU
+//! code is needed (ARCHITECTURE.md §5.9). Each connected output is a
+//! [`Display`] with a display controller (CRTC) of its own; they share the
+//! card (M13e, D-128).
 //!
 //! Two buffers take turns: the screen's changed rows are copied into the
 //! one not shown, which is then flipped in at the next vertical blank.
@@ -12,6 +14,7 @@
 
 use std::io;
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd, RawFd};
+use std::rc::Rc;
 
 use drm::buffer::{Buffer as _, DrmFourcc};
 use drm::control::dumbbuffer::DumbBuffer;
@@ -21,6 +24,7 @@ use drm::control::{
 };
 
 use super::damage::Damage;
+use super::outputs;
 
 /// An open DRM device.
 pub(super) struct Card(pub(super) OwnedFd);
@@ -34,13 +38,78 @@ impl AsFd for Card {
 impl drm::Device for Card {}
 impl ControlDevice for Card {}
 
+impl Card {
+    pub(super) fn fd(&self) -> RawFd {
+        self.as_fd().as_raw_fd()
+    }
+
+    /// The display controllers whose page flips finished.
+    pub(super) fn flips(&self) -> io::Result<Vec<crtc::Handle>> {
+        Ok(self
+            .receive_events()?
+            .filter_map(|ev| match ev {
+                Event::PageFlip(f) => Some(f.crtc),
+                _ => None,
+            })
+            .collect())
+    }
+}
+
+/// A connector of the card, with what it takes to drive it.
+pub(super) struct CardConnector {
+    pub(super) handle: connector::Handle,
+    pub(super) info: outputs::Connector,
+    modes: Vec<Mode>,
+    size_mm: Option<(u32, u32)>,
+    encoders: Vec<drm::control::encoder::Handle>,
+    current_encoder: Option<drm::control::encoder::Handle>,
+}
+
+/// Every connector of `card`, connected or not.
+pub(super) fn connectors(card: &Card) -> io::Result<Vec<CardConnector>> {
+    let res = card.resource_handles()?;
+    let mut out = Vec::new();
+    for c in res.connectors() {
+        let Ok(info) = card.get_connector(*c, true) else {
+            continue;
+        };
+        let modes: Vec<Mode> = info.modes().to_vec();
+        out.push(CardConnector {
+            handle: *c,
+            info: outputs::Connector {
+                name: format!("{}-{}", info.interface().as_str(), info.interface_id()),
+                connected: info.state() == connector::State::Connected,
+                modes: modes
+                    .iter()
+                    .map(|m| {
+                        let (w, h) = m.size();
+                        outputs::ModeInfo {
+                            width: w,
+                            height: h,
+                            refresh: m.vrefresh(),
+                            preferred: m.mode_type().contains(ModeTypeFlags::PREFERRED),
+                        }
+                    })
+                    .collect(),
+            },
+            modes,
+            size_mm: info.size().filter(|(w, h)| *w > 0 && *h > 0),
+            encoders: info.encoders().to_vec(),
+            current_encoder: info.current_encoder(),
+        });
+    }
+    Ok(out)
+}
+
 struct Fb {
     db: DumbBuffer,
     fb: framebuffer::Handle,
 }
 
 pub(super) struct Display {
-    card: Card,
+    card: Rc<Card>,
+    /// Its connector's name (`HDMI-A-1`).
+    pub(super) name: String,
     crtc: crtc::Handle,
     connector: connector::Handle,
     mode: Mode,
@@ -55,6 +124,8 @@ pub(super) struct Display {
     /// The screen's size in millimetres, when the monitor says.
     pub(super) size_mm: Option<(u32, u32)>,
     cursor: Option<DumbBuffer>,
+    /// The pointer is on this display (the cursor shows).
+    cursor_shown: bool,
 }
 
 /// One row of `0x00RRGGBB` pixels into XRGB8888 memory, which holds each
@@ -69,38 +140,39 @@ fn copy_row(dst: &mut [u8], src: &[u32]) {
 }
 
 impl Display {
-    /// Sets up the first connected output of `card`.
-    pub(super) fn open(card: Card) -> io::Result<Self> {
+    /// Drives connector `c` of `card` in its mode `mode` (an index into
+    /// its modes), with a display controller none of `taken` uses.
+    pub(super) fn open(
+        card: Rc<Card>,
+        c: &CardConnector,
+        mode: usize,
+        taken: &[crtc::Handle],
+    ) -> io::Result<Self> {
         let res = card.resource_handles()?;
-        let (connector, info) = res
-            .connectors()
-            .iter()
-            .filter_map(|c| card.get_connector(*c, true).ok().map(|i| (*c, i)))
-            .find(|(_, i)| i.state() == connector::State::Connected && !i.modes().is_empty())
-            .ok_or_else(|| {
-                io::Error::new(io::ErrorKind::NotFound, "no connected output with a mode")
-            })?;
-        let mode = info
-            .modes()
-            .iter()
-            .find(|m| m.mode_type().contains(ModeTypeFlags::PREFERRED))
-            .or_else(|| info.modes().first())
-            .copied()
+        let mode = *c
+            .modes
+            .get(mode)
             .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "the output lists no modes"))?;
-        let encoder = info
-            .current_encoder()
-            .or_else(|| info.encoders().first().copied())
-            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "the output has no encoder"))?;
-        let enc = card.get_encoder(encoder)?;
-        let crtc = enc
-            .crtc()
-            .or_else(|| res.filter_crtcs(enc.possible_crtcs()).first().copied())
-            .ok_or_else(|| {
-                io::Error::new(
-                    io::ErrorKind::NotFound,
-                    "no display controller for the output",
-                )
-            })?;
+        let mut crtc = None;
+        for e in c.current_encoder.iter().chain(c.encoders.iter()) {
+            let Ok(enc) = card.get_encoder(*e) else {
+                continue;
+            };
+            crtc = enc.crtc().filter(|h| !taken.contains(h)).or_else(|| {
+                res.filter_crtcs(enc.possible_crtcs())
+                    .into_iter()
+                    .find(|h| !taken.contains(h))
+            });
+            if crtc.is_some() {
+                break;
+            }
+        }
+        let crtc = crtc.ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("no free display controller for {}", c.info.name),
+            )
+        })?;
         let (w, h) = mode.size();
         let (width, height) = (u32::from(w), u32::from(h));
         let make = |card: &Card| -> io::Result<Fb> {
@@ -109,20 +181,20 @@ impl Display {
             Ok(Fb { db, fb })
         };
         let buffers = [make(&card)?, make(&card)?];
-        let size_mm = info.size().filter(|(w, h)| *w > 0 && *h > 0);
         tracing::info!(
-            "display: {:?} {}x{}@{} on {:?}, {:?} mm",
-            info.interface(),
+            "display {}: {}x{}@{} on {:?}, {:?} mm",
+            c.info.name,
             width,
             height,
             mode.vrefresh(),
             crtc,
-            size_mm
+            c.size_mm
         );
         let mut d = Self {
             card,
+            name: c.info.name.clone(),
             crtc,
-            connector,
+            connector: c.handle,
             mode,
             buffers,
             front: 0,
@@ -130,16 +202,29 @@ impl Display {
             stale: [Damage::all(height), Damage::all(height)],
             width,
             height,
-            size_mm,
+            size_mm: c.size_mm,
             cursor: None,
+            cursor_shown: true,
         };
         d.modeset()?;
         d.cursor = d.make_cursor();
         Ok(d)
     }
 
-    pub(super) fn fd(&self) -> RawFd {
-        self.card.as_fd().as_raw_fd()
+    /// Its display controller.
+    pub(super) fn crtc(&self) -> crtc::Handle {
+        self.crtc
+    }
+
+    /// Its mode's size and refresh.
+    pub(super) fn mode_size(&self) -> (u16, u16, u32) {
+        let (w, h) = self.mode.size();
+        (w, h, self.mode.vrefresh())
+    }
+
+    /// Its page flip finished.
+    pub(super) fn flipped(&mut self) {
+        self.flipping = false;
     }
 
     /// Shows the front buffer (at start, and when the seat comes back).
@@ -157,7 +242,9 @@ impl Display {
             &[self.connector],
             Some(self.mode),
         )?;
-        if let Some(c) = &self.cursor {
+        if let Some(c) = &self.cursor
+            && self.cursor_shown
+        {
             let _ = self.card.set_cursor2(self.crtc, Some(c), (0, 0));
         }
         Ok(())
@@ -201,18 +288,6 @@ impl Display {
         self.front = back;
         self.flipping = true;
         Ok(true)
-    }
-
-    /// Reads the device's events; whether a flip finished.
-    pub(super) fn events(&mut self) -> io::Result<bool> {
-        let mut flipped = false;
-        for ev in self.card.receive_events()? {
-            if let Event::PageFlip(_) = ev {
-                self.flipping = false;
-                flipped = true;
-            }
-        }
-        Ok(flipped)
     }
 
     /// The mouse pointer: a white arrow outlined in black, in a 64×64
@@ -271,9 +346,22 @@ impl Display {
     }
 
     #[allow(deprecated)]
-    pub(super) fn move_cursor(&self, x: i32, y: i32) {
-        if self.cursor.is_some() {
+    pub(super) fn move_cursor(&mut self, x: i32, y: i32) {
+        if let Some(c) = &self.cursor {
+            if !self.cursor_shown {
+                let _ = self.card.set_cursor2(self.crtc, Some(c), (0, 0));
+                self.cursor_shown = true;
+            }
             let _ = self.card.move_cursor(self.crtc, (x, y));
+        }
+    }
+
+    /// The pointer left for another display.
+    #[allow(deprecated)]
+    pub(super) fn hide_cursor(&mut self) {
+        if self.cursor.is_some() && self.cursor_shown {
+            let _ = self.card.set_cursor2::<DumbBuffer>(self.crtc, None, (0, 0));
+            self.cursor_shown = false;
         }
     }
 }
@@ -282,6 +370,9 @@ impl Drop for Display {
     #[allow(deprecated)]
     fn drop(&mut self) {
         let _ = self.card.set_cursor2::<DumbBuffer>(self.crtc, None, (0, 0));
+        // The controller goes back for another display (an unplugged or
+        // turned-off one shows nothing).
+        let _ = self.card.set_crtc(self.crtc, None, (0, 0), &[], None);
         if let Some(c) = self.cursor.take() {
             let _ = self.card.destroy_dumb_buffer(c);
         }

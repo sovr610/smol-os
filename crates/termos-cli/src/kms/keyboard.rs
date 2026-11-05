@@ -26,6 +26,8 @@ pub(super) enum Action {
     Brightness(i8),
     /// A keyboard's lock key (XF86ScreenSaver).
     Lock,
+    /// A key that runs a desktop command: the volume keys (D-128).
+    Command(&'static str),
 }
 
 pub(super) struct Keyboard {
@@ -107,8 +109,12 @@ impl Keyboard {
             return None;
         }
         let action = action(sym, utf32, mods)?;
-        let repeats = matches!(action, Action::Key(_) | Action::Brightness(_))
-            && self.keymap.key_repeats(code);
+        let repeats = matches!(
+            action,
+            Action::Key(_)
+                | Action::Brightness(_)
+                | Action::Command("sound.volume +5" | "sound.volume -5")
+        ) && self.keymap.key_repeats(code);
         Some((action, repeats))
     }
 }
@@ -132,6 +138,10 @@ pub(super) fn action(sym: Keysym, utf32: u32, mods: Mods) -> Option<Action> {
         0x1008_ff02 => return Some(Action::Brightness(10)),
         0x1008_ff03 => return Some(Action::Brightness(-10)),
         0x1008_ff2d => return Some(Action::Lock),
+        // XF86AudioRaiseVolume, XF86AudioLowerVolume, XF86AudioMute.
+        0x1008_ff13 => return Some(Action::Command("sound.volume +5")),
+        0x1008_ff11 => return Some(Action::Command("sound.volume -5")),
+        0x1008_ff12 => return Some(Action::Command("sound.mute")),
         _ => {}
     }
     let code = match sym {
@@ -279,6 +289,19 @@ mod tests {
             press(&mut k, KEY_BRIGHTNESSDOWN),
             Some(Action::Brightness(-10))
         );
+        // The volume keys run desktop commands.
+        const KEY_MUTE: u32 = 113;
+        const KEY_VOLUMEDOWN: u32 = 114;
+        const KEY_VOLUMEUP: u32 = 115;
+        assert_eq!(
+            press(&mut k, KEY_VOLUMEUP),
+            Some(Action::Command("sound.volume +5"))
+        );
+        assert_eq!(
+            press(&mut k, KEY_VOLUMEDOWN),
+            Some(Action::Command("sound.volume -5"))
+        );
+        assert_eq!(press(&mut k, KEY_MUTE), Some(Action::Command("sound.mute")));
     }
 
     #[test]
