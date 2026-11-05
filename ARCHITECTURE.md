@@ -150,7 +150,7 @@ A `Cell` holds:
 - a display width (1, or 2 with a continuation cell);
 - `fg`, `bg` and underline colour;
 - attribute flags: bold, dim, italic, underline style, blink, reverse, hidden, strikethrough;
-- an optional hyperlink ID (OSC 8).
+- no hyperlink yet: links that programs print (OSC 8) stay in the emulator and are dropped when cells are copied into the grid. M13a plans a link id per cell and a link table in frames (D-117).
 
 Colours are `Default | Indexed(u8) | Rgb(u8,u8,u8)`. The terminal default is
 kept as its own value so transparent or themed terminal backgrounds still work.

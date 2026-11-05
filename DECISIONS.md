@@ -1339,6 +1339,42 @@ rewrite history.
   - **Notifications:** the operating system's notification APIs (a D-Bus, macOS and Windows dependency each, and nothing over SSH).
   - **Restoring a shell's agent:** the CLI started in place of the shell (gone when the agent exits).
 
+## D-117: The next milestones for the OS itself (M13a to M13g, proposed)
+- **Status:** Proposed (owner asked for the plan, 2026-11-05) · 2026-11-05
+- **Context:** The owner asked which improvements to TermOS are not about AI, then for a plan to build all of them and for them to be in the ROADMAP. What TermOS does today was checked first:
+  - Links that programs print are dropped before the screen.
+  - The monitor cannot act on a process.
+  - The file manager has one pane and no search, archives or bookmarks.
+  - The bare-metal image logs in with no password and nothing locks it.
+  - The image has no power menu, battery, brightness, clock sync, time zone, USB mounting, second display, Bluetooth or sound.
+  - There is no screen-reader mode or translation.
+  - TermOS is installed only from release archives.
+- **Decision:**
+  - **Seven proposed milestones**, planned in [docs/plans/m13-os.md](docs/plans/m13-os.md):
+    - **M13a:** links, hints, search across panes, and alerts when long commands finish;
+    - **M13b:** layout files, a drop-down terminal, typing into several panes, saved commands, SSH hosts, pane recording;
+    - **M13c:** a process manager, and the file manager's bookmarks, two panes, search, archives, git status, bulk rename and disk usage;
+    - **M13d:** on the image, a lock screen, power menu, battery, brightness, lid, clock, USB drives, GPT disks and AMD graphics;
+    - **M13e:** on the image, several displays, Bluetooth and sound;
+    - **M13f:** accessibility and translations;
+    - **M13g:** packages, a gallery, settings export and import.
+  - **The suggested order:** M13a, M13b, M13c, then M13d and M13g, then M13e and M13f. The owner may reorder them or interleave them with M12c to M12e.
+  - **Not decided:** the plan's designs are starting points. Each milestone's "Ask first" questions go to the owner before it starts, and the answers and the final design are logged then.
+  - **Rules for every M13 milestone:**
+    - privileged actions on the image are new `termos system` verbs, run through the existing sudo rule, with checked arguments;
+    - devices, lids and displays arrive as events, not polling (D-028);
+    - links open only `http`, `https`, `mailto` and `file` addresses;
+    - exports never hold secrets;
+    - recordings are readable only by the user.
+  - **Moved out of "After 1.0":**
+    - the lock screen, now in M13d;
+    - the screen-reader mode, now in M13f.
+  - **Still unscheduled:** multi-user seats, a console input method for Chinese, Japanese and Korean, printing, and a GPU-drawn console.
+- **Alternatives:**
+  - **Fewer, larger milestones:** harder to review and ship in pieces.
+  - **The bare-metal work first:** it fixes the security gap sooner, but helps fewer users than the hosted features.
+  - **Leaving accessibility and translations after 1.0:** they are cheaper before more UI is added.
+
 ---
 
 ## Open questions (the owner will be asked before the milestone that needs each one)

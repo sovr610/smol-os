@@ -39,6 +39,13 @@ questions (DECISIONS.md, "Open questions").
 | M12c | Remote access: a web client with share links, remote attach with local rendering, approvals on the phone (D-111) | ⏳ |
 | M12d | Hardening: pinned Actions, seccomp, a macOS sandbox, a network allowlist for agent CLIs (D-111) | ⏳ |
 | M12e | Harness v2, from T3 Code's design: long-lived two-way sessions with the CLIs, capability-based fallbacks, per-task checkpoints (proposed) | ⏳ |
+| M13a | Links, hints, search and finished commands: programs' links and paths clickable, hint mode, search across panes, alerts when a long command finishes (D-117) | ⏳ |
+| M13b | Layouts and workspace tools: layout files, a drop-down terminal, typing into several panes, saved commands, SSH hosts, pane recording (D-117) | ⏳ |
+| M13c | Processes and files: a process manager; bookmarks, two panes, search, archives, git status, bulk rename and disk usage in Files (D-117) | ⏳ |
+| M13d | The image as a computer: lock screen, power menu, battery, brightness and lid, clock and time zones, USB drives, GPT disks, AMD graphics (D-117) | ⏳ |
+| M13e | The image's hardware: several displays and hotplug, Bluetooth, sound (D-117) | ⏳ |
+| M13f | Accessibility and translations: a screen-reader mode, speech on the console, the interface in other languages (D-117) | ⏳ |
+| M13g | Packages, a gallery, settings that move: Homebrew, winget, Scoop, .deb, .rpm, AUR, Nix; plugins, widgets and themes to install; settings export and import (D-117) | ⏳ |
 | M9b | Platform gaps: the Windows agent sandbox and input, snapshots and sensors on macOS and Windows, Kitty keyboard flags, app windows in sessions, the KMS console's clipboard, bell and images (D-077, D-101–D-108) | 🔍 |
 
 Unfinished work in code is always a `TODO(M<n>)` marker (D-018). The
@@ -1175,9 +1182,89 @@ Nothing M11a adds runs while idle: the shims run only when `claude` or `codex` s
 
 ---
 
+## M13a — Links, hints, search and finished commands
+**Status:** ⏳ proposed (D-117; plan: [docs/plans/m13-os.md](docs/plans/m13-os.md#m13a--links-hints-search-and-finished-commands)) · Ask first: where links open (the client's machine or the server's); what a finished long command does (loud for failures only, both, or neither); the keys for hints and search.
+
+**Deliverables**
+- [ ] Programs' links (OSC 8) kept in the grid, sent to the outer terminal and opened with Ctrl+click; TermOS's own anchors and unsafe schemes left out.
+- [ ] Web and email addresses, paths with `:line`, git hashes and IP addresses found on screen; paths open in the editor at their line.
+- [ ] Hint mode: labels on every match in view, to open, copy or paste one.
+- [ ] Search across every pane's text, landing in copy mode at the match.
+- [ ] A long command that finishes in a pane nobody is looking at marks its tab and says so; `pane.notify-when-done` for the next one.
+
+---
+
+## M13b — Layouts and workspace tools
+**Status:** ⏳ proposed (D-117; plan: [docs/plans/m13-os.md](docs/plans/m13-os.md#m13b--layouts-and-workspace-tools)) · Ask first: the layout format (TermOS's TOML or Zellij's KDL); the drop-down terminal's key; whether recordings may include input.
+
+**Deliverables**
+- [ ] Layout files (user and project): open a workspace with its splits, folders and commands; save the current one as a layout.
+- [ ] A drop-down terminal one key away, kept running.
+- [ ] Typing into every pane of a workspace, or a chosen set, at once.
+- [ ] Saved commands with parameters, from the palette and `termos snippet`.
+- [ ] SSH hosts from `~/.ssh/config` in the menu and palette.
+- [ ] Recording a pane as asciinema, and `termos play`.
+
+---
+
+## M13c — Processes and files
+**Status:** ⏳ proposed (D-117; plan: [docs/plans/m13-os.md](docs/plans/m13-os.md#m13c--processes-and-files)) · Ask first: the process manager in the monitor or its own window; bulk rename in the editor or a window; which archive formats.
+
+**Deliverables**
+- [ ] A process manager: filter, tree, a pane's own processes, listening ports (Linux); end, kill, pause and priority, each confirmed.
+- [ ] Files: marking several entries, bookmarks and a sidebar, two panes, search by name and inside files.
+- [ ] Archives browsed like folders, extracted and made.
+- [ ] A git status column, bulk rename through the editor with undo, a disk-usage view, open with.
+
+---
+
+## M13d — The image as a computer
+**Status:** ⏳ proposed (D-117; plan: [docs/plans/m13-os.md](docs/plans/m13-os.md#m13d--on-the-image-lock-power-laptops-clock-drives-disks)) · Ask first: the lock's password (the system user's or TermOS's own); a lock in hosted mode too; AMD firmware in every x86_64 image; the default idle times.
+
+**Deliverables**
+- [ ] A password set at first boot; a lock screen on a key, after idle, on suspend and lid close, optionally at start; other virtual terminals closed to it.
+- [ ] A power menu: lock, suspend, restart, shut down.
+- [ ] Battery in the status line with low-battery steps; brightness keys; lid and idle suspend.
+- [ ] Time sync, time zones and a Clock settings page.
+- [ ] USB drives shown, mounted and ejected from Files.
+- [ ] GPT disks for x86_64 and aarch64-virt, partitions found by label, new ids per installed disk.
+- [ ] AMD graphics firmware.
+
+---
+
+## M13e — The image's hardware
+**Status:** ⏳ proposed (D-117; plan: [docs/plans/m13-os.md](docs/plans/m13-os.md#m13e--on-the-image-displays-bluetooth-sound)) · Ask first: several displays extended or mirrored; ALSA or PipeWire; Bluetooth audio in this milestone or input devices only.
+
+**Deliverables**
+- [ ] Every connected display driven, with hotplug, per-display mode and scale, a Displays page; extend or mirror.
+- [ ] Bluetooth: power, scan, pair, connect and forget, from the Network app.
+- [ ] Sound: volume and mute in the status line, media keys, a Sound page, an audible bell.
+
+---
+
+## M13f — Accessibility and translations
+**Status:** ⏳ proposed (D-117; plan: [docs/plans/m13-os.md](docs/plans/m13-os.md#m13f--accessibility-and-translations)) · Ask first: who tests with a screen reader, on which platforms; which languages first and who reviews them; speech on the console now or later.
+
+**Deliverables**
+- [ ] A research spike with NVDA, VoiceOver and Orca, then a screen-reader mode: plain looks, the status line in words, announcements on a line readers follow.
+- [ ] Speech on the console (`espeak-ng`): new output, focus, menus and notifications, review keys.
+- [ ] The interface in other languages (Fluent), per client, with a pseudo-locale in tests and a key check in CI.
+
+---
+
+## M13g — Packages, a gallery, settings that move
+**Status:** ⏳ proposed (D-117; plan: [docs/plans/m13-os.md](docs/plans/m13-os.md#m13g--packages-a-gallery-settings-that-move)) · Ask first: which channels, and who owns their accounts; where the gallery is hosted and who reviews entries; which kinds at first.
+
+**Deliverables**
+- [ ] Packages for Homebrew, winget, Scoop, Debian and Ubuntu, Fedora, Arch (AUR) and Nix, each installed and run in CI; shell completions and a man page.
+- [ ] A signed gallery index of plugins, widgets, themes, layouts and saved commands; `termos gallery` and a Gallery window.
+- [ ] Settings export and import, never with secrets.
+
+---
+
 ## After 1.0 (unscheduled)
-- A screen-reader-friendly mode (the brief lists it as "later").
-- Lock screen and multi-user seats on bare metal.
+- Multi-user seats on bare metal. (The lock screen is now planned in M13d, and a screen-reader mode in M13f, D-117.)
+- Typing Chinese, Japanese or Korean on the console (an input method), printing, and a GPU-drawn console ([docs/plans/m13-os.md](docs/plans/m13-os.md#not-in-this-plan)).
 
 ---
 
