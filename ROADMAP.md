@@ -1073,7 +1073,12 @@ Nothing M11a adds runs while idle: the shims run only when `claude` or `codex` s
 **What the tests cover**
 - **Unit:** the CLIs' status output (Claude Code's JSON for a subscription, a key, signed out; Codex's lines, a configured key never echoed; Gemini CLI's folder); the variables each CLI signs in with; `SecretEnv` never showing a value; the shim dropping inherited credentials for an account and handing its key over, and saying whose key cannot be read; Gemini CLI's release (its digest required), its bundle unpacked and run through the launcher by a stand-in Node.js, its settings (TermOS's server, updates off, the sign-in method, comments refused); its usage (counted once when its tokens arrive, text never kept, other files under `tmp` skipped); carrying a Gemini session to an account that names the folder differently, or not at all.
 - **End to end, the real binary with stand-in CLIs:** `account sign-in` runs `claude auth login` (`--console`) and `codex login --device-auth` in the account's folder with inherited `ANTHROPIC_API_KEY` and `CLAUDE_CODE_OAUTH_TOKEN` dropped; Codex's key piped to `codex login --with-api-key` and only named afterwards; Claude Code's key typed into a real terminal, unlocked into the secrets file, named in `accounts.toml` but never written there, and a sign-in refused while it is set; Gemini CLI accounts with their own homes (settings copied with TermOS's server, instructions shared, the login not), its sign-in chosen and run without a browser, its status from its folder.
-- **CI, for real** (`agents.yml`, four platforms): the real CLIs report each second account as not signed in; Gemini CLI installed by TermOS runs, has TermOS's server registered and its own updates off in a second account.
+- **CI, for real** (`agents.yml`, four platforms): with keys in the environment, the real CLIs report each second account as not signed in, and `default` as using the key; Claude Code through the shim in the second account is not signed in either; Gemini CLI installed by TermOS runs, has TermOS's server registered and its own updates off in a second account.
+
+**What CI found**
+- Isolation also kept the workflow's fixture key from the second account, so its skills check now runs Claude Code pointed at the account's folder, and the workflow checks the isolation instead.
+- `termos account status` and `sign-in` dropped the environment's sign-in for `default` too, unlike its windows; one rule now serves both (`default` keeps the environment), and signing `default` in names the variables that come before it.
+- Gemini CLI's Windows launcher now doubles a `%` in its paths (cmd expands it even inside quotes); macOS's `wc` pads counts, so the workflow counts with `grep -c`.
 
 ---
 

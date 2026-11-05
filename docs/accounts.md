@@ -85,7 +85,9 @@ passphrase.
 that would override the account's own (`ANTHROPIC_API_KEY`,
 `CLAUDE_CODE_OAUTH_TOKEN`, `CODEX_API_KEY`, `GEMINI_API_KEY` and the
 like), so the account you chose is the one that answers. `default` keeps
-your environment as it is.
+your environment as it is, and so does `termos account status` for it;
+signing `default` in says which of those variables are set, since the CLI
+uses them first.
 
 ```bash
 termos account list                       # every account; ● marks the one in use
