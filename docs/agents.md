@@ -318,17 +318,24 @@ termos agent install claude
 termos agent install codex
 ```
 
-Or open **◆ Menu → AI agents → Claude Code** (or Codex CLI): when it is not
-installed, its window offers to install it.
+```bash
+termos agent install gemini
+```
+
+Or open **◆ Menu → AI agents → Claude Code** (or Codex CLI, Gemini CLI):
+when it is not installed, its window offers to install it.
 
 - **What you get:** each vendor's own program. Claude Code comes from
-  Anthropic's release site, Codex CLI from OpenAI's GitHub releases. No
-  Node.js and no install script.
+  Anthropic's release site, Codex CLI from OpenAI's GitHub releases, Gemini
+  CLI from Google's GitHub releases. No install script. Gemini CLI is a
+  JavaScript bundle: TermOS has mise install Node.js 22 for it (without
+  making it your default Node.js) and runs the bundle with it; its own
+  updates are turned off, as TermOS updates it.
 - **Checked first:** the download must match the SHA-256 its vendor
   publishes (Claude Code's release manifest; GitHub's digest for the Codex
-  file). A mismatch installs nothing.
+  and Gemini CLI files). A mismatch installs nothing.
 - **Where:** `~/.local/share/termos/agents/` (Windows:
-  `%LOCALAPPDATA%\termos\data\agents`), with `claude` and `codex` in
+  `%LOCALAPPDATA%\termos\data\agents`), with `claude`, `codex` and `gemini` in
   TermOS's own `bin` folder, which comes first on `PATH` in every TermOS
   window.
 - **A given version:** `termos agent install claude@2.1.90`.

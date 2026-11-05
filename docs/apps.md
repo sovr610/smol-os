@@ -90,7 +90,8 @@ What it can read depends on the system:
 | CPU, memory, disks, network, processes | ✓ | ✓ | ✓ |
 | Temperatures | ✓ (hwmon sensors) | ✓ | where the firmware reports them |
 | GPU load and memory | ✓ (AMD; NVIDIA with its driver; others where the driver reports them) | ✓ | ✓ |
-| GPU temperature and power | ✓ (AMD, Intel, nouveau; NVIDIA with its driver) | not yet | NVIDIA only |
+| GPU temperature | ✓ (AMD, Intel, nouveau; NVIDIA with its driver) | ✓ (the system's sensors) | NVIDIA only |
+| GPU power | ✓ (AMD, Intel, nouveau; NVIDIA with its driver) | not yet | NVIDIA only |
 
 `termos debug hw` prints everything TermOS reads, which helps when something
 looks wrong.

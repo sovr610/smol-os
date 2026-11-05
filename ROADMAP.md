@@ -33,6 +33,12 @@ questions (DECISIONS.md, "Open questions").
 | M11a | AI accounts: several subscriptions per provider, switching with the conversation kept, the usage app (D-096, D-097) | 🔍 |
 | M11b | Skills that teach Claude Code, Codex and other CLIs to use TermOS, and `termos agent ask` (D-096, D-098) | 🔍 |
 | M11c | The harness: one coding tool over Claude Code, Codex and API models, routing each task to the model that suits it (D-096, D-099, D-100) | 🔍 |
+| M11d | AI accounts: sign-in from TermOS through each vendor's own flow, API keys per account, Gemini CLI (D-111, D-112) | 🔍 |
+| M12a | Parallel agents in git worktrees, a review window that answers the agent, best-of-N (D-111) | ⏳ |
+| M12b | Agent attention and resume: "needs you" badges, jump to the waiting agent, agent panes resumed after restore, command blocks (D-111) | ⏳ |
+| M12c | Remote access: a web client with share links, remote attach with local rendering, approvals on the phone (D-111) | ⏳ |
+| M12d | Hardening: pinned Actions, seccomp, a macOS sandbox, a network allowlist for agent CLIs (D-111) | ⏳ |
+| M12e | Harness v2, from T3 Code's design: long-lived two-way sessions with the CLIs, capability-based fallbacks, per-task checkpoints (proposed) | ⏳ |
 | M9b | Platform gaps: the Windows agent sandbox and input, snapshots and sensors on macOS and Windows, Kitty keyboard flags, app windows in sessions, the KMS console's clipboard, bell and images (D-077, D-101–D-108) | 🔍 |
 
 Unfinished work in code is always a `TODO(M<n>)` marker (D-018). The
@@ -839,7 +845,7 @@ Not shown: Windows and macOS by hand; CI runs the `tos` end-to-end test on both 
   - [x] The monitor's CPU chart as a picture where the terminal shows pixels (braille beneath, cleared there), braille elsewhere; made again only when a reading arrives
   - [x] Meters that shade from the accent through warning to error in truecolor
   - [x] A spinner in place of the icon while a window is busy (the monitor's first reading, a folder or picture loading, an agent waiting on the model), turning only while some client animates
-  - [ ] The command center's charts: with the command center (M10c)
+  - [x] The command center's charts: with the command center (M10c)
 - **Settings:** [x] icons, gradients, wallpaper and splash under Appearance
 
 **Acceptance:** snapshot tests for every theme in truecolor, 256 colours and with each icon set; the budgets of ARCHITECTURE.md §15 still hold.
@@ -1052,10 +1058,82 @@ Nothing M11a adds runs while idle: the shims run only when `claude` or `codex` s
 
 ---
 
+## M11d — AI accounts: sign-in, API keys, Gemini CLI
+**Status:** 🔍 done, awaiting review · Owner answers: sign-in through each vendor's own flow, run by TermOS in the account's folder, no subscription credential stored by TermOS; API keys per account; Gemini CLI with accounts (D-111). Design: D-112, ARCHITECTURE.md §11; user guides [accounts.md](docs/accounts.md) and [agents.md](docs/agents.md).
+
+**Deliverables**
+- **Sign-in from TermOS:** [x] each account signs in through its vendor's own flow in its folder: Claude Code's `claude auth login` (a pasted code where there is no browser; `--console`, `--sso`), Codex's `codex login` (its device code where there is no browser, or `--device`), Gemini CLI's Google login; from `termos account sign-in`, a new account, and the usage window's **[Sign in]**.
+- **Who is signed in:** [x] `termos account status`, from `claude auth status` and `codex login status` (Gemini CLI: its folder), never from login files.
+- **API keys per account:** [x] `termos account key` and **[API key]**: Claude Code's and Gemini CLI's kept in TermOS's secret store and given to the CLI when it starts; Codex's handed to `codex login --with-api-key`.
+- **Isolation:** [x] the shims, agent windows and the harness drop inherited sign-in variables for TermOS's accounts and keyed ones.
+- **Gemini CLI:** [x] `termos agent install|update|remove gemini` (Google's bundle, digest-checked, run by Node.js from mise); accounts (`GEMINI_CLI_HOME`), the `gemini` shim, TermOS's MCP server in each account's settings, its usage in the usage app and the command center, "Continue as" carrying its conversation.
+
+**Acceptance:** sign-in runs the vendor's command in the account's folder and keys reach only their account (stand-in CLIs that record their environment); CI asks the real CLIs who each account is (no keys) and installs the real Gemini CLI with TermOS's MCP server registered.
+
+**What the tests cover**
+- **Unit:** the CLIs' status output (Claude Code's JSON for a subscription, a key, signed out; Codex's lines, a configured key never echoed; Gemini CLI's folder); the variables each CLI signs in with; `SecretEnv` never showing a value; the shim dropping inherited credentials for an account and handing its key over, and saying whose key cannot be read; Gemini CLI's release (its digest required), its bundle unpacked and run through the launcher by a stand-in Node.js, its settings (TermOS's server, updates off, the sign-in method, comments refused); its usage (counted once when its tokens arrive, text never kept, other files under `tmp` skipped); carrying a Gemini session to an account that names the folder differently, or not at all.
+- **End to end, the real binary with stand-in CLIs:** `account sign-in` runs `claude auth login` (`--console`) and `codex login --device-auth` in the account's folder with inherited `ANTHROPIC_API_KEY` and `CLAUDE_CODE_OAUTH_TOKEN` dropped; Codex's key piped to `codex login --with-api-key` and only named afterwards; Claude Code's key typed into a real terminal, unlocked into the secrets file, named in `accounts.toml` but never written there, and a sign-in refused while it is set; Gemini CLI accounts with their own homes (settings copied with TermOS's server, instructions shared, the login not), its sign-in chosen and run without a browser, its status from its folder.
+- **CI, for real** (`agents.yml`, four platforms): the real CLIs report each second account as not signed in; Gemini CLI installed by TermOS runs, has TermOS's server registered and its own updates off in a second account.
+
+---
+
+## M12a — Parallel agents in worktrees
+**Status:** ⏳ planned (D-111) · Ask first: how far a task's workspace goes (worktree only, or a container too); how ports are handed out.
+
+**Deliverables**
+- A workspace per task: a branch and a git worktree, a setup script, ignored files copied in (`.env`), a block of ports, panes for the agent, a shell and servers; archived after the merge.
+- The harness edits in parallel, each task in its own worktree.
+- A review window per workspace: the diff, comments sent to the agent as its next message, then commit, pull request, merge or discard.
+- Best-of-N: one prompt to several backends (`claude:2,codex:1`), their diffs and test results side by side, one kept.
+
+---
+
+## M12b — Agent attention and resume
+**Status:** ⏳ planned (D-111) · Ask first: which agent events become notifications by default.
+
+**Deliverables**
+- "Needs you": the CLIs' hooks (registered per account like TermOS's MCP server) and programs' OSC 9/99/777 notifications mark a waiting agent: a ring on its pane, a badge on its tab, the notification center, one key to jump to the agent waiting longest.
+- Agent panes come back after a session restore: Claude Code, Codex and Gemini CLI resumed in the same account and folder.
+- Command blocks (OSC 133): jump between prompts, copy one command's output, failed commands marked; `read_pane` and `tos read` give agents the last command, its output and exit status.
+
+---
+
+## M12c — Remote access
+**Status:** ⏳ planned (D-111) · Ask first: how a browser authenticates; whether a relay for phones is TermOS's own or none.
+
+**Deliverables**
+- A web client: sessions over HTTPS, read-only share links, a phone-sized layout.
+- Remote attach with local rendering: a local client to a remote server over SSH, surviving sleep and network changes, TermOS's terminfo and `tos` set up on the remote host.
+- Approvals and "done" or "needs you" alerts on the phone for agents' tool calls.
+
+---
+
+## M12d — Hardening
+**Status:** ⏳ planned (D-111) · Ask first: the macOS sandbox's mechanism.
+
+**Deliverables**
+- GitHub Actions pinned by commit, starting with the signing workflow, kept current by Dependabot.
+- seccomp under the bubblewrap sandbox; a sandbox for agents' commands on macOS; plugins sandboxed on Windows.
+- A network allowlist for Claude Code, Codex and Gemini CLI panes (a local proxy, "allow once").
+
+---
+
+## M12e — Harness v2 (proposed)
+**Status:** ⏳ proposed after reading T3 Code's harness (pingdotgg/t3code, MIT) · Ask first: whether to move from one-shot runs to long-lived sessions; Codex's `app-server` protocol and Claude Code's stream-json input are each vendor's, not a shared standard.
+
+**Deliverables**
+- Long-lived, two-way sessions instead of one run per task: Codex through `codex app-server` (threads, turns, `turn/steer`, `turn/interrupt`, approvals as requests to TermOS), Claude Code through its stream-json input and output with a permission callback; mid-task approvals and steering in the harness window.
+- A capability record per backend (steering, approvals, plan mode, rollback) that routing and fallbacks read, instead of the backend's name; a mode a backend lacks runs stricter, never imitated.
+- Failures classified before falling back (a plan limit with its reset time, transport errors, a broken thread): wait, retry, another account, or another backend.
+- A checkpoint per task as a hidden git ref (a temporary index, `commit-tree`, `update-ref`): per-task diffs and undo without touching the branch (pairs with M12a's review window).
+- A bounded hand-off when a task moves between backends: a token-capped selection of the conversation plus what changed since that backend last took part.
+- Durable queued work (kept across restarts), interrupts with a time limit, and a `delegate_task` tool in TermOS's MCP server so the CLIs can hand sub-tasks to each other.
+- Tests that replay recorded CLI sessions through the real adapters.
+
+---
+
 ## After 1.0 (unscheduled)
 - A screen-reader-friendly mode (the brief lists it as "later").
-- Remote attach with local capabilities: a local client talking to a remote server over a forwarded socket.
-- seccomp filters for agent sandboxes, if they aren't done in M6.
 - Lock screen and multi-user seats on bare metal.
 
 ---

@@ -224,7 +224,5 @@ token.
 - **Secrets file:** if the API keys are in a passphrase-locked secrets
   file, `termos harness run` asks for the passphrase in the terminal. The
   window uses the server's secrets, unlocked once for every agent window.
-- **Windows:** stopping a task there stops the CLI itself, but not the
-  programs it started.
 - **Edits run one at a time** in your project folder. Parallel edits in
   separate git worktrees are not supported.

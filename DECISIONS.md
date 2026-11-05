@@ -1179,6 +1179,42 @@ rewrite history.
   - PackageKit for the host's packages (missing on many systems, and on macOS and Windows);
   - installing from the app without a window (no place for apt's questions or the password).
 
+
+## D-111: M11d owner answers: sign-in through the vendors, API keys, Gemini CLI; what comes next
+- **Status:** Accepted (owner, 2026-11-05) · 2026-11-05
+- **Context:** the owner asked to enter credentials for Claude Code, Codex and the rest so that each starts signed in to the right subscription and account switching (D-097) keeps working, and for research into other improvements. Anthropic's terms say third-party developers "may not collect, store, or intermediate Claude.ai credentials or session tokens — sign-in to a Claude account must complete through Anthropic's own flow", while an end user may sign in to the unmodified Claude Code binary with their own subscription; Google's terms say the same of Gemini CLI's login. Each CLI supports a folder per account (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `GEMINI_CLI_HOME`). The owner was asked four questions.
+- **Decision:**
+  - **Sign-in:** TermOS runs each vendor's own sign-in in the account's folder, from its windows and commands (Claude Code's `claude auth login`, which takes a pasted code where there is no browser; Codex's `codex login`, with its device code where there is no browser; Gemini CLI's own login). The CLI keeps its login; TermOS stores no subscription credential, so D-096's "TermOS never reads their login tokens" stands. Every TermOS window then starts each CLI signed in to the account in use, switching included.
+  - **API keys:** an account may use an API key instead (Anthropic Console, OpenAI, Gemini API), kept in TermOS's secret store (D-058) and given to that CLI when it starts; Codex's is handed to `codex login --with-api-key`, which keeps it in the account's folder.
+  - **Gemini CLI** gets accounts like Claude Code and Codex: installed by TermOS, its own folder per account, sign-in, switching, TermOS's MCP server, usage. TermOS only ever launches the official binary.
+  - **Next, in this order, each its own milestone after M11d:** parallel agents in git worktrees with a review window that answers the agent (M12a); attention routing and resuming agent panes (M12b); remote access (M12c); hardening (M12d).
+- **Alternatives:** TermOS keeping a Claude `setup-token` or Codex access token in its keyring and handing it to the CLI (the same convenience, but against Anthropic's wording, and it reverses D-096); accounts for subscriptions only; opencode as well (it keeps every login in one file outside its config folder).
+
+
+## D-112: Signing in from TermOS, API keys per account, Gemini CLI
+- **Status:** Accepted · 2026-11-05
+- **Context:** D-111: TermOS runs each vendor's own sign-in and stores no subscription credential; accounts may use API keys; Gemini CLI gets accounts. The CLIs' current interfaces were read from their documentation and source (Claude Code's `claude auth login|status`, Codex's `codex login`, `login status` and `--with-api-key`, Gemini CLI's `GEMINI_CLI_HOME`, its settings and its session files).
+- **Decision:**
+  - **Sign-in** (`termos account sign-in CLI NAME`, the usage window's **[Sign in]**, a new account's offer) runs the CLI's own sign-in with the account's folder:
+    - Claude Code: `claude auth login` (`--console`, `--sso`), which shows a link and reads the pasted code, so it works without a browser on the machine.
+    - Codex: `codex login`, or `codex login --device-auth` where no browser can open (over SSH, or on Linux without a graphical session) or with `--device`.
+    - Gemini CLI: its interactive start with `security.auth.selectedType = "oauth-personal"` in the account's settings, and `NO_BROWSER=true` where no browser can open (a link and a pasted code).
+    - An account with an API key refuses a sign-in until the key is removed (the key would come first).
+  - **Who is signed in** (`termos account status`, after each sign-in): Claude Code's `claude auth status` JSON (`loggedIn`, `authMethod`, `email`, `subscriptionType`); Codex's `codex login status` (exit status and its first line; a configured key is only named, never echoed). Gemini CLI has no status command: its `google_accounts.json` (an email, no token) and the presence of its login file. Each command runs with a 30-second limit. Accounts with a key in TermOS's store report it without reading it.
+  - **API keys** (`termos account key CLI NAME [--remove]`, **[API key]**): typed without echo, or read from standard input.
+    - Claude Code and Gemini CLI: kept in TermOS's secret store (D-058) as `account.<cli>.<name>`, named in the account's `api-key` in `accounts.toml`, and given by the shim as `ANTHROPIC_API_KEY` or `GEMINI_API_KEY` (held as `SecretEnv`, a `secrecy` type, until the program starts). Gemini CLI's account settings select `gemini-api-key`. Claude Code asks once whether to use it; TermOS says to choose Yes and does not write the approval itself, which would put part of the key in Claude Code's settings.
+    - Codex: piped to `codex login --with-api-key` with `CODEX_HOME` set; Codex keeps it; `--remove` is `codex logout`.
+  - **Isolation:** for TermOS's accounts and any account with a key, the shims (and agent windows and the harness, which plan launches the same way) drop the variables each CLI signs in with: Claude Code's `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `CLAUDE_CODE_OAUTH_TOKEN`, `CLAUDE_CODE_OAUTH_REFRESH_TOKEN`, `CLAUDE_CODE_USE_BEDROCK|VERTEX|FOUNDRY`; Codex's `CODEX_API_KEY`, `CODEX_ACCESS_TOKEN`; Gemini CLI's `GEMINI_API_KEY`, `GOOGLE_API_KEY`, `GOOGLE_GENAI_USE_VERTEXAI|GCA`, `GOOGLE_GEMINI_BASE_URL`. Variables the CLIs do not sign in with (`OPENAI_API_KEY`) stay for the project's own tools. `default` keeps the environment as it is.
+  - **Gemini CLI:**
+    - **Install:** the GitHub release's `gemini-cli-bundle.zip`, checked against GitHub's SHA-256 digest (none: refused), unpacked with the `zip` crate (deflate only; names that would leave the folder are refused), run by `node@22` from mise (installed, not made the user's default) through a launcher TermOS writes (`gemini`, or `gemini.cmd` on Windows). Zip downloads of other CLIs use the crate too, rather than `tar`.
+    - **Accounts:** `GEMINI_CLI_HOME` is a home folder; Gemini CLI keeps its files in `.gemini` in it, so an account's folder holds `.gemini/` and a link to the user's `~/.agents` (Agent Skills, D-098). `GEMINI.md`, `commands`, `skills` and `extensions` are linked; `settings.json` is copied. `GEMINI_FORCE_FILE_STORAGE=true` keeps logins in the account's files, since Gemini CLI's keychain entries do not depend on its home.
+    - **TermOS's MCP server** is written into the account's `settings.json` (`mcpServers.termos`), as Codex's `config.toml` is, rather than with `gemini mcp add`. For TermOS's install, `general.enableAutoUpdate` and `enableAutoUpdateNotification` are turned off. A settings file that is not plain JSON (comments) is left unchanged, with an error.
+    - **Usage:** `.gemini/tmp/<project>/chats/session-*.jsonl` (and sub-agents' sessions below them): a `gemini` message with `tokens` and `model`, counted once by session and id (Gemini CLI writes a message again once its tokens are known); input is the prompt less its cached part, thinking counts as output, cached reads apart. No text is kept.
+    - **Carrying a conversation:** the newest session for the folder (found through `projects.json`) is copied into the other account under the project name that account uses for the folder (recorded in its `projects.json` when it has none) and resumed with `gemini --resume <id>`.
+    - The harness (D-100) still routes to Claude Code and Codex only.
+  - **The desktop:** `account.key CLI NAME` (palette, the usage window's **[API key]**) opens a window running `termos account key`; the usage window's account rows shorten "signed in as …" to fit before their buttons.
+- **Alternatives:** pre-approving the key in Claude Code's `.claude.json` (an undocumented field holding part of the key); `gemini mcp add` (its `-e` drops values with `=`, and its scope depends on the folder); installing Gemini CLI with mise's npm backend (it needs a global Node.js choice and leaves updates to npm); reading the CLIs' login files for status (their formats are undocumented, and they are credentials).
+
 ---
 
 ## Open questions (the owner will be asked before the milestone that needs each one)
