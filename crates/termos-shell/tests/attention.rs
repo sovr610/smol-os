@@ -303,6 +303,10 @@ async fn zsh_marks_its_commands_after_the_users_zshrc() {
     marks_commands(
         &zsh,
         |home| {
+            // The user's own .zshenv is loaded too: Debian's and Ubuntu's
+            // global zshrc then skips its compinit, which can stop at a
+            // question about insecure directories.
+            std::fs::write(home.join(".zshenv"), "skip_global_compinit=1\n").expect("write");
             std::fs::write(home.join(".zshrc"), "PROMPT='%# '\n").expect("write");
         },
         "%",

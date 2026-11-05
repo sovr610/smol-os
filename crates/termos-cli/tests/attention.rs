@@ -15,10 +15,19 @@ fn read(p: &Path) -> String {
     std::fs::read_to_string(p).unwrap_or_else(|e| panic!("{}: {e}", p.display()))
 }
 
+/// `termos ARGS` with the test's folder as home on every platform
+/// (Windows finds the CLIs' folders through `USERPROFILE`, not `HOME`).
+fn run_home(env: &common::Env, args: &[&str]) -> std::process::Output {
+    env.command_in(env.path(), args)
+        .env("USERPROFILE", env.path())
+        .output()
+        .expect("termos runs")
+}
+
 #[test]
 fn hooks_are_added_to_every_cli_and_taken_out() {
     let env = common::Env::new("");
-    let out = env.run(&["agent", "hooks"]);
+    let out = run_home(&env, &["agent", "hooks"]);
     let text = String::from_utf8_lossy(&out.stdout).into_owned();
     assert!(
         out.status.success(),
@@ -41,10 +50,10 @@ fn hooks_are_added_to_every_cli_and_taken_out() {
     assert!(read(&gemini).contains("AfterAgent"));
     assert!(text.contains("Codex asks you to trust them"), "{text}");
     // Again: nothing to change.
-    let again = env.run(&["agent", "hooks", "claude"]);
+    let again = run_home(&env, &["agent", "hooks", "claude"]);
     assert!(String::from_utf8_lossy(&again.stdout).contains("has TermOS's hooks"));
     // Out again, the files' other settings kept.
-    let out = env.run(&["agent", "hooks", "--remove"]);
+    let out = run_home(&env, &["agent", "hooks", "--remove"]);
     assert!(out.status.success());
     for file in [&claude, &codex, &gemini] {
         assert!(!read(file).contains("agent event"), "{}", file.display());
