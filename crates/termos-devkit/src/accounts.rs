@@ -320,8 +320,12 @@ impl Account {
     /// reading its login: Claude Code keeps the account's email beside its
     /// settings; a login file's presence says the rest. Empty when it
     /// cannot be told (Claude Code on macOS keeps its login in the
-    /// Keychain).
+    /// Keychain). An account given an API key in TermOS's secret store
+    /// says so instead.
     pub fn signed_in(&self, get: &dyn Fn(&str) -> Option<String>, home: Option<&Path>) -> String {
+        if self.meta.api_key.is_some() {
+            return "API key".into();
+        }
         match self.tool {
             Tool::Claude => {
                 let email = self
@@ -980,6 +984,16 @@ mod tests {
         assert_eq!(
             a.get(Tool::Claude, "work").expect("get").meta.budget_5h,
             Some(2_000_000)
+        );
+        // An account with a key in TermOS's secret store says so.
+        let mut meta = a.get(Tool::Claude, "work").expect("get").meta;
+        meta.api_key = Some("account.claude.work".into());
+        a.set_meta(Tool::Claude, "work", meta).expect("meta");
+        assert_eq!(
+            a.get(Tool::Claude, "work")
+                .expect("get")
+                .signed_in(&|_| None, Some(&home)),
+            "API key"
         );
         a.remove(Tool::Claude, "work").expect("removed");
         assert!(!wdir.exists());

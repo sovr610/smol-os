@@ -148,10 +148,11 @@ or `tos usage`. For every account of each CLI:
 - **Its tokens** today and over 7 days, its main model, a 7-day sparkline
   and who it is signed in as. Tokens are input, output and cache writes;
   cache reads, a fraction of the price, are shown apart.
-- **Buttons:** **[Use]**, **[Open]** (a Claude Code or Codex window as that
-  account), **[Sign in]**, **[Budget]**, **[Add account]**. Keys: `↑` `↓`
-  to select, `u` use, `o` open, `s` sign in, `b` budget, `a` add, `r`
-  refresh, `q` close.
+- **Buttons:** **[Use]**, **[Open]** (a Claude Code, Codex or Gemini CLI
+  window as that account), **[Sign in]**, **[API key]**, **[Budget]**,
+  **[Add account]**. Keys: `↑` `↓` to select, `u` use, `o` open, `s` sign
+  in, `k` API key, `b` budget, `a` add, `r` refresh, `q` close. An account
+  given an API key shows "API key" where others show who is signed in.
 
 Below them, TermOS's own agents by provider, with their cost where prices
 are known. The command center counts every account's tokens too.

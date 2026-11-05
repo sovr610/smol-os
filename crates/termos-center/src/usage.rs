@@ -201,6 +201,7 @@ impl UsageApp {
             "use" => format!("account.use {cli} {name}"),
             "open" => format!("agent.external {cli}@{name}"),
             "sign-in" => format!("account.sign-in {cli} {name}"),
+            "key" => format!("account.key {cli} {name}"),
             "budget" => format!("account.budget {cli} {name}"),
             "add" => format!("account.add {cli}"),
             _ => return AppEffect::None,
@@ -303,7 +304,7 @@ impl UsageApp {
         let help = match &self.message {
             Some(m) => m.clone(),
             None => {
-                "↑↓ select · u use · o open · s sign in · b budget · a add · r refresh · q close"
+                "↑↓ select · u use · o open · s sign in · k API key · b budget · a add · r refresh · q close"
                     .into()
             }
         };
@@ -515,6 +516,7 @@ impl App for UsageApp {
             KeyCode::Char('u') | KeyCode::Enter => self.act("use"),
             KeyCode::Char('o') => self.act("open"),
             KeyCode::Char('s') => self.act("sign-in"),
+            KeyCode::Char('k') => self.act("key"),
             KeyCode::Char('b') => self.act("budget"),
             KeyCode::Char('a') => self.act("add"),
             KeyCode::Char('r') => self.press(Button::Refresh),
@@ -766,6 +768,10 @@ mod tests {
         assert_eq!(
             a.handle_key(key(KeyCode::Char('s'))),
             AppEffect::Command("account.sign-in claude default".into())
+        );
+        assert_eq!(
+            a.handle_key(key(KeyCode::Char('k'))),
+            AppEffect::Command("account.key claude default".into())
         );
         assert_eq!(
             a.handle_key(key(KeyCode::Char('b'))),
