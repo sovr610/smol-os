@@ -147,11 +147,16 @@ enum TosCmd {
     Copy { text: Vec<String> },
     /// Print the last thing copied.
     Paste,
-    /// Show a message in the status line and the notification center.
+    /// Show a message in the status line and the notification center;
+    /// with `--when-done`, say when this pane's next command finishes.
     Notify {
         #[arg(long, value_enum, default_value = "info")]
         level: Level,
-        #[arg(required = true)]
+        /// Say when the next command in this pane finishes, however long
+        /// it takes (D-118).
+        #[arg(long, conflicts_with = "text")]
+        when_done: bool,
+        #[arg(required_unless_present = "when_done")]
         text: Vec<String>,
     },
     /// Pick a theme: dark, light, high-contrast or auto.
@@ -507,7 +512,8 @@ fn run(tos: Tos) -> anyhow::Result<ExitCode> {
                 out.flush()?;
             }
         }
-        TosCmd::Notify { level, text } => {
+        TosCmd::Notify { when_done: true, .. } => named("pane.notify-when-done")?,
+        TosCmd::Notify { level, text, .. } => {
             let level = match level {
                 Level::Info => "info",
                 Level::Warn => "warn",

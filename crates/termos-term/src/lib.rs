@@ -11,6 +11,8 @@
 //! - [`input`]: encoding keys, mouse, paste and focus for the child.
 //! - [`blocks`] and [`signals`]: command blocks from shells' OSC 133
 //!   marks and programs' notifications (D-116).
+//! - [`links`]: links, paths, hashes and addresses found in the text in
+//!   view (M13a, D-118).
 //!
 //! The VT input path is fuzzed by `fuzz/fuzz_targets/vt_advance.rs`.
 
@@ -19,6 +21,7 @@ pub mod graphics;
 pub mod input;
 pub mod intercept;
 mod kbguard;
+pub mod links;
 pub mod pty;
 pub mod signals;
 pub mod vt;

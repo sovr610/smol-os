@@ -98,6 +98,8 @@ pub fn default_prefix_bindings() -> Vec<Binding> {
         b("C", C::CenterOpen),
         b("j", C::AgentWaiting),
         b("y", C::CopyOutput),
+        b("u", C::Hints(String::new())),
+        b("/", C::SearchAll(false)),
         b("Enter", C::Menu),
         b(":", C::Palette),
         b("?", C::Keys),

@@ -352,6 +352,7 @@ mod tests {
             spans,
             cursor,
             images: None,
+            links: None,
         }
     }
 

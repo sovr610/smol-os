@@ -132,6 +132,14 @@ pub enum Command {
     PromptNext,
     /// Copy the last command's output in the focused pane.
     CopyOutput,
+    /// Hint mode over the focused pane: labels on links, paths, hashes or
+    /// addresses (`url`, `path`, `hash`, `ip`, `any`; D-118).
+    Hints(String),
+    /// Search every terminal pane's text; `true`: in every session.
+    SearchAll(bool),
+    /// Say when the focused pane's next command finishes, however long it
+    /// takes (D-118).
+    NotifyWhenDone,
     /// The package manager app (D-110).
     PackagesOpen,
     /// `termos pkg ARGS` in a window: "install devroot gcc" (D-110).
@@ -424,6 +432,22 @@ pub const COMMANDS: &[CommandInfo] = &[
     info("pane.prompt-prev", "Scroll back to the previous prompt"),
     info("pane.prompt-next", "Scroll on to the next prompt"),
     info("pane.copy-output", "Copy the last command's output"),
+    info("pane.hints", "Hints: label links and paths to open or copy"),
+    CommandInfo {
+        name: "pane.hints",
+        description: "Hints: label links and paths to open or copy",
+        arg: Some("path"),
+    },
+    info("search.all", "Search the text of every pane"),
+    CommandInfo {
+        name: "search.all",
+        description: "Search the text of every pane",
+        arg: Some("--all-sessions"),
+    },
+    info(
+        "pane.notify-when-done",
+        "Tell me when this pane's command finishes",
+    ),
     CommandInfo {
         name: "file.open",
         description: "Open a file",
@@ -714,6 +738,23 @@ impl FromStr for Command {
             "pane.prompt-prev" => no_arg(Command::PromptPrev),
             "pane.prompt-next" => no_arg(Command::PromptNext),
             "pane.copy-output" => no_arg(Command::CopyOutput),
+            "pane.hints" => match arg {
+                None => Ok(Command::Hints(String::new())),
+                Some(a) if termos_term::links::FILTERS.contains(&a) => {
+                    Ok(Command::Hints(if a == "any" { String::new() } else { a.to_owned() }))
+                }
+                Some(a) => Err(CommandError(format!(
+                    "`pane.hints`: `{a}` is not url, path, hash, ip or any"
+                ))),
+            },
+            "search.all" => match arg {
+                None => Ok(Command::SearchAll(false)),
+                Some("--all-sessions") => Ok(Command::SearchAll(true)),
+                Some(a) => Err(CommandError(format!(
+                    "`search.all`: `{a}` is not --all-sessions"
+                ))),
+            },
+            "pane.notify-when-done" => no_arg(Command::NotifyWhenDone),
             "network.open" => no_arg(Command::NetworkOpen),
             "update.open" => no_arg(Command::UpdateOpen),
             "settings.open" => no_arg(Command::SettingsOpen),
@@ -837,6 +878,11 @@ impl fmt::Display for Command {
             Command::PromptPrev => f.write_str("pane.prompt-prev"),
             Command::PromptNext => f.write_str("pane.prompt-next"),
             Command::CopyOutput => f.write_str("pane.copy-output"),
+            Command::Hints(k) if k.is_empty() => f.write_str("pane.hints"),
+            Command::Hints(k) => write!(f, "pane.hints {k}"),
+            Command::SearchAll(false) => f.write_str("search.all"),
+            Command::SearchAll(true) => f.write_str("search.all --all-sessions"),
+            Command::NotifyWhenDone => f.write_str("pane.notify-when-done"),
             Command::PackagesOpen => f.write_str("packages.open"),
             Command::PkgRun(a) => write!(f, "pkg.run {a}"),
             Command::DevrootCreate => f.write_str("devroot.create"),
@@ -867,6 +913,8 @@ impl Command {
             Command::ThemeSelect(b) => format!("{base}: {b}"),
             Command::WorkspaceSelect(n) => format!("{base} {n}"),
             Command::SessionSwitch(name) => format!("{base} {name}"),
+            Command::Hints(k) if !k.is_empty() => format!("{base}: {k}"),
+            Command::SearchAll(true) => format!("{base}, in every session"),
             _ => base.to_owned(),
         }
     }

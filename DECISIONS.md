@@ -1377,6 +1377,52 @@ rewrite history.
 
 ---
 
+## D-118: M13a: links, hints, search and finished commands
+- **Status:** Accepted · 2026-11-05
+- **Context:** D-117 planned M13a. The owner chose the plan's answers to its "Ask first" questions: links open on the client's machine; a finished long command is loud only when it failed; `u` for hints and `/` for search.
+- **Decision:**
+  - **Links in the grid and on the wire (`termos_render::link`, protocol 6):**
+    - `Cell` gains `link: u32`, an id in its grid's `LinkTable` (0: none). The diff compares it with the rest of the cell; a wide character's two halves carry it.
+    - **Stable ids:** ids are never reused for another address within a table. The server carries each client's table from frame to frame, and drops unused addresses only past 256 (at most 1024 at once). So an unchanged id still means the same address, and the diff can compare ids alone.
+    - `FrameUpdate::links` sends the whole table when it changed, as `images` does. The client's encoder writes linked runs inside OSC 8 (closing at a change of link and at the end of each frame), so the outer terminal shows and opens them.
+    - **What is kept:** `http`, `https`, `mailto` and `file` addresses, without control characters, at most 2 KiB. TermOS's own anchors (`termos-image:`, `termos-block:`) and every other scheme are left out.
+    - **Where:** `[ui] links` (default on). Off for clients whose terminal is `linux` or `dumb`, which might print the sequence, and for the KMS console, which underlines a program's link while the pointer is over it.
+  - **Finding links and paths (`termos_term::links`):**
+    - **What it finds:** web and email addresses, git hashes (7–40 lowercase hex digits with a letter), IPv4 and IPv6 addresses, and paths with `:line[:col]`, `(line[,col])` or Python's `", line N"`.
+    - **Patterns:** `regex` over the rows in view, with rows the terminal wrapped joined (`VtBackend::view_rows`, which also gives the programs' links and each character's column).
+    - **Paths:** a path counts only if it exists, relative to the pane's folder (OSC 7, else its foreground program's); a diff's `a/` and `b/` are tried without. At most 256 lookups per scan, remembered for 10 s.
+    - **When:** only on Ctrl-hover, Ctrl+click and hint mode, never per frame.
+    - Fuzzed as `link_detect`.
+  - **Clicking:** Ctrl+click opens the program's link or the match under the pointer; with Ctrl held, it is underlined (`ClientUi::link_hover`, drawn over the pane). Over a program that reads the mouse, Ctrl+Shift+click (Shift keeps the mouse for TermOS, D-085).
+  - **Opening (owner: on the client's machine):**
+    - **Web and mail addresses:** `ServerMsg::Open {url}` to the client that clicked, which runs `xdg-open`, `open` or `explorer.exe` with the address as one argument (no shell) after checking its scheme again.
+    - **Where that cannot work, the address is copied and a toast says why:** the KMS console (no browser) and a client over SSH (`Caps::remote`: the client runs on the remote host; the outer terminal still opens the OSC 8 link itself).
+    - **`file:` addresses** that name this machine (no host, `localhost`, or its name) open in TermOS; others are copied.
+    - **Paths:** with a line, `file.edit PATH:LINE[:COL]`; without, `file.open` (folders in Files, pictures and Markdown in their viewers, the rest in the editor).
+    - **Hashes and IP addresses** are copied.
+  - **The editor at a line:** `file.edit` splits `PATH:LINE[:COL]` unless the whole names a file. The arguments come from the editor's name: Vim and Neovim `+LINE` (`+call cursor(L,C)` with a column), Helix, Sublime Text and Zed `FILE:L:C`, VS Code and its kin `-g FILE:L:C`, nano `+L,C`, Emacs, micro and Kakoune `+L:C`, others the file alone. `termos edit` (TermOS's Neovim or Helix, by `[dev] editor`) gets the same.
+  - **Hint mode (`pane.hints [url|path|hash|ip|any]`, prefix `u`, `termos_shell::hints`):**
+    - Labels from `[hints] alphabet` (default `asdfghjkl`): one letter each while there are enough letters, else all of the same length so none starts another. The bottom match gets the first label.
+    - A label opens its match, Shift and the label copies it, Ctrl and the label pastes it into the pane; Esc leaves.
+    - Drawn over the pane like copy mode, per client.
+  - **Search across panes (`search.all [--all-sessions]`, prefix `/`, `termos_shell::search`):**
+    - A box like the palette over every terminal pane of the session, history and screen.
+    - **Matching:** plain text, or a regular expression after a leading `/`; case-folded unless the query has a capital.
+    - **How it runs:** the panes' lines are copied when the box opens (`VtBackend::logical_lines_at`: wrapped rows joined, with the row each starts on), and each query runs on a thread over that copy, stopping at 500 matches and waking the desktop.
+    - **Going there:** results are grouped by pane. Enter focuses the pane and enters copy mode at the match's row and column (worked out from the line's width), with the match selected. With `--all-sessions` the server gathers every session's panes and moves the client to the match's session.
+  - **When a long command finishes (owner: loud for failures only):**
+    - Blocks record when output started (`C`) and when the command finished (`D`); the emulator reports `VtEvent::Finished {block, exit, ran}`.
+    - **When:** a command that ran `[notifications] long-command` seconds or more (default 15; 0 turns it off) and finishes where no client is looking: off the active workspace, or every client's terminal has lost focus (focus reports), or no client is attached.
+    - **What:** the pane's attention becomes `Done` (✓ on its tab) or the new `Failed` (✗ in the error colour). It is quiet like `Done` and goes once its workspace is seen; an agent waiting for the user stays the louder mark. A toast and a center entry say what ran, where, its status and how long (``"`make test` in 1:api failed (2) after 3m12s"``), with the command line from the block.
+    - **Failures:** a system notification too, if `[notifications] system`. Successes stay quiet.
+  - **`pane.notify-when-done`** (pane menu, `tos notify --when-done`): the command running in the pane, or the next one, is announced whatever its length and wherever the user looks. `tos notify --when-done` typed alone waits for the next command. Without shell integration (no OSC 133 seen in the pane) it fires once the pane has been quiet for 5 s after output: a deadline in the desktop's timers, only while armed.
+- **Alternatives:**
+  - **The link table:** a link's address in every cell (16 bytes more per cell and the address on every changed cell), or ids renumbered each frame (every linked cell resent whenever a link appears above it).
+  - **Opening over SSH:** running the opener on the remote host anyway (no browser there, or the wrong machine's).
+  - **Finished commands:** loud for both (a toast for every build is noise); detection without shell integration by output timing alone (wrong for quiet long commands).
+
+---
+
 ## Open questions (the owner will be asked before the milestone that needs each one)
 
 | ID | Question | Needed by | Current lean |

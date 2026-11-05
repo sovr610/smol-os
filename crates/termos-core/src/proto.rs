@@ -22,7 +22,9 @@ use crate::input::{KeyEvent, MouseEvent};
 /// - 4: Kitty keyboard details (`ClientMsg::KeyDetail`,
 ///   `ServerMsg::KeyboardFlags`).
 /// - 5: system notifications (`ServerMsg::Notify`).
-pub const PROTOCOL_VERSION: u32 = 5;
+/// - 6: links (`Cell::link`, `FrameUpdate::links`, `ServerMsg::Open`;
+///   M13a, D-118).
+pub const PROTOCOL_VERSION: u32 = 6;
 
 /// A frame for one client: the cells that changed since the last frame this
 /// client received, plus where the cursor goes.
@@ -38,6 +40,10 @@ pub struct FrameUpdate {
     /// Every pixel image the client shows after this frame, when that
     /// changed (`None`: same as before). Drawn after the cells.
     pub images: Option<Vec<ImagePlacement>>,
+    /// What the cells' link ids mean: the whole table, when it changed
+    /// (`None`: same as before). The client writes linked cells inside
+    /// OSC 8 (M13a, D-118).
+    pub links: Option<Vec<(u32, String)>>,
 }
 
 /// One image (or one visible piece of it) on a client's screen.
@@ -99,6 +105,13 @@ pub enum ServerMsg {
     },
     /// Set the outer terminal's title.
     Title(String),
+    /// Open a web or mail address on the client's machine (`xdg-open`,
+    /// `open`, `explorer`): the user Ctrl+clicked a link (M13a, D-118).
+    /// Only `http`, `https` and `mailto` addresses are sent, and the
+    /// client checks again.
+    Open {
+        url: String,
+    },
     /// The session ended; the client should restore the terminal and exit.
     Exit {
         reason: String,

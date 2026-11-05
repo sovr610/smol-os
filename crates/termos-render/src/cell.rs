@@ -81,6 +81,9 @@ pub struct Cell {
     pub symbol: CompactString,
     pub width: u8,
     pub style: Style,
+    /// A hyperlink: an id in the link table of the grid the cell is in
+    /// ([`crate::link::LinkTable`]); 0 is none (M13a, D-118).
+    pub link: u32,
 }
 
 impl Default for Cell {
@@ -96,6 +99,7 @@ impl Cell {
             symbol: CompactString::const_new(" "),
             width: 1,
             style,
+            link: 0,
         }
     }
 
@@ -107,6 +111,7 @@ impl Cell {
             symbol,
             width: 1,
             style,
+            link: 0,
         }
     }
 
@@ -117,6 +122,7 @@ impl Cell {
             symbol: CompactString::const_new("\u{0}"),
             width: 1,
             style: Style::new(),
+            link: 0,
         }
     }
 
@@ -126,6 +132,7 @@ impl Cell {
             symbol: CompactString::const_new(""),
             width: 0,
             style,
+            link: 0,
         }
     }
 

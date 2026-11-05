@@ -70,8 +70,11 @@ pub struct Config {
     pub kms: KmsConfig,
     /// The command center's history (M10c, D-092).
     pub center: CenterConfig,
-    /// Notifications outside TermOS (M12b, D-115).
+    /// Notifications outside TermOS (M12b, D-115) and when long commands
+    /// finish (M13a, D-118).
     pub notifications: NotificationsConfig,
+    /// Hint mode's labels (M13a, D-118).
+    pub hints: HintsConfig,
     /// The coding harness (M11c, D-099).
     pub harness: HarnessConfig,
     /// A git worktree per task (M12a, D-113).
@@ -105,6 +108,7 @@ impl Default for Config {
             kms: KmsConfig::default(),
             center: CenterConfig::default(),
             notifications: NotificationsConfig::default(),
+            hints: HintsConfig::default(),
             harness: HarnessConfig::default(),
             worktrees: WorktreesConfig::default(),
         }
@@ -371,12 +375,58 @@ pub struct NotificationsConfig {
     /// Send "needs you" to the terminal TermOS runs in (OSC 9, 99 or
     /// 777), which may show it as a system notification.
     pub system: bool,
+    /// A command that ran at least this many seconds and finishes where
+    /// no one is looking says so (D-118); 0 turns it off.
+    pub long_command: u64,
 }
 
 impl Default for NotificationsConfig {
     fn default() -> Self {
-        Self { system: true }
+        Self {
+            system: true,
+            long_command: 15,
+        }
     }
+}
+
+/// Hint mode (`[hints]`, D-118).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(default, deny_unknown_fields, rename_all = "kebab-case")]
+pub struct HintsConfig {
+    /// The letters labels are made of, the easiest first: at least two,
+    /// lowercase, none twice.
+    #[serde(deserialize_with = "de_alphabet")]
+    pub alphabet: String,
+}
+
+impl Default for HintsConfig {
+    fn default() -> Self {
+        Self {
+            alphabet: String::from("asdfghjkl"),
+        }
+    }
+}
+
+fn de_alphabet<'de, D: serde::Deserializer<'de>>(d: D) -> Result<String, D::Error> {
+    let s = String::deserialize(d)?;
+    let mut seen = Vec::new();
+    for c in s.chars() {
+        if !c.is_ascii_lowercase() && !c.is_ascii_digit() {
+            return Err(serde::de::Error::custom(format!(
+                "hint letters must be lowercase letters or digits, not {c:?}"
+            )));
+        }
+        if seen.contains(&c) {
+            return Err(serde::de::Error::custom(format!(
+                "{c:?} is in the hint letters twice"
+            )));
+        }
+        seen.push(c);
+    }
+    if seen.len() < 2 {
+        return Err(serde::de::Error::custom("hints need at least two letters"));
+    }
+    Ok(s)
 }
 
 /// Motion and looks (D-042, D-087, D-088).
@@ -401,6 +451,9 @@ pub struct UiConfig {
     pub splash: bool,
     /// New sessions and workspaces start on the desktop or as a terminal.
     pub start: StartLook,
+    /// Links programs print (OSC 8) are passed to the terminal TermOS
+    /// runs in, which shows and opens them (D-118).
+    pub links: bool,
 }
 
 impl Default for UiConfig {
@@ -413,6 +466,7 @@ impl Default for UiConfig {
             wallpaper: Wallpaper::default(),
             splash: true,
             start: StartLook::default(),
+            links: true,
         }
     }
 }
@@ -742,6 +796,10 @@ restore-agents = true    # Claude Code, Codex and Gemini CLI continue their conv
 
 [notifications]
 system = true            # "needs you" as a system notification where the terminal shows them
+long-command = 15        # seconds: a longer command that finishes out of sight says so (0: off)
+
+[hints]
+alphabet = "asdfghjkl"   # hint mode's labels (prefix u), the easiest letters first
 
 [plugins]
 enabled = []             # plugin directory names under ~/.config/termos/plugins
@@ -908,6 +966,7 @@ gradients = true         # colour gradients in title bars (truecolor terminals)
 wallpaper = "pattern"    # pattern | none | a picture's path
 splash = true            # the logo for a moment when you attach
 start = "desktop"        # desktop (a floating terminal on the wallpaper) | terminal (full screen)
+links = true             # links programs print (OSC 8) shown and opened by your terminal
 
 [graphics]
 protocol = "auto"        # auto | kitty | sixel | iterm2 | blocks
@@ -1022,6 +1081,18 @@ position = "top"
         let e = Config::parse("[shell]\nintegrate = false\n", Path::new("c.toml"))
             .expect_err("unknown key");
         assert!(e.to_string().contains("`shell` is a program"), "{e}");
+        let c = Config::parse(
+            "[notifications]\nlong-command = 0\n[hints]\nalphabet = \"jk\"\n[ui]\nlinks = false\n",
+            Path::new("c.toml"),
+        )
+        .expect("valid");
+        assert_eq!(c.notifications.long_command, 0);
+        assert_eq!(c.hints.alphabet, "jk");
+        assert!(!c.ui.links);
+        for bad in ["\"a\"", "\"aa\"", "\"aB\"", "\"a;\""] {
+            let src = format!("[hints]\nalphabet = {bad}\n");
+            assert!(Config::parse(&src, Path::new("c.toml")).is_err(), "{bad}");
+        }
         let c = Config::parse("[notifications]\nsystem = false\n", Path::new("c.toml"))
             .expect("parses");
         assert!(!c.notifications.system);

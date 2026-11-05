@@ -7,6 +7,7 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::cell::{Cell, Style, sanitize};
 use crate::color::{Color, Palette, Rgb};
+use crate::link::{KEEP_LINKS, LinkTable};
 
 /// A rectangle in cell coordinates.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
@@ -136,6 +137,9 @@ pub struct Grid {
     cols: u16,
     rows: u16,
     cells: Vec<Cell>,
+    /// What the cells' link ids mean. Clearing or resizing the grid keeps
+    /// it, so a client's ids stay the same from frame to frame.
+    links: LinkTable,
 }
 
 impl Grid {
@@ -144,7 +148,38 @@ impl Grid {
             cols,
             rows,
             cells: vec![Cell::default(); usize::from(cols) * usize::from(rows)],
+            links: LinkTable::default(),
         }
+    }
+
+    /// The addresses the cells link to.
+    pub fn links(&self) -> &LinkTable {
+        &self.links
+    }
+
+    pub fn links_mut(&mut self) -> &mut LinkTable {
+        &mut self.links
+    }
+
+    /// The address the cell at (x, y) links to.
+    pub fn link_at(&self, x: u16, y: u16) -> Option<&str> {
+        let id = self.get(x, y)?.link;
+        (id != 0).then(|| self.links.get(id)).flatten()
+    }
+
+    /// Once the table has grown past [`KEEP_LINKS`], drops the addresses
+    /// no cell links to any more. Ids in use keep their addresses.
+    pub fn forget_unused_links(&mut self) {
+        if self.links.len() <= KEEP_LINKS {
+            return;
+        }
+        let used: std::collections::HashSet<u32> = self
+            .cells
+            .iter()
+            .map(|c| c.link)
+            .filter(|l| *l != 0)
+            .collect();
+        self.links.retain(&used);
     }
 
     pub fn cols(&self) -> u16 {
@@ -200,9 +235,10 @@ impl Grid {
                 return;
             }
             self.break_wide_at(x + 1, y);
-            let style = cell.style;
+            let (style, link) = (cell.style, cell.link);
             self.cells[i] = cell;
             self.cells[i + 1] = Cell::continuation(style);
+            self.cells[i + 1].link = link;
         } else {
             self.cells[i] = cell;
         }
@@ -385,7 +421,12 @@ impl Grid {
                 if cell.is_continuation() {
                     continue;
                 }
-                self.set(dx, dy, cell.clone());
+                let mut cell = cell.clone();
+                if cell.link != 0 {
+                    // Ids mean nothing outside their own table.
+                    cell.link = src.links.get(cell.link).map_or(0, |u| self.links.intern(u));
+                }
+                self.set(dx, dy, cell);
             }
         }
     }
@@ -475,6 +516,46 @@ mod tests {
     use super::*;
 
     use proptest::{prop_assert, prop_assert_eq};
+
+    fn link(g: &mut Grid, x: u16, y: u16, url: &str) {
+        let id = g.links_mut().intern(url);
+        let mut cell = g.get(x, y).cloned().unwrap_or_default();
+        cell.link = id;
+        g.set(x, y, cell);
+    }
+
+    #[test]
+    fn links_survive_clearing_and_unused_ones_go() {
+        let mut g = Grid::new(4, 1);
+        link(&mut g, 1, 0, "https://a");
+        assert_eq!(g.link_at(1, 0), Some("https://a"));
+        assert_eq!(g.link_at(0, 0), None);
+        g.clear(Style::new());
+        assert_eq!(g.link_at(1, 0), None);
+        // The table keeps the id for the next frame.
+        assert_eq!(g.links().len(), 1);
+        for i in 0..=crate::link::KEEP_LINKS {
+            g.links_mut().intern(&format!("https://x/{i}"));
+        }
+        link(&mut g, 2, 0, "https://kept");
+        g.forget_unused_links();
+        assert_eq!(g.links().len(), 1);
+        assert_eq!(g.link_at(2, 0), Some("https://kept"));
+    }
+
+    #[test]
+    fn wide_linked_characters_link_both_halves_and_blit_remaps() {
+        let mut src = Grid::new(4, 1);
+        src.links_mut().intern("https://other");
+        src.put_str(0, 0, "界", Style::new(), 4);
+        link(&mut src, 0, 0, "https://wide");
+        assert_eq!(src.link_at(1, 0), Some("https://wide"));
+        let mut dst = Grid::new(6, 1);
+        dst.blit(&src, 2, 0);
+        assert_eq!(dst.link_at(2, 0), Some("https://wide"));
+        assert_eq!(dst.link_at(3, 0), Some("https://wide"));
+        assert_eq!(dst.links().len(), 1);
+    }
 
     #[test]
     fn poisoned_cells_differ_from_anything_drawn() {

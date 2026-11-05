@@ -55,6 +55,7 @@ impl Desktop {
             let what = match a.need {
                 crate::attention::Need::You => "needs you",
                 crate::attention::Need::Done => "finished",
+                crate::attention::Need::Failed => "failed",
             };
             agents.push(Entry::item(
                 format!("Go to {} ({what})", a.who),
@@ -199,6 +200,7 @@ impl Desktop {
                     Entry::item("Tutorial", Command::Tutorial),
                     Entry::item("All keys", Command::Keys),
                     Entry::item("Command palette", Command::Palette),
+                    Entry::item("Search all panes", Command::SearchAll(false)),
                     Entry::item("Notifications", Command::Notifications),
                     Entry::Separator,
                     Entry::item("About TermOS", Command::AboutOpen),
@@ -228,6 +230,14 @@ impl Desktop {
                 paste.disabled()
             });
             v.push(Entry::item("Select and copy text", Command::CopyMode));
+            v.push(Entry::item(
+                "Open a link or path",
+                Command::Hints(String::new()),
+            ));
+            v.push(Entry::item(
+                "Tell me when it finishes",
+                Command::NotifyWhenDone,
+            ));
             v.push(Entry::Separator);
         }
         v.push(Entry::item("Split right", Command::Split(SplitHow::Right)));

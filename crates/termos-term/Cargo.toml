@@ -15,6 +15,7 @@ alacritty_terminal.workspace = true
 base64.workspace = true
 flate2.workspace = true
 portable-pty.workspace = true
+regex.workspace = true
 termos-core.workspace = true
 termos-render.workspace = true
 tokio.workspace = true

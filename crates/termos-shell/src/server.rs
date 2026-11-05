@@ -174,6 +174,8 @@ struct Conn {
     sent_size: (u16, u16),
     last_cursor: Option<CursorState>,
     images: ClientImages,
+    /// The version of the link table the client last got (D-118).
+    links_sent: Option<u64>,
 }
 
 /// The pixel images a client has and shows.
@@ -1663,6 +1665,7 @@ impl Server {
                 prev: None,
                 sent_size: (0, 0),
                 last_cursor: None,
+                links_sent: None,
                 images: ClientImages::default(),
             },
         );
@@ -1823,6 +1826,34 @@ impl Server {
                         .post(Level::Info, "there are no saved sessions to restore");
                 }
             }
+            SessionRequest::SearchAll { client } => {
+                // Every session's panes, the asking one first (D-118).
+                let mut texts = self
+                    .sessions
+                    .get(&origin)
+                    .map(|e| e.desktop.search_texts())
+                    .unwrap_or_default();
+                for (k, e) in &self.sessions {
+                    if *k != origin {
+                        texts.extend(e.desktop.search_texts());
+                    }
+                }
+                if let Some(e) = self.sessions.get_mut(&origin) {
+                    e.desktop.open_search_for(client, texts);
+                }
+            }
+            SessionRequest::Reveal { client, hit } => match self.find_session(&hit.session) {
+                Some(k) => {
+                    self.move_client(client, k);
+                    if let Some(e) = self.sessions.get_mut(&k) {
+                        e.desktop.reveal_for(client, &hit);
+                    }
+                }
+                None => self.post_to_client(
+                    client,
+                    &format!("the session {} has ended", hit.session),
+                ),
+            },
             SessionRequest::WidgetClick { name, column } => {
                 #[cfg(feature = "wasm-widgets")]
                 if let Some((host, _)) = &self.widgets {
@@ -1928,6 +1959,13 @@ impl Server {
         let Some(entry) = self.sessions.get_mut(&conn.session) else {
             return;
         };
+        // The link table goes on from the last frame, so the ids of links
+        // still on screen stay the same (D-118).
+        if let Some(prev) = &conn.prev
+            && prev.links().version() != conn.cur.links().version()
+        {
+            conn.cur.links_mut().clone_from(prev.links());
+        }
         let cursor = entry.desktop.render(client, &mut conn.cur);
         let (grid_cols, grid_rows) = (conn.cur.cols(), conn.cur.rows());
         let visible = (grid_cols.min(conn.cols), grid_rows.min(conn.rows));
@@ -1946,7 +1984,17 @@ impl Server {
         };
         let spans = crop(spans, visible.0, visible.1);
         let cursor = cursor.filter(|c| c.x < visible.0 && c.y < visible.1);
-        if clear || !spans.is_empty() || cursor != conn.last_cursor || images.is_some() {
+        let version = conn.cur.links().version();
+        let links = (clear || conn.links_sent != Some(version)).then(|| {
+            conn.links_sent = Some(version);
+            conn.cur.links().entries()
+        });
+        if clear
+            || !spans.is_empty()
+            || cursor != conn.last_cursor
+            || images.is_some()
+            || links.is_some()
+        {
             let frame = FrameUpdate {
                 cols: visible.0,
                 rows: visible.1,
@@ -1954,6 +2002,7 @@ impl Server {
                 spans,
                 cursor,
                 images,
+                links,
             };
             if conn.tx.send(ServerMsg::Frame(frame)).is_ok() {
                 conn.busy = true;

@@ -365,6 +365,9 @@ impl Console {
             ServerMsg::Title(_) | ServerMsg::Notify { .. } => {}
             // The console's keyboard reports neither repeats nor releases.
             ServerMsg::KeyboardFlags(_) => {}
+            // The desktop copies addresses for a console instead: there
+            // is no browser to open them in (D-118).
+            ServerMsg::Open { .. } => {}
         }
         Ok(None)
     }

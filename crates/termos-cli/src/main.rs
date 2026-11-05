@@ -22,6 +22,7 @@ mod install;
 mod kms;
 mod launcher;
 mod models;
+mod opener;
 mod pkg_cmd;
 mod probe;
 #[cfg(any(windows, test))]

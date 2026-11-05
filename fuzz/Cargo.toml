@@ -137,3 +137,10 @@ path = "fuzz_targets/cli_events.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "link_detect"
+path = "fuzz_targets/link_detect.rs"
+test = false
+doc = false
+bench = false

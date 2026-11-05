@@ -212,6 +212,10 @@ impl Termos {
         cmd.args(args);
         cmd.env_remove("TERMOS");
         cmd.env_remove("TMUX");
+        // Run from an SSH session or not, the terminal here is local.
+        for var in ["SSH_CONNECTION", "SSH_CLIENT", "SSH_TTY"] {
+            cmd.env_remove(var);
+        }
         for (k, v) in env.vars() {
             cmd.env(k, v);
         }

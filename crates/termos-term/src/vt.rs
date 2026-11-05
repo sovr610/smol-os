@@ -34,6 +34,9 @@ pub enum VtEvent {
     Cwd(PathBuf),
     /// OSC 9, 99 or 777: the program asks for the user (D-116).
     Notify(crate::signals::Notice),
+    /// A command the shell marked finished (OSC 133 `D` after `C`),
+    /// with how long it ran (D-118).
+    Finished(crate::blocks::Finished),
 }
 
 /// Terminal modes the desktop needs for routing input.
@@ -97,6 +100,18 @@ pub trait VtBackend: Send {
         let rows = i32::from(self.size().1);
         (-history..rows).map(|l| self.line_text(l)).collect()
     }
+    /// [`VtBackend::logical_lines`], each with the line (0: top of the
+    /// screen, negative: history) its first row is on (D-118).
+    fn logical_lines_at(&self) -> Vec<(i32, String)> {
+        let history = i32::try_from(self.history_size()).unwrap_or(i32::MAX);
+        let rows = i32::from(self.size().1);
+        (-history..rows).map(|l| (l, self.line_text(l))).collect()
+    }
+    /// Whether the shell marked a command as running (OSC 133); `None`
+    /// when it has marked nothing, so there is no telling (D-118).
+    fn command_running(&self) -> Option<bool> {
+        None
+    }
     /// When a synchronized update (DEC 2026) started by the program must be
     /// flushed even if it never ends it.
     fn sync_deadline(&self) -> Option<Instant>;
@@ -114,6 +129,21 @@ pub trait VtBackend: Send {
     /// the history or on screen, oldest first.
     fn blocks(&self) -> Vec<crate::blocks::Block> {
         Vec::new()
+    }
+    /// The rows in view, as cells, with the links programs printed on
+    /// them (M13a, D-118).
+    fn view_rows(&self) -> Vec<crate::links::ViewRow> {
+        (0..self.size().1)
+            .map(|y| {
+                let line = i32::from(y) - i32::try_from(self.display_offset()).unwrap_or(0);
+                crate::links::ViewRow::plain(&self.line_text(line))
+            })
+            .collect()
+    }
+    /// The link a program printed (OSC 8) at a cell in view, if its
+    /// scheme is one TermOS opens.
+    fn link_at(&self, _x: u16, _y: u16) -> Option<String> {
+        None
     }
 }
 
@@ -426,7 +456,7 @@ impl AlacrittyVt {
         }
     }
 
-    fn convert_cell(&self, c: &VtCell) -> Cell {
+    fn convert_cell(&self, c: &VtCell, links: &mut termos_render::link::LinkTable) -> Cell {
         let f = c.flags;
         let mut attrs = Attrs::empty();
         for (from, to) in [
@@ -464,7 +494,28 @@ impl AlacrittyVt {
         if f.contains(Flags::WIDE_CHAR) {
             cell.width = 2;
         }
+        // A program's link; TermOS's own anchors (`termos-image:`,
+        // `termos-block:`) and unsafe schemes are not kept (D-118).
+        if let Some(link) = c.hyperlink() {
+            cell.link = links.intern(link.uri());
+        }
         cell
+    }
+
+    /// The program's link at a cell of the view, if TermOS may open it.
+    fn view_link(&self, x: u16, y: u16) -> Option<String> {
+        if x >= self.cols || y >= self.rows {
+            return None;
+        }
+        let g = self.term.grid();
+        let offset = i32::try_from(g.display_offset()).unwrap_or(0);
+        let row = &g[Line(i32::from(y) - offset)];
+        let mut col = usize::from(x);
+        if col > 0 && row[Column(col)].flags.contains(Flags::WIDE_CHAR_SPACER) {
+            col -= 1;
+        }
+        let link = row[Column(col)].hyperlink()?;
+        termos_render::link::allowed(link.uri()).then(|| link.uri().to_owned())
     }
 }
 
@@ -498,6 +549,59 @@ impl VtBackend for AlacrittyVt {
 
     fn blocks(&self) -> Vec<crate::blocks::Block> {
         self.scan_blocks()
+    }
+
+    fn link_at(&self, x: u16, y: u16) -> Option<String> {
+        self.view_link(x, y)
+    }
+
+    fn view_rows(&self) -> Vec<crate::links::ViewRow> {
+        let g = self.term.grid();
+        let offset = i32::try_from(g.display_offset()).unwrap_or(0);
+        let cols = usize::from(self.cols);
+        (0..self.rows)
+            .map(|y| {
+                let row = &g[Line(i32::from(y) - offset)];
+                let mut out = crate::links::ViewRow::default();
+                let mut open: Option<(u16, String)> = None;
+                for x in 0..cols {
+                    let c = &row[Column(x)];
+                    let col = u16::try_from(x).unwrap_or(u16::MAX);
+                    let link = c
+                        .hyperlink()
+                        .map(|l| l.uri().to_owned())
+                        .filter(|u| termos_render::link::allowed(u));
+                    if c.flags.contains(Flags::WIDE_CHAR_SPACER) {
+                        continue;
+                    }
+                    if open.as_ref().map(|(_, u)| u) != link.as_ref() {
+                        if let Some((x0, url)) = open.take() {
+                            out.links.push((x0, col, url));
+                        }
+                        open = link.map(|u| (col, u));
+                    }
+                    if c.flags.contains(Flags::LEADING_WIDE_CHAR_SPACER) {
+                        out.text.push(' ');
+                        out.cells.push((col, 1));
+                        continue;
+                    }
+                    let width = if c.flags.contains(Flags::WIDE_CHAR) { 2 } else { 1 };
+                    out.text.push(c.c);
+                    out.cells.push((col, width));
+                    for extra in c.zerowidth().into_iter().flatten() {
+                        out.text.push(*extra);
+                        out.cells.push((col, 0));
+                    }
+                }
+                if let Some((x0, url)) = open {
+                    out.links.push((x0, self.cols, url));
+                }
+                out.wraps = cols
+                    .checked_sub(1)
+                    .is_some_and(|last| row[Column(last)].flags.contains(Flags::WRAPLINE));
+                out
+            })
+            .collect()
     }
 
     fn images(&self) -> Vec<crate::graphics::PaneImage> {
@@ -624,7 +728,7 @@ impl VtBackend for AlacrittyVt {
                 let mut cell = if c.flags.contains(Flags::LEADING_WIDE_CHAR_SPACER) {
                     Cell::blank(Style::new().bg(self.map_color(c.bg)))
                 } else {
-                    self.convert_cell(c)
+                    self.convert_cell(c, grid.links_mut())
                 };
                 if cell.width == 2 && x + 1 >= cols {
                     // Clipped wide character.
@@ -682,6 +786,36 @@ impl VtBackend for AlacrittyVt {
             out.push(current);
         }
         out
+    }
+
+    fn logical_lines_at(&self) -> Vec<(i32, String)> {
+        let history = i32::try_from(self.history_size()).unwrap_or(i32::MAX);
+        let mut out = Vec::new();
+        let mut current = String::new();
+        let mut start: Option<i32> = None;
+        for line in -history..i32::from(self.rows) {
+            let (text, wraps) = self.row_text(line);
+            let first = *start.get_or_insert(line);
+            if wraps {
+                current.push_str(&text);
+            } else {
+                current.push_str(text.trim_end());
+                out.push((first, std::mem::take(&mut current)));
+                start = None;
+            }
+        }
+        if let Some(first) = start
+            && !current.is_empty()
+        {
+            out.push((first, current));
+        }
+        out
+    }
+
+    fn command_running(&self) -> Option<bool> {
+        self.blocks
+            .marked()
+            .then(|| self.blocks.phase() == crate::blocks::Phase::Output)
     }
 
     fn sync_deadline(&self) -> Option<Instant> {
@@ -780,6 +914,9 @@ impl AlacrittyVt {
                 };
                 if let Some(bytes) = feed {
                     self.parse(&bytes);
+                }
+                for f in self.blocks.take_finished() {
+                    self.pending.push(VtEvent::Finished(f));
                 }
             }
             None => {}
@@ -1189,6 +1326,42 @@ mod tests {
         let area = g.area();
         vt.render_into(&mut g, area);
         g.to_text()
+    }
+
+    #[test]
+    fn programs_links_reach_the_grid() {
+        let mut vt = AlacrittyVt::new(30, 2, 0);
+        vt.advance(
+            b"\x1b]8;;https://example.com/a\x1b\\docs\x1b]8;;\x1b\\ \
+              \x1b]8;;javascript:alert(1)\x1b\\bad\x1b]8;;\x1b\\ \
+              \x1b]8;;termos-image:3\x1b\\img\x1b]8;;\x1b\\",
+        );
+        let mut g = Grid::new(30, 2);
+        let area = g.area();
+        vt.render_into(&mut g, area);
+        assert_eq!(g.row_text(0).trim_end(), "docs bad img");
+        for x in 0..4 {
+            assert_eq!(g.link_at(x, 0), Some("https://example.com/a"), "{x}");
+        }
+        for x in 4..12 {
+            assert_eq!(g.link_at(x, 0), None, "{x}");
+        }
+        assert_eq!(g.links().len(), 1);
+        assert_eq!(vt.link_at(1, 0).as_deref(), Some("https://example.com/a"));
+        assert_eq!(vt.link_at(6, 0), None);
+        let rows = vt.view_rows();
+        assert_eq!(rows[0].links, vec![(0, 4, "https://example.com/a".to_owned())]);
+        assert!(rows[0].text.starts_with("docs bad img"));
+    }
+
+    #[test]
+    fn view_rows_place_wide_characters_and_wraps() {
+        let mut vt = AlacrittyVt::new(6, 2, 0);
+        vt.advance("界ab https://x".as_bytes());
+        let rows = vt.view_rows();
+        assert!(rows[0].wraps);
+        assert_eq!(&rows[0].cells[..3], &[(0, 2), (2, 1), (3, 1)]);
+        assert!(rows[0].text.starts_with("界ab"));
     }
 
     #[test]

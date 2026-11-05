@@ -106,6 +106,8 @@ key for each command.
 | `C-b &` | Close the workspace and its panes (asks first) |
 | `C-b [` | Copy mode (see below) |
 | `C-b ]` | Paste what you copied |
+| `C-b u` | Hints: labels on the links, paths and hashes in view, to open, copy or paste ([links.md](links.md)) |
+| `C-b /` | Search the text of every pane ([links.md](links.md#search-across-panes)) |
 | `C-b :` | Command palette (same as `Ctrl+Space`) |
 | `C-b N` | Notification center |
 | `C-b a` / `C-b A` | AI agent: a new conversation / resume one ([agents.md](agents.md)) |
@@ -149,6 +151,9 @@ Everything can be done with the mouse alone.
 - **Scroll the wheel** to look back through a pane's output. Scrolling back
   down to the bottom leaves copy mode.
 - **Drag over text** to select it. It's copied when you release the button.
+- **Ctrl+click** a link, a file path (`src/main.rs:10:5` opens the editor
+  at that line), an email address, a hash or an IP address to open or copy
+  it; hold Ctrl and point to see what would open ([links.md](links.md)).
 - **Programs that use the mouse** themselves (vim, htop, …) get the mouse
   inside their pane. Hold **Shift** to select text there anyway.
 

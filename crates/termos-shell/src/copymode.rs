@@ -153,6 +153,16 @@ impl CopyMode {
         self.clamp(vt);
     }
 
+    /// Selects from `start` to `end` (columns and lines, inclusive) and
+    /// scrolls them into view: a match of the search across panes (D-118).
+    pub fn select_range(&mut self, start: (u16, i32), end: (u16, i32), vt: &mut dyn VtBackend) {
+        self.move_to(start.0, start.1, &*vt);
+        self.anchor = Some((self.cx, self.cy));
+        self.line_mode = false;
+        self.move_to(end.0, end.1, &*vt);
+        self.reveal(vt);
+    }
+
     /// The selected text, if there is a selection.
     pub fn selected_text(&self, vt: &dyn VtBackend) -> Option<String> {
         let (s, e) = self.selection()?;
@@ -549,6 +559,18 @@ mod tests {
         let mut vt = AlacrittyVt::new(cols, rows, 100);
         vt.advance(text.replace('\n', "\r\n").as_bytes());
         vt
+    }
+
+    #[test]
+    fn a_range_is_selected_and_scrolled_into_view() {
+        let text: String = (0..30).map(|i| format!("line {i}\n")).collect();
+        let mut vt = vt_with(&text, 20, 5);
+        let mut cm = CopyMode::new(PaneId(1), &vt);
+        // "line 3" is in the history, above the screen.
+        let top = -i32::try_from(vt.history_size()).expect("small");
+        cm.select_range((0, top + 3), (5, top + 3), &mut vt);
+        assert_eq!(cm.selected_text(&vt).as_deref(), Some("line 3"));
+        assert!(cm.screen_cursor(&vt).is_some(), "scrolled into view");
     }
 
     fn keys(cm: &mut CopyMode, vt: &mut AlacrittyVt, keys: &str) -> CopyAction {

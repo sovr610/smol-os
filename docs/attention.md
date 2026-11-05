@@ -29,6 +29,9 @@ When an agent **finishes a turn**, it is quieter: a **✓** on its tab
 (unless you are looking at that workspace) and an entry in the
 notification center. No toast, no system notification.
 
+A **long command** that finishes out of sight gets a ✓ or a ✗ on its
+tab too, and a toast; see [links.md](links.md#when-a-long-command-finishes).
+
 **Prefix `j`** (`agent.waiting`, or the first item of ◆ Menu → AI agents
 while one waits) goes to the agent waiting longest: first those that
 need you, then finished turns. It switches workspace and brings back a

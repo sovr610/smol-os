@@ -150,7 +150,7 @@ A `Cell` holds:
 - a display width (1, or 2 with a continuation cell);
 - `fg`, `bg` and underline colour;
 - attribute flags: bold, dim, italic, underline style, blink, reverse, hidden, strikethrough;
-- no hyperlink yet: links that programs print (OSC 8) stay in the emulator and are dropped when cells are copied into the grid. M13a plans a link id per cell and a link table in frames (D-117).
+- a link id (D-118): an index into the `LinkTable` of the grid the cell is in (0: none). Programs' links (OSC 8) with `http`, `https`, `mailto` or `file` addresses are kept; TermOS's own anchors are not. Each client's table goes on from frame to frame and never reuses an id for another address, so the diff compares ids like the style; frames carry the table when it changed, and the terminal encoder writes linked runs inside OSC 8 (`[ui] links`).
 
 Colours are `Default | Indexed(u8) | Rgb(u8,u8,u8)`. The terminal default is
 kept as its own value so transparent or themed terminal backgrounds still work.
@@ -262,7 +262,8 @@ Window = { id, title, source: Pty | App | Plugin | Agent, state: normal | minimi
 - **tmux-style keys (D-023):** prefix `C-b`, then tmux's default keys (`%`, `"`, arrows, `z`, `x`, `c`, `n`, `p`, `0`–`9`, `[`, `]`, …), plus TermOS keys for floats (`f`, `F`, `m`, `M`). Resize keys repeat without the prefix for `repeat-time-ms`. A TermOS *workspace* is a tmux *window* (a tab in the status line); a *pane* is a tmux *pane*.
 - **Tiling (D-024):** tmux-style panes separated by one-cell lines, sized by weights that respect each subtree's minimum extent. Presets are even-horizontal, even-vertical, main-vertical (master-stack), main-horizontal and tiled (grid). Splits that wouldn't fit are refused.
 - **Copy mode:** vi motions over the scrollback, selection, search, and yank to the paste buffer and the system clipboard (OSC 52). The mouse wheel and drag-select use it too. Where the shell marks its commands, `[`/`]` jump between prompts and `o` copies one command's output (D-116).
-- **Attention (D-115, D-116):** a pane whose agent needs the user (its CLI's hook, or a program's OSC 9/99/777 notification) rings in the warn colour (`compose`'s per-pane ring style over the focus colour, and a float's border) and shows a `● needs you` badge; its tab gets `●`, and a toast, a notification-center entry and, where the terminal shows them, a system notification (`ServerMsg::Notify`) follow. A finished turn only marks its tab (`✓`) and the center. Input to the pane clears it; `agent.waiting` (prefix `j`) goes to the one waiting longest.
+- **Links and paths (D-118):** Ctrl+click (Ctrl+Shift over a program that reads the mouse) opens a program's link or what `termos_term::links` finds under the pointer in the rows in view: web and email addresses, paths that exist (with `:line[:col]`), git hashes, IP addresses. Holding Ctrl underlines it. Web and mail addresses open on the client's machine (`ServerMsg::Open`), or are copied on the console and over SSH; paths open in TermOS (`file.edit PATH:LINE[:COL]` at the line). Hint mode (`pane.hints`, prefix `u`) labels every match in view to open, copy or paste. The search across panes (`search.all`, prefix `/`) searches every terminal pane's history and screen on a thread and lands in copy mode at the match.
+- **Attention (D-115, D-116):** a pane whose agent needs the user (its CLI's hook, or a program's OSC 9/99/777 notification) rings in the warn colour (`compose`'s per-pane ring style over the focus colour, and a float's border) and shows a `● needs you` badge; its tab gets `●`, and a toast, a notification-center entry and, where the terminal shows them, a system notification (`ServerMsg::Notify`) follow. A finished turn only marks its tab (`✓`) and the center. Input to the pane clears it; `agent.waiting` (prefix `j`) goes to the one waiting longest. A command that ran `[notifications] long-command` seconds and finishes where no client is looking marks its tab `✓`, or `✗` when it failed (`Need::Failed`), with a toast and a center entry; a failure also as a system notification (D-118). `pane.notify-when-done` asks for the next one whatever its length.
 - **PTY resize:** resizing a terminal window issues `TIOCSWINSZ`, which sends SIGWINCH to the child.
 - **Multiple clients:** when clients of different sizes attach, the session size follows `latest` (default), `smallest` or `largest`, as tmux's `window-size` does.
 
@@ -279,10 +280,10 @@ Window = { id, title, source: Pty | App | Plugin | Agent, state: normal | minimi
   - `hello {version, kind: frontend | control | plugin, client, session?, create?, token?, cwd?}`.
   - The reply is `{version, server, pid, session}`, or an error: `-32001` version mismatch, `-32004` no such session, `-32003` forbidden.
 - **Frontend stream:** after the reply, frames are a little-endian u32 length plus a postcard body (at most 16 MiB). These are the serde types in `termos-core::proto`:
-  - Server → client: `Frame(FrameUpdate { cols, rows, clear, spans, cursor, images })`, `ImageData { id, chunk, last }`, `ImageFree { id }`, `Clipboard`, `Bell`, `Notify { title, body }` (a system notification, which the client writes as its terminal's OSC 9, 99 or 777, D-116), `Title`, `Detached { session }`, `Exit { reason }`. `images` is the client's whole placement list, sent only when it changed.
+  - Server → client: `Frame(FrameUpdate { cols, rows, clear, spans, cursor, images, links })`, `ImageData { id, chunk, last }`, `ImageFree { id }`, `Clipboard`, `Bell`, `Notify { title, body }` (a system notification, which the client writes as its terminal's OSC 9, 99 or 777, D-116), `Open { url }` (a web or mail address the client opens with `xdg-open`, `open` or `explorer`, D-118), `Title`, `Detached { session }`, `Exit { reason }`. `images` is the client's whole placement list and `links` its whole link table, each sent only when it changed.
   - Client → server: `Hello { version, caps, cols, rows }` (first), `Key`, `Mouse`, `Paste`, `Resize`, `Focus`.
   - **Backpressure:** a client gets its next frame only after the previous one was written to it (D-032).
-  - **Versions (D-043):** frontends speak protocol 5; control clients and plugins speak JSON-RPC version 1. Each is checked in the `hello` for its kind of connection.
+  - **Versions (D-043):** frontends speak protocol 6; control clients and plugins speak JSON-RPC version 1. Each is checked in the `hello` for its kind of connection.
 - **Control stream:** newline-delimited JSON-RPC 2.0 (lines up to 4 MiB). It's used by `termos msg …`, `termos ls` and the other subcommands, and by scripts. The v1 methods:
   - server: `server.info`, `server.kill`, `config.reload`;
   - sessions: `session.list/new/kill/rename/restore/saved`;
@@ -312,6 +313,7 @@ Window = { id, title, source: Pty | App | Plugin | Agent, state: normal | minimi
 - **Wallpaper (D-089):** `[ui] wallpaper = "pattern" | "none" | <picture path>`; a picture is decoded on its own thread, which wakes the desktop through the PTY event queue.
 - **Start (D-091):** `[ui] start = "desktop"` (the default) floats each new session's and workspace's first terminal over the wallpaper; `"terminal"` tiles it full screen. Restored sessions keep their saved layout.
 - **Graphics:** `[graphics] protocol = "auto" | "kitty" | "sixel" | "iterm2" | "blocks"`.
+- **Links and hints (D-118):** `[ui] links` (programs' links passed to the outer terminal), `[hints] alphabet`, `[notifications] long-command` (seconds; 0: off).
 - **Clipboard:** `[clipboard] history` (entries kept in memory, default 50; 0 keeps none).
 - **Widgets:** `[widgets.<name>]` for WASM status-line widgets (§9, D-051).
 - **Agents (§11):** `[agents]` (providers, profiles, MCP servers, external agents) and `[secrets] store`; keys are named (`keyring:<name>`), never written.
@@ -545,6 +547,7 @@ termos-ai holds all of it; the CLI hands the server a launcher for its windows (
   - config parsing (M2);
   - protocol decoding (`proto_decode`: frames and JSON-RPC);
   - capability replies (`caps_reply`), Sixel decoding (`sixel_decode`), the image interceptor (`apc_dcs_intercept`) and notifications and shell marks (`osc_signals`);
+  - link and path detection (`link_detect`);
   - markdown layout (`markdown_layout`);
   - provider event streams (`sse_parse`);
   - GGUF headers (`gguf_parse`), with the fit estimate over whatever they claim;

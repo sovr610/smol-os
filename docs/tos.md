@@ -61,6 +61,7 @@ Relative paths are relative to the folder you are in.
 | `tos copy TEXT…` | Copies the text, or what is piped in (`git log -1 \| tos copy`) |
 | `tos paste` | Prints the last thing copied (`tos paste > notes.txt`) |
 | `tos notify [--level info\|warn\|error] TEXT…` | Shows a message in the status line and the notification center |
+| `tos notify --when-done` | Says when this pane's command finishes, however long it takes: put it in front (`tos notify --when-done; make`), or alone for the next command ([links.md](links.md#tell-me-when-it-is-done)) |
 
 `tos copy` puts the text in TermOS's clipboard history and, like any copy in
 TermOS, in your terminal's clipboard.

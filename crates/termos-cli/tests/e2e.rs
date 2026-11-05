@@ -254,3 +254,59 @@ fn kitty_images_reach_the_terminal() {
     let out = t.wait_output(T, "\x1b_Ga=d,d=A,q=2");
     assert_eq!(out.matches("a=t,").count(), 1, "never uploaded again");
 }
+
+/// Ctrl+click on a link a program printed: the client opens it with the
+/// system's opener, here a stand-in first on `PATH` (D-118).
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn ctrl_click_opens_a_link_on_the_clients_machine() {
+    let bin = tempfile::tempdir().expect("tempdir");
+    let opened = bin.path().join("opened.txt");
+    let opener = if cfg!(target_os = "macos") {
+        "open"
+    } else {
+        "xdg-open"
+    };
+    common::write_script(
+        &bin.path().join(opener),
+        &format!("#!/bin/sh\nprintf '%s' \"$1\" > '{}'\n", opened.display()),
+    );
+    let path = std::env::join_paths(
+        std::iter::once(bin.path().to_owned())
+            .chain(std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())),
+    )
+    .expect("a PATH");
+    let env = common::Env::with_vars("", vec![("PATH", std::path::PathBuf::from(path))]);
+    let mut t = Termos::start_in(env);
+    t.wait_ready();
+    // The address is whole only in the output.
+    t.send(b"printf '%s\\n' 'https://example.com/do''cs'\r");
+    let screen = t.wait_for("the address", T, |s| {
+        s.lines().any(|l| l.trim_end() == "https://example.com/docs")
+    });
+    let y = screen
+        .lines()
+        .position(|l| l.trim_end() == "https://example.com/docs")
+        .expect("the line");
+    // SGR mouse: button 0 with Ctrl (16), pressed and released, 1-based.
+    let (x, y) = (5, y + 1);
+    t.send(format!("\x1b[<16;{x};{y}M\x1b[<16;{x};{y}m").as_bytes());
+    let deadline = std::time::Instant::now() + T;
+    loop {
+        if let Ok(text) = std::fs::read_to_string(&opened)
+            && !text.is_empty()
+        {
+            assert_eq!(text, "https://example.com/docs");
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the opener never ran; screen:\n{}",
+            t.screen()
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    t.send(b"\x02d");
+    t.wait_exit(T);
+}
+

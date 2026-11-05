@@ -5,6 +5,7 @@
 //!
 //! - [`grid`]: the [`Grid`] of [`Cell`]s the desktop is composed into, with
 //!   clipped, wide-character-aware drawing helpers (text, boxes, shadows).
+//! - [`link`]: the hyperlinks cells carry (OSC 8) and their table.
 //! - [`diff`]: output damage, the minimal [`Span`]s between two frames.
 //! - [`encode`]: turns spans into escape sequences for one terminal, with
 //!   synchronized output and colour downsampling.
@@ -24,6 +25,7 @@ pub mod encode;
 pub mod graphics;
 pub mod grid;
 pub mod icons;
+pub mod link;
 pub mod probe;
 #[cfg(feature = "raster")]
 pub mod raster;

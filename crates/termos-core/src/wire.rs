@@ -367,6 +367,12 @@ mod tests {
     fn frames_round_trip_and_split_anywhere() {
         let mut g = Grid::new(10, 2);
         g.put_str(0, 0, "hi 界", Style::new().bold(), 10);
+        let id = g.links_mut().intern("https://example.com/界?a=b;c");
+        for x in 3..5 {
+            if let Some(c) = g.get_mut(x, 0) {
+                c.link = id;
+            }
+        }
         let msgs = vec![
             ServerMsg::Frame(FrameUpdate {
                 cols: 10,
@@ -383,7 +389,11 @@ mod tests {
                     rows: 2,
                     src: [10, 0, 40, 40],
                 }]),
+                links: Some(g.links().entries()),
             }),
+            ServerMsg::Open {
+                url: "https://example.com/".into(),
+            },
             ServerMsg::ImageData {
                 id: 3,
                 chunk: vec![0x89, b'P', b'N', b'G'],

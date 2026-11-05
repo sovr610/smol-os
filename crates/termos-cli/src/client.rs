@@ -192,6 +192,9 @@ pub(crate) async fn run(
             () = resizes.next() => resized(&end, &mut size)?,
             msg = end.rx.recv() => match msg {
                 Some(ServerMsg::Frame(f)) => {
+                    if let Some(links) = f.links {
+                        encoder.set_links(links);
+                    }
                     let pixels = images.frame(f.images.as_deref(), f.clear);
                     let bytes =
                         encoder.frame_with_images(f.cols, &f.spans, f.cursor, f.clear, &pixels);
@@ -228,6 +231,7 @@ pub(crate) async fn run(
                         out.flush()?;
                     }
                 }
+                Some(ServerMsg::Open { url }) => crate::opener::open(&url),
                 Some(ServerMsg::Title(t)) => {
                     out.write_all(&set_title(&t))?;
                     out.flush()?;

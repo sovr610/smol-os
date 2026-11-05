@@ -9,9 +9,11 @@
 //! ending the command line) the link stops. The marks then scroll,
 //! reflow and clear with the text. Output is the text between the end of
 //! a command line and the next block's prompt. The exit status from `D`
-//! is kept here by block number, for the last [`MAX_BLOCKS`] blocks.
+//! is kept here by block number, for the last [`MAX_BLOCKS`] blocks,
+//! with when its command started (`C`) and finished (`D`, M13a, D-118).
 
 use std::collections::BTreeMap;
+use std::time::{Duration, Instant};
 
 /// The URI scheme of the hidden links.
 pub(crate) const SCHEME: &str = "termos-block:";
@@ -58,6 +60,17 @@ impl Block {
     }
 }
 
+/// A command that finished: the shell said it ran (`C`) and then reported
+/// its end (`D`). The desktop tells the user about long ones (D-118).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Finished {
+    /// The block's number ([`Block::id`]).
+    pub block: u64,
+    pub exit: Option<i32>,
+    /// From `C` to `D`.
+    pub ran: Duration,
+}
+
 /// Which part of a block a hidden link marks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Part {
@@ -97,6 +110,8 @@ pub(crate) struct Info {
     pub(crate) finished: bool,
     /// From OSC 633 `E`.
     pub(crate) command: Option<String>,
+    /// When its output started (`C`).
+    pub(crate) started: Option<Instant>,
 }
 
 /// The marks seen so far.
@@ -108,6 +123,8 @@ pub(crate) struct Tracker {
     info: BTreeMap<u64, Info>,
     /// Blocks in `info` that failed.
     failed: usize,
+    /// Commands that finished since [`Tracker::take_finished`].
+    done: Vec<Finished>,
 }
 
 fn open(id: u64, part: &str) -> Vec<u8> {
@@ -119,6 +136,11 @@ const CLOSE: &[u8] = b"\x1b]8;;\x1b\\";
 impl Tracker {
     pub(crate) fn phase(&self) -> Phase {
         self.phase
+    }
+
+    /// Whether the shell has marked a prompt at all.
+    pub(crate) fn marked(&self) -> bool {
+        self.next > 0
     }
 
     pub(crate) fn info(&self, id: u64) -> Option<&Info> {
@@ -140,8 +162,23 @@ impl Tracker {
             if info.exit.is_some_and(|e| e != 0) {
                 self.failed += 1;
             }
+            if info.ran
+                && let Some(started) = info.started
+                && self.done.len() < 64
+            {
+                self.done.push(Finished {
+                    block: id,
+                    exit: info.exit,
+                    ran: started.elapsed(),
+                });
+            }
         }
         self.phase = Phase::Idle;
+    }
+
+    /// The commands that finished since the last call.
+    pub(crate) fn take_finished(&mut self) -> Vec<Finished> {
+        std::mem::take(&mut self.done)
     }
 
     /// `A`: what to feed the emulator.
@@ -181,6 +218,7 @@ impl Tracker {
         let id = self.current?;
         if explicit && let Some(info) = self.info.get_mut(&id) {
             info.ran = true;
+            info.started.get_or_insert_with(Instant::now);
         }
         matches!(self.phase, Phase::Prompt | Phase::Input).then(|| {
             self.phase = Phase::Output;
@@ -250,6 +288,11 @@ mod tests {
         let again = t.prompt_start();
         assert!(again.starts_with(CLOSE));
         assert_eq!(t.info(2).map(|i| i.finished), Some(true));
+        // Only the command that ran is reported, with its status.
+        let done = t.take_finished();
+        assert_eq!(done.len(), 1);
+        assert_eq!((done[0].block, done[0].exit), (1, Some(2)));
+        assert!(t.take_finished().is_empty());
     }
 
     #[test]

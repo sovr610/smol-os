@@ -20,8 +20,18 @@ use termos_core::ids::PaneId;
 pub enum Need {
     /// Waiting for the user.
     You,
-    /// Finished a turn the user has not looked at yet.
+    /// Finished a turn (or a long command, D-118) the user has not looked
+    /// at yet.
     Done,
+    /// A long command failed where the user was not looking (D-118).
+    Failed,
+}
+
+impl Need {
+    /// Quiet needs go once their workspace is seen.
+    pub fn quiet(self) -> bool {
+        self != Need::You
+    }
 }
 
 /// A pane's claim on the user's attention.

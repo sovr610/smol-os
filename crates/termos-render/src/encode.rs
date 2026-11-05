@@ -5,7 +5,10 @@
 //! state, so a frame only emits the cursor moves and style changes it needs.
 //! Each frame is wrapped in synchronized-update brackets (DEC mode 2026) when
 //! enabled, so terminals that support it never show a half-drawn frame.
+//! Linked cells are written inside OSC 8, so the outer terminal shows and
+//! opens the links programs printed (M13a, D-118).
 
+use std::collections::HashMap;
 use std::io::Write as _;
 
 use base64::Engine as _;
@@ -46,6 +49,10 @@ pub struct Encoder {
     cursor_style: Option<(CursorShape, bool)>,
     cols: u16,
     buf: Vec<u8>,
+    /// The addresses of the link ids in cells (the server's table).
+    links: HashMap<u32, String>,
+    /// The link the terminal is writing inside (OSC 8), 0 for none.
+    open_link: u32,
 }
 
 impl Encoder {
@@ -58,7 +65,15 @@ impl Encoder {
             cursor_style: None,
             cols: 0,
             buf: Vec::with_capacity(64 * 1024),
+            links: HashMap::new(),
+            open_link: 0,
         }
+    }
+
+    /// The link table the next frames' cells refer to (it replaces the
+    /// one before).
+    pub fn set_links(&mut self, links: Vec<(u32, String)>) {
+        self.links = links.into_iter().collect();
     }
 
     /// Forgets everything known about the terminal state (after a resize or
@@ -106,6 +121,7 @@ impl Encoder {
         for span in spans {
             self.span(span);
         }
+        self.link_to(0);
         if !images.is_empty() {
             self.buf.extend_from_slice(images);
             // Image output moves the cursor (and iTerm2's saves and restores
@@ -146,6 +162,7 @@ impl Encoder {
             if self.pos != Some((x, span.row)) {
                 self.move_to(x, span.row);
             }
+            self.link_to(cell.link);
             self.set_style(cell.style);
             let sym = cell.display_symbol();
             for ch in sym.chars() {
@@ -164,6 +181,23 @@ impl Encoder {
                 Some((x, span.row))
             };
         }
+    }
+
+    /// Writes the next cells inside link `id` (0: outside any link).
+    fn link_to(&mut self, id: u32) {
+        let id = if self.links.contains_key(&id) { id } else { 0 };
+        if id == self.open_link {
+            return;
+        }
+        if self.open_link != 0 {
+            self.buf.extend_from_slice(b"\x1b]8;;\x1b\\");
+        }
+        if let Some(url) = self.links.get(&id) {
+            // The server keeps only addresses without control characters.
+            let url: String = url.chars().filter(|c| !c.is_control()).collect();
+            let _ = write!(self.buf, "\x1b]8;;{url}\x1b\\");
+        }
+        self.open_link = id;
     }
 
     fn move_to(&mut self, x: u16, y: u16) {
@@ -375,6 +409,54 @@ mod tests {
         let out = enc.frame(1, &full(&g), None, false).to_vec();
         assert!(out.starts_with(b"\x1b[?2026h"));
         assert!(out.ends_with(b"\x1b[?2026l"));
+    }
+
+    fn linked(text: &str, links: &[u32]) -> Grid {
+        let mut g = Grid::new(u16::try_from(text.len()).expect("short"), 1);
+        g.put_str(0, 0, text, Style::new(), 80);
+        for (x, id) in links.iter().enumerate() {
+            if let Some(c) = g.get_mut(u16::try_from(x).expect("short"), 0) {
+                c.link = *id;
+            }
+        }
+        g
+    }
+
+    #[test]
+    fn a_linked_run_is_one_osc8() {
+        let g = linked("abcd", &[0, 1, 1, 0]);
+        let mut enc = Encoder::new(&caps(ColorDepth::Truecolor));
+        enc.set_links(vec![(1, "https://example.com/x".into())]);
+        let out = enc.frame(4, &full(&g), None, false).to_vec();
+        assert_eq!(
+            String::from_utf8_lossy(&out),
+            "\x1b[?25l\x1b[1;1H\x1b[0ma\x1b]8;;https://example.com/x\x1b\\bc\x1b]8;;\x1b\\d"
+        );
+    }
+
+    #[test]
+    fn a_link_that_changes_closes_and_reopens() {
+        let g = linked("abc", &[1, 2, 2]);
+        let mut enc = Encoder::new(&caps(ColorDepth::Truecolor));
+        enc.set_links(vec![(1, "https://a".into()), (2, "https://b".into())]);
+        let out = enc.frame(3, &full(&g), None, false).to_vec();
+        assert_eq!(
+            String::from_utf8_lossy(&out),
+            "\x1b[?25l\x1b[1;1H\x1b]8;;https://a\x1b\\\x1b[0ma\x1b]8;;\x1b\\\x1b]8;;https://b\x1b\\bc\x1b]8;;\x1b\\"
+        );
+        // The link is closed before the frame ends, so nothing else the
+        // terminal writes is linked.
+        let mut p = parser(1, 3);
+        p.process(&out);
+        assert_eq!(trimmed(&p), "abc");
+    }
+
+    #[test]
+    fn unknown_link_ids_write_no_link() {
+        let g = linked("ab", &[7, 7]);
+        let mut enc = Encoder::new(&caps(ColorDepth::Truecolor));
+        let out = enc.frame(2, &full(&g), None, false).to_vec();
+        assert!(!String::from_utf8_lossy(&out).contains("]8;"));
     }
 
     #[test]

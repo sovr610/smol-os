@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! Agents that wait for the user (D-115, D-116): what their hooks and
 //! programs' notifications do to the desktop, and the key that goes to
-//! the one waiting longest.
+//! the one waiting longest. Also commands that finish where no one is
+//! looking, and `pane.notify-when-done` (D-118).
 
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use termos_core::ids::PaneId;
 use termos_core::proto::ServerMsg;
@@ -14,6 +15,29 @@ use crate::notify::Level;
 
 /// The longest message shown.
 const MESSAGE_CHARS: usize = 120;
+
+/// A pane armed with `pane.notify-when-done` and no shell integration is
+/// done once it has been quiet this long after output (D-118).
+pub(super) const QUIET: Duration = Duration::from_secs(5);
+
+/// The longest command line quoted.
+const COMMAND_CHARS: usize = 60;
+
+/// Whether a command line is `tos notify --when-done` alone.
+fn is_arming(command: &str) -> bool {
+    let words: Vec<&str> = command.split_whitespace().collect();
+    words == ["tos", "notify", "--when-done"]
+}
+
+/// `3m12s`, `45s`, `1h02m`.
+pub(crate) fn took(d: Duration) -> String {
+    let s = d.as_secs();
+    match s {
+        0..60 => format!("{s}s"),
+        60..3600 => format!("{}m{:02}s", s / 60, s % 60),
+        _ => format!("{}h{:02}m", s / 3600, (s % 3600) / 60),
+    }
+}
 
 impl Desktop {
     /// Where `id` is, for messages: `1:api`.
@@ -159,6 +183,167 @@ impl Desktop {
         self.dirty = true;
     }
 
+    /// Whether some client is looking at `id`: it is on the active
+    /// workspace and a client's terminal has focus.
+    fn pane_seen(&self, id: PaneId) -> bool {
+        let focused = self
+            .clients
+            .values()
+            .chain(self.current.map(|_| &self.ui))
+            .any(|ui| ui.focused);
+        focused && self.placement().visible().contains(&id)
+    }
+
+    /// The command line of block `block` in `id`, as typed.
+    fn block_command(&self, id: PaneId, block: u64) -> Option<String> {
+        match &self.panes.get(&id)?.kind {
+            PaneKind::Term { vt, .. } => vt
+                .blocks()
+                .into_iter()
+                .find(|b| b.id == block)
+                .map(|b| b.command.trim().to_owned())
+                .filter(|c| !c.is_empty()),
+            PaneKind::App(_) => None,
+        }
+    }
+
+    /// The shell said a command finished in `id` (OSC 133 `D`, D-118): a
+    /// long one where no one is looking, or one asked for with
+    /// `pane.notify-when-done`, is announced.
+    pub(super) fn command_finished(&mut self, id: PaneId, f: termos_term::blocks::Finished) {
+        let asked = self.armed.remove(&id).is_some();
+        let limit = self.config.notifications.long_command;
+        let long = limit > 0 && f.ran >= Duration::from_secs(limit);
+        if !asked && !(long && !self.pane_seen(id)) {
+            return;
+        }
+        let command = self.block_command(id, f.block);
+        // `tos notify --when-done` typed on its own asks about the next
+        // command, not itself.
+        if asked && command.as_deref().is_some_and(is_arming) {
+            self.armed.insert(id, None);
+            return;
+        }
+        self.announce_done(id, command.as_deref(), f.exit, Some(f.ran));
+    }
+
+    /// Tells the user a command in `id` finished: a tick or a cross on its
+    /// tab, a toast and a center entry; a failure also as a system
+    /// notification where the terminal shows them.
+    fn announce_done(
+        &mut self,
+        id: PaneId,
+        command: Option<&str>,
+        exit: Option<i32>,
+        ran: Option<Duration>,
+    ) {
+        let place = self.place_of(id);
+        let what = command.map_or_else(
+            || "a command".to_owned(),
+            |c| format!("`{}`", attention::short(c, COMMAND_CHARS)),
+        );
+        let after = ran.map(|d| format!(" after {}", took(d))).unwrap_or_default();
+        let failed = exit.is_some_and(|e| e != 0);
+        let text = match exit {
+            Some(code) if code != 0 => format!("{what} in {place} failed ({code}){after}"),
+            _ => format!("{what} in {place} finished{after}"),
+        };
+        let Some(pane) = self.panes.get_mut(&id) else {
+            return;
+        };
+        let who = match &pane.kind {
+            PaneKind::Term { pty, .. } => pty.foreground_name(),
+            PaneKind::App(_) => None,
+        }
+        .unwrap_or_else(|| pane.display_name());
+        // An agent waiting for the user stays the louder mark.
+        if pane.attention.as_ref().is_none_or(|a| a.need != Need::You) {
+            pane.attention = Some(Attention {
+                need: if failed { Need::Failed } else { Need::Done },
+                since: Instant::now(),
+                who,
+                message: text.clone(),
+            });
+        }
+        self.notify(if failed { Level::Warn } else { Level::Info }, text);
+        if failed && self.config.notifications.system {
+            self.outbox.push((
+                None,
+                ServerMsg::Notify {
+                    title: format!("{what} failed"),
+                    body: format!("in {place}{after}"),
+                },
+            ));
+        }
+    }
+
+    /// `pane.notify-when-done`: the focused pane's next command is
+    /// announced, however long it runs.
+    pub(super) fn arm_when_done(&mut self) {
+        let Some(id) = self.focused() else {
+            return;
+        };
+        if !matches!(
+            self.panes.get(&id).map(|p| &p.kind),
+            Some(PaneKind::Term { .. })
+        ) {
+            self.notify(Level::Info, "only terminal panes run commands");
+            return;
+        }
+        self.armed.insert(id, None);
+        let place = self.place_of(id);
+        self.notify(
+            Level::Info,
+            format!("TermOS will tell you when the command in {place} finishes"),
+        );
+    }
+
+    /// Output from an armed pane: without shell integration, it counts as
+    /// done once quiet for [`QUIET`].
+    pub(super) fn armed_output(&mut self, id: PaneId) {
+        let integrated = match self.panes.get(&id).map(|p| &p.kind) {
+            Some(PaneKind::Term { vt, .. }) => vt.command_running().is_some(),
+            _ => return,
+        };
+        if let Some(quiet) = self.armed.get_mut(&id) {
+            *quiet = (!integrated).then(|| Instant::now() + QUIET);
+        }
+    }
+
+    /// When the next armed pane goes quiet.
+    pub(super) fn armed_deadline(&self) -> Option<Instant> {
+        self.armed.values().flatten().min().copied()
+    }
+
+    /// Armed panes that have gone quiet are announced.
+    pub(super) fn armed_timer(&mut self, now: Instant) {
+        let quiet: Vec<PaneId> = self
+            .armed
+            .iter()
+            .filter(|(_, d)| d.is_some_and(|d| d <= now))
+            .map(|(id, _)| *id)
+            .collect();
+        for id in quiet {
+            self.armed.remove(&id);
+            let place = self.place_of(id);
+            let Some(pane) = self.panes.get_mut(&id) else {
+                continue;
+            };
+            if pane.attention.as_ref().is_none_or(|a| a.need != Need::You) {
+                pane.attention = Some(Attention {
+                    need: Need::Done,
+                    since: now,
+                    who: pane.display_name(),
+                    message: String::new(),
+                });
+            }
+            self.notify(
+                Level::Info,
+                format!("{place} has been quiet for {}", took(QUIET)),
+            );
+        }
+    }
+
     /// Goes to the agent waiting longest: those that need the user first,
     /// then finished turns (`agent.waiting`).
     pub(super) fn jump_to_waiting(&mut self) {
@@ -188,5 +373,24 @@ impl Desktop {
             .collect();
         list.sort_by_key(|(id, a)| (a.need != Need::You, a.since, id.0));
         list
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_the_bare_arming_command_waits_for_the_next() {
+        assert!(is_arming("tos notify  --when-done "));
+        assert!(!is_arming("tos notify --when-done; make"));
+        assert!(!is_arming("make"));
+    }
+
+    #[test]
+    fn durations_read_as_people_say_them() {
+        assert_eq!(took(Duration::from_secs(45)), "45s");
+        assert_eq!(took(Duration::from_secs(192)), "3m12s");
+        assert_eq!(took(Duration::from_secs(3720)), "1h02m");
     }
 }

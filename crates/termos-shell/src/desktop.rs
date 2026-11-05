@@ -52,6 +52,7 @@ use crate::ui::Chrome;
 use crate::whichkey;
 
 mod attend;
+mod find;
 mod menus;
 mod wall;
 
@@ -327,6 +328,14 @@ fn client_theme(config: &Config, pick: Option<ThemeBase>, caps: &Caps) -> Theme 
     t
 }
 
+/// Whether a client's terminal gets the links programs print (OSC 8,
+/// D-118): not the Linux console or a dumb terminal, which might print
+/// them, nor the KMS console, which underlines them itself.
+fn links_shown(caps: &Caps) -> bool {
+    let term = caps.term.as_str();
+    !(term == "linux" || term == "dumb" || term == find::CONSOLE_TERM)
+}
+
 /// What the pointer is over, for hover highlights (D-085).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 enum Hover {
@@ -379,6 +388,15 @@ struct ClientUi {
     whichkey_regions: Vec<(Rect, Command)>,
     /// Where the wallpaper's shortcuts are drawn, for clicks.
     wallpaper_regions: Vec<(Rect, Command)>,
+    /// The link under the pointer, underlined (D-118): its pane and cells
+    /// there.
+    link_hover: Option<(PaneId, Vec<(u16, u16, u16)>)>,
+    /// Hint mode (D-118).
+    hints: Option<crate::hints::Hints>,
+    /// The search across panes (D-118).
+    search: Option<crate::search::SearchBox>,
+    /// The terminal has focus (as far as it reports it).
+    focused: bool,
 }
 
 impl Default for ClientUi {
@@ -408,6 +426,10 @@ impl Default for ClientUi {
             last_click: None,
             whichkey_regions: Vec::new(),
             wallpaper_regions: Vec::new(),
+            link_hover: None,
+            hints: None,
+            search: None,
+            focused: true,
         }
     }
 }
@@ -432,6 +454,14 @@ pub enum SessionRequest {
     PluginCommand { name: String },
     /// A WASM status-line widget was clicked, at this column within it.
     WidgetClick { name: String, column: u16 },
+    /// Search every session's panes for this client (`search.all
+    /// --all-sessions`, D-118).
+    SearchAll { client: ClientId },
+    /// Take the client to a match in another session.
+    Reveal {
+        client: ClientId,
+        hit: crate::search::Hit,
+    },
 }
 
 /// All state of one session: its workspaces and panes, plus the UI state of
@@ -494,6 +524,14 @@ pub struct Desktop {
     quit: Option<String>,
     /// Bytes of visible pane output since the last render.
     output_since_render: usize,
+    /// Paths looked for by link detection, and when (D-118).
+    path_cache: std::collections::HashMap<PathBuf, (bool, Instant)>,
+    /// The id search threads wake the desktop with.
+    search_wake: Option<PaneId>,
+    /// Panes whose next finished command is announced
+    /// (`pane.notify-when-done`), with when a pane without shell
+    /// integration counts as done: 5 s after its last output (D-118).
+    armed: BTreeMap<PaneId, Option<Instant>>,
 }
 
 impl std::fmt::Debug for Desktop {
@@ -537,6 +575,42 @@ pub(crate) fn editor_command(env: impl Fn(&str) -> Option<String>) -> (String, V
     }
     let fallback = if cfg!(windows) { "notepad.exe" } else { "vi" };
     (fallback.to_owned(), Vec::new())
+}
+
+/// The arguments that open `file` at `line` and `column` in the editor
+/// `program` (D-118): Vim and Neovim `+LINE` (or `cursor()` with a
+/// column), nano `+LINE,COL`, Emacs, micro and Kakoune `+LINE:COL`, Helix,
+/// Sublime Text and Zed `FILE:LINE:COL`, VS Code and its kin
+/// `-g FILE:LINE:COL`; any other editor gets the file alone.
+pub(crate) fn editor_args(
+    program: &str,
+    file: &str,
+    line: Option<u32>,
+    column: Option<u32>,
+) -> Vec<String> {
+    let name = std::path::Path::new(program)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or(program)
+        .to_ascii_lowercase();
+    let file = file.to_owned();
+    let Some(l) = line else {
+        return vec![file];
+    };
+    let c = column.unwrap_or(1);
+    match name.as_str() {
+        "nvim" | "vim" | "vi" | "gvim" | "mvim" => match column {
+            Some(c) => vec![format!("+call cursor({l},{c})"), file],
+            None => vec![format!("+{l}"), file],
+        },
+        "nano" | "pico" => vec![format!("+{l},{c}"), file],
+        "emacs" | "emacsclient" | "micro" | "kak" => vec![format!("+{l}:{c}"), file],
+        "hx" | "helix" | "subl" | "sublime_text" | "zed" => vec![format!("{file}:{l}:{c}")],
+        "code" | "code-insiders" | "codium" | "vscodium" | "cursor" | "windsurf" => {
+            vec!["-g".to_owned(), format!("{file}:{l}:{c}")]
+        }
+        _ => vec![file],
+    }
 }
 
 /// The user's home directory (`HOME`, or `USERPROFILE` on Windows).
@@ -597,6 +671,9 @@ impl Desktop {
             layout_changed: true,
             quit: None,
             output_since_render: 0,
+            path_cache: std::collections::HashMap::new(),
+            search_wake: None,
+            armed: BTreeMap::new(),
             config,
         };
         if d.config.status.clock {
@@ -1928,6 +2005,15 @@ impl Desktop {
             self.ui.mouse_owner = None;
         }
         self.ui.drag = None;
+        self.armed.remove(&id);
+        for ui in self.clients.values_mut().chain(std::iter::once(&mut self.ui)) {
+            if ui.hints.as_ref().is_some_and(|h| h.pane == id) {
+                ui.hints = None;
+            }
+            if ui.link_hover.as_ref().is_some_and(|(p, _)| *p == id) {
+                ui.link_hover = None;
+            }
+        }
         self.dirty = true;
         self.layout_changed = true;
     }
@@ -2229,6 +2315,7 @@ impl Desktop {
             }
             ClientMsg::Paste(text) => self.on_paste(&text),
             ClientMsg::Focus(focused) => {
+                self.ui.focused = focused;
                 if let Some(id) = self.focused()
                     && let Some(Pane {
                         kind: PaneKind::Term { vt, pty },
@@ -2263,6 +2350,10 @@ impl Desktop {
             p.insert_str(text);
         } else if let Some(p) = &mut self.ui.palette {
             p.insert_str(text);
+        } else if self.ui.search.is_some() {
+            self.search_paste(text);
+        } else if self.ui.hints.is_some() {
+            // Hint mode takes keys, not text.
         } else if let Some(id) = self.focused() {
             let bytes = match self.panes.get(&id) {
                 Some(Pane {
@@ -2316,6 +2407,14 @@ impl Desktop {
         if let Some(palette) = &mut self.ui.palette {
             let action = palette.handle_key(k);
             self.palette_action(action);
+            return;
+        }
+        if self.ui.search.is_some() {
+            self.search_key(k);
+            return;
+        }
+        if self.ui.hints.is_some() {
+            self.hint_key(k);
             return;
         }
         if self.ui.whichkey_full {
@@ -2719,6 +2818,7 @@ impl Desktop {
                     waiting: p.attention.as_ref().map(|a| match a.need {
                         Need::You => "needs-you",
                         Need::Done => "done",
+                        Need::Failed => "failed",
                     }),
                 });
             }
@@ -2953,6 +3053,9 @@ impl Desktop {
                 }
             }
             Command::CopyOutput => self.copy_last_output(),
+            Command::Hints(kind) => self.start_hints(&kind),
+            Command::SearchAll(all) => self.start_search(all),
+            Command::NotifyWhenDone => self.arm_when_done(),
             Command::WorktreeReview(name) => {
                 // A review of it already open comes forward instead.
                 let open = (!name.is_empty())
@@ -3014,9 +3117,33 @@ impl Desktop {
                 }
             }
             Command::FileEdit(path) => {
-                let path = self.resolve_path(&path);
+                // `PATH:LINE[:COL]` opens the editor at the line (D-118),
+                // unless that is itself the name of a file.
+                let (file, line, column) = if self.resolve_path(&path).exists() {
+                    (path.as_str(), None, None)
+                } else {
+                    termos_term::links::split_line(&path)
+                };
+                let path = self.resolve_path(file);
                 let (program, mut args) = self.edit_command();
-                args.push(path.display().to_string());
+                let editor = if args.first().is_some_and(|a| a == "edit")
+                    && self.termos_exe().is_some_and(|e| e.as_os_str() == program.as_str())
+                {
+                    // `termos edit` starts TermOS's Neovim or Helix.
+                    if self.config.dev.editor == termos_core::config::EditorChoice::Helix {
+                        "hx".to_owned()
+                    } else {
+                        "nvim".to_owned()
+                    }
+                } else {
+                    program.clone()
+                };
+                args.extend(editor_args(
+                    &editor,
+                    &path.display().to_string(),
+                    line,
+                    column,
+                ));
                 let cwd = path.parent().map(PathBuf::from);
                 let estimate = (area.w / 2, area.h);
                 match self.spawn_pane(cwd, estimate, Some((program.clone(), args))) {
@@ -3291,9 +3418,26 @@ impl Desktop {
         if self.whichkey_mouse(m) {
             return;
         }
+        // A press anywhere closes the search box and hint mode.
+        if matches!(m.kind, MouseKind::Down(_))
+            && (self.ui.search.is_some() || self.ui.hints.is_some())
+        {
+            self.ui.search = None;
+            self.ui.hints = None;
+            self.dirty = true;
+            return;
+        }
         // Moving the pointer redraws only when what it is over changes.
         if m.kind == MouseKind::Moved && self.ui.drag.is_none() {
+            self.link_hover_moved(&m);
             self.pointer_moved(m);
+            return;
+        }
+        // Ctrl+click on a link or a path opens it (D-118).
+        if m.kind == MouseKind::Down(MouseButton::Left)
+            && self.ui.drag.is_none()
+            && self.link_click(&m)
+        {
             return;
         }
         self.dirty = true;
@@ -3676,9 +3820,11 @@ impl Desktop {
                 };
                 vt.advance(&bytes);
                 let mut notices = Vec::new();
+                let mut finished = Vec::new();
                 for ev in vt.take_events() {
                     match ev {
                         VtEvent::Notify(n) => notices.push(n),
+                        VtEvent::Finished(f) => finished.push(f),
                         VtEvent::Title(t) => pane.title = t,
                         VtEvent::ResetTitle => pane.title.clear(),
                         VtEvent::Bell => {
@@ -3709,6 +3855,12 @@ impl Desktop {
                 for n in notices {
                     self.program_notice(id, &n.title, &n.body);
                 }
+                if self.armed.contains_key(&id) {
+                    self.armed_output(id);
+                }
+                for f in finished {
+                    self.command_finished(id, f);
+                }
                 if visible {
                     self.output_since_render += bytes.len();
                     self.dirty = true;
@@ -3717,6 +3869,8 @@ impl Desktop {
             PtyEvent::Wake(id) => {
                 if self.is_wallpaper(id) {
                     self.wallpaper_woke();
+                } else if self.is_search_wake(id) {
+                    self.search_woke();
                 } else if self.panes.contains_key(&id) {
                     self.dirty = true;
                 }
@@ -3748,6 +3902,9 @@ impl Desktop {
             t.push(d);
         }
         if let Some(d) = self.clock_deadline {
+            t.push(d);
+        }
+        if let Some(d) = self.armed_deadline() {
             t.push(d);
         }
         if let Some(d) = self.anim.deadline() {
@@ -3844,6 +4001,10 @@ impl Desktop {
         }
         if self.clock_deadline.is_some_and(|d| d <= now) {
             self.clock_deadline = Some(next_minute(now));
+            self.dirty = true;
+        }
+        if self.armed_deadline().is_some_and(|d| d <= now) {
+            self.armed_timer(now);
             self.dirty = true;
         }
         if self.anim.is_active() && !self.any_client_animates() {
@@ -3953,6 +4114,8 @@ impl Desktop {
                         .collect();
                     if needs.contains(&Need::You) {
                         Some(Need::You)
+                    } else if i != active && needs.contains(&Need::Failed) {
+                        Some(Need::Failed)
                     } else if i != active && needs.contains(&Need::Done) {
                         Some(Need::Done)
                     } else {
@@ -4017,7 +4180,11 @@ impl Desktop {
         if !self.enter(client) {
             return None;
         }
+        // Links to the terminal around TermOS, where it shows them (D-118).
+        let links = self.config.ui.links && links_shown(&self.ui.caps);
+        grid.links_mut().set_enabled(links);
         let cursor = self.render_current(grid, now);
+        grid.forget_unused_links();
         self.leave();
         cursor
     }
@@ -4049,7 +4216,7 @@ impl Desktop {
         for id in self.session.active().panes() {
             if let Some(p) = self.panes.get_mut(&id) {
                 p.bell = false;
-                if p.attention.as_ref().is_some_and(|a| a.need == Need::Done) {
+                if p.attention.as_ref().is_some_and(|a| a.need.quiet()) {
                     p.attention = None;
                 }
             }
@@ -4118,6 +4285,8 @@ impl Desktop {
             let panes = &mut self.panes;
             let theme = &self.ui.theme;
             let copy = &self.copy;
+            let hints = &self.ui.hints;
+            let link_hover = &self.ui.link_hover;
             let block_cache = &mut self.block_cache;
             let candidates = &mut candidates;
             let waiting: Vec<PaneId> = panes
@@ -4144,6 +4313,24 @@ impl Desktop {
                             vt.render_into(g, rect);
                             if let Some(cm) = copy.as_ref().filter(|c| c.pane == id) {
                                 cm.decorate(g, rect, vt.as_ref(), theme);
+                            }
+                            // The link under the pointer, and hint mode's
+                            // labels (D-118).
+                            if let Some((_, cells)) =
+                                link_hover.as_ref().filter(|(p, _)| *p == id)
+                            {
+                                for &(row, x0, x1) in cells {
+                                    if row < rect.h && x0 < rect.w {
+                                        let w = x1.min(rect.w) - x0;
+                                        g.map_style(
+                                            Rect::new(rect.x + x0, rect.y + row, w, 1),
+                                            |s| s.attrs(termos_render::cell::Attrs::UNDERLINE),
+                                        );
+                                    }
+                                }
+                            }
+                            if let Some(h) = hints.as_ref().filter(|h| h.pane == id) {
+                                h.draw(g, rect, theme);
                             }
                             // Images the program printed, where their
                             // anchors are now.
@@ -4276,6 +4463,10 @@ impl Desktop {
             .palette
             .as_ref()
             .map(|p| p.render(grid, area, &self.ui.theme, chrome));
+        let search_cursor = self.ui.search.as_ref().map(|s| {
+            overlays.push(crate::search::SearchBox::rect(area));
+            s.render(grid, area, &self.ui.theme, chrome)
+        });
         if let Some(m) = &self.ui.menu {
             overlays.extend(m.rects());
             m.render(grid, &self.ui.theme, chrome);
@@ -4333,6 +4524,9 @@ impl Desktop {
             return None;
         }
         if let Some((x, y)) = palette_cursor {
+            return Some(bar(x, y));
+        }
+        if let Some((x, y)) = search_cursor {
             return Some(bar(x, y));
         }
         if self.ui.whichkey_visible || self.ui.whichkey_full {
@@ -4399,6 +4593,22 @@ mod tests {
         for (title, short) in cases {
             assert_eq!(short_title(title), short, "{title}");
         }
+    }
+
+    #[test]
+    fn editors_open_files_at_their_line() {
+        let at = |p: &str, l: Option<u32>, c: Option<u32>| editor_args(p, "/a/b.rs", l, c);
+        assert_eq!(at("nvim", Some(3), None), vec!["+3", "/a/b.rs"]);
+        assert_eq!(
+            at("/usr/bin/vim", Some(3), Some(7)),
+            vec!["+call cursor(3,7)", "/a/b.rs"]
+        );
+        assert_eq!(at("hx", Some(3), Some(7)), vec!["/a/b.rs:3:7"]);
+        assert_eq!(at("code", Some(3), None), vec!["-g", "/a/b.rs:3:1"]);
+        assert_eq!(at("Code.exe", Some(3), None), vec!["-g", "/a/b.rs:3:1"]);
+        assert_eq!(at("nano", Some(3), Some(2)), vec!["+3,2", "/a/b.rs"]);
+        assert_eq!(at("ed", Some(3), None), vec!["/a/b.rs"]);
+        assert_eq!(at("nvim", None, None), vec!["/a/b.rs"]);
     }
 
     #[test]

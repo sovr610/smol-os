@@ -39,7 +39,7 @@ questions (DECISIONS.md, "Open questions").
 | M12c | Remote access: a web client with share links, remote attach with local rendering, approvals on the phone (D-111) | ⏳ |
 | M12d | Hardening: pinned Actions, seccomp, a macOS sandbox, a network allowlist for agent CLIs (D-111) | ⏳ |
 | M12e | Harness v2, from T3 Code's design: long-lived two-way sessions with the CLIs, capability-based fallbacks, per-task checkpoints (proposed) | ⏳ |
-| M13a | Links, hints, search and finished commands: programs' links and paths clickable, hint mode, search across panes, alerts when a long command finishes (D-117) | ⏳ |
+| M13a | Links, hints, search and finished commands: programs' links and paths clickable, hint mode, search across panes, alerts when a long command finishes (D-117, D-118) | 🚧 |
 | M13b | Layouts and workspace tools: layout files, a drop-down terminal, typing into several panes, saved commands, SSH hosts, pane recording (D-117) | ⏳ |
 | M13c | Processes and files: a process manager; bookmarks, two panes, search, archives, git status, bulk rename and disk usage in Files (D-117) | ⏳ |
 | M13d | The image as a computer: lock screen, power menu, battery, brightness and lid, clock and time zones, USB drives, GPT disks, AMD graphics (D-117) | ⏳ |
@@ -1183,7 +1183,7 @@ Nothing M11a adds runs while idle: the shims run only when `claude` or `codex` s
 ---
 
 ## M13a — Links, hints, search and finished commands
-**Status:** ⏳ proposed (D-117; plan: [docs/plans/m13-os.md](docs/plans/m13-os.md#m13a--links-hints-search-and-finished-commands)) · Ask first: where links open (the client's machine or the server's); what a finished long command does (loud for failures only, both, or neither); the keys for hints and search.
+**Status:** 🚧 in progress: written, not yet built or tested (the session could not download crates) · Owner answers (D-118): the plan's: links open on the client's machine; a finished long command is loud for failures only; `u` for hints and `/` for search. Design: D-118, ARCHITECTURE.md §5.1, §6, §7 and §8; user guide [links.md](docs/links.md).
 
 **Deliverables**
 - [ ] Programs' links (OSC 8) kept in the grid, sent to the outer terminal and opened with Ctrl+click; TermOS's own anchors and unsafe schemes left out.

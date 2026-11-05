@@ -271,6 +271,7 @@ pub fn draw(
         match tab.attention {
             Some(crate::attention::Need::You) => flag.push('\u{25cf}'),
             Some(crate::attention::Need::Done) => flag.push('\u{2713}'),
+            Some(crate::attention::Need::Failed) => flag.push('\u{2717}'),
             None => {}
         }
         let text = format!(" {}:{}{} ", tab.index, truncate(&tab.name, 16), flag);
@@ -281,6 +282,9 @@ pub fn draw(
         };
         if tab.attention == Some(crate::attention::Need::You) && !tab.active {
             style = style.fg(theme.colors.warn);
+        }
+        if tab.attention == Some(crate::attention::Need::Failed) && !tab.active {
+            style = style.fg(theme.colors.error);
         }
         let start = x;
         x = grid.put_str(x, y, &text, style, left_limit);
