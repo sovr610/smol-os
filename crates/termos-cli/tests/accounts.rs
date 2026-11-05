@@ -603,8 +603,9 @@ fn sign_in_and_keys_go_through_the_clis_own_commands() {
         |s| s.contains("Passphrase for"),
     );
     k.send(b"pass phrase\r");
+    // Two lines, which may arrive apart.
     let screen = k.wait_for("the key stored", std::time::Duration::from_secs(20), |s| {
-        s.contains("now uses this API key")
+        s.contains("now uses this API key") && s.contains("choose Yes")
     });
     assert!(screen.contains("account.claude.work") && screen.contains("choose Yes"));
     assert!(!screen.contains("sk-ant-fixture-key"), "{screen}");

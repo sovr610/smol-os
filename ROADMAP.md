@@ -1135,6 +1135,8 @@ Nothing M11a adds runs while idle: the shims run only when `claude` or `codex` s
 - macOS names a workspace after the test program, which cut the toast short: the test checks its start, and the system notification's whole text.
 - Codex allows its `SessionEnd` hooks 3 s and warns about more: TermOS registers 3 s for Codex.
 - An account's `settings.json` can be a link to the main one: the hooks are written through the link (found by the accounts tests locally).
+- GitHub's release downloads answered 504 for a while (Codex, Gemini CLI, neovim, mise): those jobs passed when run again.
+- An older accounts test read the screen between two lines of `termos account key`'s output on macOS: it waits for both.
 
 ---
 ---
