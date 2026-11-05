@@ -153,6 +153,7 @@ impl Harness {
             cwd: None,
             launcher,
             server_socket: None,
+            power: false,
         };
         let mut desktop = Desktop::new(opts, config, tx, COLS, ROWS).expect("desktop starts");
         desktop.handle_client(
@@ -1401,6 +1402,7 @@ async fn snapshots_keep_layout_and_scrollback() {
         termos_exe: None,
         launcher: None,
         server_socket: None,
+        power: false,
         session_name: "again".into(),
         config_path: h.config_path(),
         paths: Paths {
@@ -1482,6 +1484,7 @@ async fn app_windows_come_back_with_the_session() {
         termos_exe: None,
         launcher: None,
         server_socket: None,
+        power: false,
         session_name: "again".into(),
         config_path: h.config_path(),
         paths: Paths {

@@ -21,6 +21,7 @@
 
 pub mod archive;
 pub mod clipboard;
+pub mod drives;
 pub mod du;
 pub mod files;
 pub mod findfiles;

@@ -158,3 +158,10 @@ path = "fuzz_targets/ssh_config.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "uevent_parse"
+path = "fuzz_targets/uevent_parse.rs"
+test = false
+doc = false
+bench = false

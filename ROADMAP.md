@@ -1219,7 +1219,7 @@ Nothing M11a adds runs while idle: the shims run only when `claude` or `codex` s
 ---
 
 ## M13d — The image as a computer
-**Status:** ⏳ proposed (D-117; plan: [docs/plans/m13-os.md](docs/plans/m13-os.md#m13d--on-the-image-lock-power-laptops-clock-drives-disks)) · Ask first: the lock's password (the system user's or TermOS's own); a lock in hosted mode too; AMD firmware in every x86_64 image; the default idle times.
+**Status:** 🚧 in progress: written, not yet built or tested (the session could not download crates) · Owner answers (D-123): the system user's password; no lock in a terminal; AMD firmware in every x86_64 image; lock after 10 minutes, suspend after 20 on battery. Design: D-124, ARCHITECTURE.md §5.9 and §14; user guide [bare-metal.md](docs/bare-metal.md).
 
 **Deliverables**
 - [ ] A password set at first boot; a lock screen on a key, after idle, on suspend and lid close, optionally at start; other virtual terminals closed to it.
@@ -1229,6 +1229,8 @@ Nothing M11a adds runs while idle: the shims run only when `claude` or `codex` s
 - [ ] USB drives shown, mounted and ejected from Files.
 - [ ] GPT disks for x86_64 and aarch64-virt, partitions found by label, new ids per installed disk.
 - [ ] AMD graphics firmware.
+
+**Still to do after the build:** the QEMU tests the plan lists for the lock (keys sent with `sendkey` must not reach the desktop; wrong and right passwords), suspend and resume with S3, a USB stick added with `device_add`, and an installed disk's new ids. The GPT images boot in the existing UEFI and BIOS boot tests.
 
 ---
 

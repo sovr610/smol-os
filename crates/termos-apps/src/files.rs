@@ -2411,6 +2411,46 @@ pub struct FilesOptions {
     pub config_path: Option<PathBuf>,
     /// Where open-with choices are kept.
     pub state_dir: Option<PathBuf>,
+    /// List USB drives (Linux) and the system's volumes (macOS, Windows)
+    /// among the places (D-124); off in tests.
+    pub drives: bool,
+}
+
+/// One entry of the places list.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Place {
+    Dir(String, PathBuf),
+    /// A USB drive: Enter mounts it (if it is not) and goes there, `e`
+    /// ejects it.
+    Drive(termos_hw::drives::Drive),
+}
+
+impl Place {
+    fn name(&self) -> String {
+        match self {
+            Place::Dir(n, _) => n.clone(),
+            Place::Drive(d) => format!(
+                "{} {}",
+                if d.mount.is_some() { "⏏" } else { "▭" },
+                d.title()
+            ),
+        }
+    }
+
+    /// Where it is, once mounted.
+    fn path(&self) -> Option<&Path> {
+        match self {
+            Place::Dir(_, p) => Some(p),
+            Place::Drive(d) => d.mount.as_deref(),
+        }
+    }
+}
+
+/// What a drive thread finished.
+enum DriveDone {
+    Mounted(PathBuf),
+    Ejected(String),
+    Failed(String),
 }
 
 /// The trash folder, where the system has one TermOS can show.
@@ -2443,6 +2483,10 @@ pub struct Files {
     waker: Option<AppWaker>,
     /// Where the right pane starts, from the window's left edge (mouse).
     split_at: u16,
+    /// The USB drives, as last read (with `drives`).
+    drives: Vec<termos_hw::drives::Drive>,
+    /// A mount or eject running on a thread.
+    drive_job: Option<std::sync::mpsc::Receiver<DriveDone>>,
 }
 
 impl std::fmt::Debug for Files {
@@ -2467,7 +2511,7 @@ impl Files {
         if opts.two_pane {
             panes.push(Self::pane(dir, &opts));
         }
-        Self {
+        let mut f = Self {
             panes,
             active: 0,
             opts,
@@ -2475,6 +2519,54 @@ impl Files {
             message: None,
             waker: None,
             split_at: u16::MAX,
+            drives: Vec::new(),
+            drive_job: None,
+        };
+        f.refresh_drives();
+        f
+    }
+
+    /// Reads the drives plugged in now.
+    fn refresh_drives(&mut self) {
+        if self.opts.drives {
+            self.drives = termos_hw::drives::current();
+        }
+    }
+
+    /// Mounts or ejects a drive on a thread; the result comes back
+    /// through the waker.
+    fn drive_job(&mut self, drive: termos_hw::drives::Drive, eject: bool) {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let waker = self.waker.clone();
+        let name = drive.title();
+        let spawned = std::thread::Builder::new()
+            .name("termos-drive".into())
+            .spawn(move || {
+                let done = if eject {
+                    match crate::drives::eject(&drive) {
+                        Ok(()) => DriveDone::Ejected(name),
+                        Err(e) => DriveDone::Failed(e),
+                    }
+                } else {
+                    match crate::drives::mount(&drive) {
+                        Ok(at) => DriveDone::Mounted(at),
+                        Err(e) => DriveDone::Failed(e),
+                    }
+                };
+                let _ = tx.send(done);
+                if let Some(w) = waker {
+                    w.wake();
+                }
+            });
+        match spawned {
+            Ok(_) => {
+                self.drive_job = Some(rx);
+                self.message = Some((
+                    if eject { "ejecting…" } else { "mounting…" }.to_owned(),
+                    false,
+                ));
+            }
+            Err(e) => self.message = Some((format!("cannot start: {e}"), true)),
         }
     }
 
@@ -2492,17 +2584,23 @@ impl Files {
     }
 
     /// The places of the sidebar and the `'` list: Home, the bookmarks,
-    /// the trash.
-    fn places(&self) -> Vec<(String, PathBuf)> {
+    /// the trash, then the drives (D-124).
+    fn places(&self) -> Vec<Place> {
         let mut v = Vec::new();
         if let Some(h) = home() {
-            v.push(("Home".to_owned(), h));
+            v.push(Place::Dir("Home".to_owned(), h));
         }
         for b in &self.opts.bookmarks {
-            v.push((name_of(b), b.clone()));
+            v.push(Place::Dir(name_of(b), b.clone()));
         }
         if let Some(t) = trash_dir() {
-            v.push(("Trash".to_owned(), t));
+            v.push(Place::Dir("Trash".to_owned(), t));
+        }
+        if self.opts.drives {
+            for vol in termos_hw::drives::system_volumes() {
+                v.push(Place::Dir(name_of(&vol), vol));
+            }
+            v.extend(self.drives.iter().cloned().map(Place::Drive));
         }
         v
     }
@@ -2549,11 +2647,31 @@ impl Files {
             }
             KeyCode::Char('k') | KeyCode::Up => *sel = sel.saturating_sub(1),
             KeyCode::Enter => {
-                let chosen = places.get(*sel).map(|(_, p)| p.clone());
+                let chosen = places.get(*sel).cloned();
                 self.places = None;
-                if let Some(p) = chosen {
-                    let a = self.active;
-                    self.panes[a].go(p, None);
+                match chosen {
+                    Some(Place::Drive(d)) if d.mount.is_none() => self.drive_job(d, false),
+                    Some(p) => {
+                        if let Some(at) = p.path() {
+                            let a = self.active;
+                            self.panes[a].go(at.to_owned(), None);
+                        }
+                    }
+                    None => {}
+                }
+            }
+            KeyCode::Char('e') => {
+                if let Some(Place::Drive(d)) = places.get(*sel).cloned() {
+                    self.places = None;
+                    // Out of the drive first: a pane open there keeps it busy.
+                    if let Some(at) = &d.mount {
+                        for p in &mut self.panes {
+                            if p.dir().starts_with(at) {
+                                p.go(home().unwrap_or_else(|| PathBuf::from("/")), None);
+                            }
+                        }
+                    }
+                    self.drive_job(d, true);
                 }
             }
             _ => self.places = None,
@@ -2570,12 +2688,14 @@ impl Files {
             tui_style(Style::new().fg(c.muted).attrs(Attrs::BOLD)),
         );
         let here = self.active().dir();
-        for (i, (name, path)) in self.places().iter().enumerate() {
+        for (i, place) in self.places().iter().enumerate() {
             let y = area.y + 1 + u16::try_from(i).unwrap_or(u16::MAX);
             if y >= area.bottom() {
                 break;
             }
-            let mut st = Style::new().fg(if path == here { c.accent } else { c.fg });
+            let name = place.name();
+            let current = place.path().is_some_and(|p| p == here);
+            let mut st = Style::new().fg(if current { c.accent } else { c.fg });
             if self.places == Some(i) {
                 st = c.selected(st);
                 buf.set_style(
@@ -2586,7 +2706,7 @@ impl Files {
             buf.set_stringn(
                 area.x + 1,
                 y,
-                fit(name, usize::from(area.width.saturating_sub(2))),
+                fit(&name, usize::from(area.width.saturating_sub(2))),
                 usize::from(area.width.saturating_sub(2)),
                 tui_style(st),
             );
@@ -2626,6 +2746,23 @@ impl App for Files {
     fn catch_up(&mut self) {
         for p in &mut self.panes {
             p.catch_up();
+        }
+        if let Some(rx) = &self.drive_job
+            && let Ok(done) = rx.try_recv()
+        {
+            self.drive_job = None;
+            self.refresh_drives();
+            match done {
+                DriveDone::Mounted(at) => {
+                    self.message = Some((format!("mounted on {}", at.display()), false));
+                    let a = self.active;
+                    self.panes[a].go(at, None);
+                }
+                DriveDone::Ejected(name) => {
+                    self.message = Some((format!("{name} can be taken out"), false));
+                }
+                DriveDone::Failed(e) => self.message = Some((e, true)),
+            }
         }
         // Something was put in the other pane's folder.
         if self.panes.len() == 2 {
@@ -2686,6 +2823,7 @@ impl App for Files {
                     return AppEffect::Redraw;
                 }
                 KeyCode::Char('\'') => {
+                    self.refresh_drives();
                     self.places = Some(0);
                     return AppEffect::Redraw;
                 }

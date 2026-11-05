@@ -13,7 +13,13 @@ KEYRING=${TERMOS_RAUC_KEYRING:?set by cargo xtask image build}
 # link to /tmp/dbus, which the data partition is bound onto at boot.) The
 # boot partition is mounted on /boot/esp, for RAUC and the boot loader.
 mkdir -p "$TARGET_DIR/data" "$TARGET_DIR/var/lib/iwd" "$TARGET_DIR/var/db/dhcpcd" \
-	"$TARGET_DIR/boot/esp"
+	"$TARGET_DIR/boot/esp" "$TARGET_DIR/media"
+
+# The time zone (D-124): /etc/localtime links to the data partition,
+# where `termos system set-time-zone` changes it (S11termos-data starts it
+# at UTC).
+ln -sfn /data/etc/localtime "$TARGET_DIR/etc/localtime"
+rm -f "$TARGET_DIR/etc/timezone"
 
 # What this system is: `termos update` reads these (D-078).
 mkdir -p "$TARGET_DIR/etc/termos"
@@ -44,7 +50,11 @@ grubenv=/boot/esp/grubenv"
 	HANDLERS=""
 	;;
 esac
-cat >"$TARGET_DIR/etc/rauc/system.conf" <<EOF
+# The slots' devices are the boot disk's (D-124): S11termos-data finds its
+# partitions by name (GPT) or number (MBR), and S80rauc writes the
+# configuration into /run/rauc from this template before RAUC starts.
+ln -sfn /run/rauc/system.conf "$TARGET_DIR/etc/rauc/system.conf"
+cat >"$TARGET_DIR/etc/rauc/system.conf.in" <<EOF
 [system]
 compatible=termos-$BOARD
 $BOOTLOADER
@@ -59,12 +69,12 @@ check-purpose=codesign
 $HANDLERS
 
 [slot.rootfs.0]
-device=/dev/disk/by-partuuid/7e57c0de-02
+device=@ROOTFS_A@
 type=raw
 bootname=A
 
 [slot.rootfs.1]
-device=/dev/disk/by-partuuid/7e57c0de-03
+device=@ROOTFS_B@
 type=raw
 bootname=B
 EOF

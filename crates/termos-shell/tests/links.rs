@@ -69,6 +69,7 @@ impl Harness {
             cwd: None,
             launcher: None,
             server_socket: None,
+            power: false,
         };
         let mut desktop = Desktop::new(opts, config, tx, COLS, ROWS).expect("desktop starts");
         desktop.handle_client(

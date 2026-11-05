@@ -14,12 +14,17 @@ publish.workspace = true
 sysinfo.workspace = true
 tracing.workspace = true
 
-# Priorities (renice) for the process manager (D-122).
+# Priorities (renice) for the process manager (D-122); udev's events for
+# USB drives (D-124).
 [target.'cfg(unix)'.dependencies]
 rustix.workspace = true
 
 [target.'cfg(any(target_os = "linux", windows))'.dependencies]
 nvml-wrapper.workspace = true
+
+# Batteries on macOS and Windows (D-124); Linux reads sysfs itself.
+[target.'cfg(any(target_os = "macos", windows))'.dependencies]
+starship-battery.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

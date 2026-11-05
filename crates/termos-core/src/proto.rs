@@ -131,6 +131,13 @@ pub enum ServerMsg {
     ImageFree {
         id: u32,
     },
+    /// Lock the screen (M13d, D-124). Only the image's console locks; a
+    /// terminal client ignores it, its host system has its own lock.
+    Lock,
+    /// Lock the screen, then suspend the machine (the power menu, the
+    /// critical battery). The console does both, so the lock is up before
+    /// the machine sleeps.
+    Suspend,
     /// The Kitty keyboard flags beyond disambiguation (2, 4, 8, 16) the
     /// program in this client's focused pane asked for. A client whose
     /// terminal speaks the protocol sets them there (D-103).

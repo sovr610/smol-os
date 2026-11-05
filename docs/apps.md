@@ -69,8 +69,9 @@ Extracting and zipping put their result in the other pane's folder when
 there is one.
 
 **Places:** with one pane and room for it, a sidebar lists Home, your
-bookmarks and the trash (Linux and macOS); `'` lets you choose one with the
-keys. `b` adds the folder shown to `[files] bookmarks` in your config file
+bookmarks and the trash (Linux and macOS), then USB drives (Linux: `Enter`
+mounts one and goes there, `e` ejects it) or the system's volumes (macOS,
+Windows); `'` lets you choose one with the keys (D-124). `b` adds the folder shown to `[files] bookmarks` in your config file
 (the rest of the file is kept as it is), or takes it away.
 
 **Searching** lists the results in place of the folder: `Enter` opens one
@@ -224,8 +225,13 @@ shows the connections only.
 
 The common options of `config.toml`: theme, window borders and shadows,
 animations, how images are shown, the status line, the mouse, key hints,
-session restore, scrollback saving and the clipboard history. `↑` `↓`
+session restore, scrollback saving and the clipboard history; on TermOS
+images also the lock and power settings and the clock (D-124). `↑` `↓`
 choose, `←` `→` (or `Enter`) change.
+
+**Clock → Time zone** (TermOS images) opens the list of zones: type to
+search (`new york`, `paris`), `↑` `↓` choose, `Enter` sets it, `Esc` goes
+back. In a terminal the host system keeps the time zone.
 
 Each change is saved into your `config.toml` at once, keeping your comments
 and everything else in it, and applied right away. TermOS checks the file

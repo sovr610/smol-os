@@ -25,7 +25,8 @@ kernel's display drivers.
 3. Take out the stick (or the ISO) and restart: `termos update restart`.
 
 On its first start the installed system grows its data partition to the
-end of the disk.
+end of the disk, and asks for a password for the lock screen (see
+[Locking](#locking)).
 
 The disk images (`termos-<version>-<target>.img.zst`) are the other way,
 and the only one for Arm machines and Raspberry Pis: unpack and write one
@@ -143,6 +144,89 @@ sudo dd if=target/image/rpi4/images/disk.img of=/dev/sdX bs=4M conv=fsync status
 
 Check `/dev/sdX` twice: everything on it is replaced.
 
+## Locking
+
+> Written, not yet built or tested (M13d, D-124).
+
+The lock screen shows the time and a password field, and nothing of the
+desktop. Its password is the system user's (`termos`).
+
+- **The password:** the first start asks for one (type it twice; Esc has
+  none, and the lock then says that anyone can unlock). Change it with
+  `termos password`, or remove it with `termos password --remove`.
+- **When it locks:** `C-b L`, ◆ Menu → Power → Lock, the keyboard's lock
+  key, after `[lock] after-minutes` without input (10), when the lid closes
+  (`[power] lid`), and before every suspend. With `[lock] at-start = true`
+  it starts locked, like a login.
+- **Unlocking:** type the password and Enter. After three wrong ones each
+  try waits longer: 5 s, then 10, 20… up to five minutes.
+- **While locked:** keys and the mouse reach nothing but the lock screen,
+  and Ctrl+Alt+F1…F12 does not leave it. If the console restarts, it comes
+  back locked.
+- **What it does not stop:** agents, servers and programs keep running;
+  SSH sessions and other clients attached to the desktop stay attached. The
+  lock is for the keyboard and the screen.
+- **A lost password:** start the machine, press Esc for the boot menu and
+  choose **TermOS without the lock**. Nothing locks in that start; set a
+  new password with `termos password`. (Anyone at the machine can do this,
+  as with any computer whose disk is not encrypted.)
+
+In a terminal TermOS does not lock: lock the computer as its system does.
+
+## Power, battery and brightness
+
+> Written, not yet built or tested (M13d, D-124).
+
+- **The Power menu** (◆ Menu → Power): Lock, Suspend, Restart, Shut down.
+  Restart and Shut down ask first and save the sessions. Suspend locks,
+  then sleeps (`mem`, or `freeze` where the machine has no deeper sleep).
+- **The battery** shows in the status line (`▮ 84%`, `⚡` while charging).
+  At 20% a toast says so, at 10% a notification, and at `[power] critical`
+  (5%) the machine suspends after 30 seconds unless it is plugged in.
+- **Idle:** on battery it suspends after `[power] suspend-after-minutes`
+  (20) without input.
+- **Brightness:** the brightness keys, or `display.brightness +10` /
+  `-10` in the palette; `[power] brightness = 70` sets it at start.
+
+```toml
+[lock]
+after-minutes = 10       # 0: never
+at-start = false
+
+[power]
+lid = "suspend"          # suspend | lock | nothing
+suspend-after-minutes = 20   # on battery; 0: never
+critical = 5             # percent; 0: never
+# brightness = 70        # percent, at start
+```
+
+What was tried on real machines is listed here as it is: so far only QEMU
+(suspend varies with the hardware).
+
+## Time
+
+> Written, not yet built or tested (M13d, D-124).
+
+- **The time zone:** Settings → Clock → Time zone (type to search), or
+  `clock.zone Europe/Paris` in the palette. It starts at UTC.
+- **Time sync:** BusyBox's `ntpd` asks `[clock] ntp-servers`
+  (`pool.ntp.org`) from boot, and sets the clock when it is far off.
+- **12-hour time:** `[clock] time-format = "12h"`.
+
+## USB drives
+
+> Written, not yet built or tested (M13d, D-124).
+
+Plug one in and a toast says so. In Files it is under the places (the
+sidebar, or `'`): Enter mounts it on `/media/LABEL` and goes there, `e`
+ejects it (write out, unmount; then it can be pulled out). FAT, exFAT,
+ext4 and NTFS drives are mounted; on FAT, exFAT and NTFS the files are the
+user's.
+
+On another Linux, Files mounts drives through udisks (`udisksctl`), where
+it runs. macOS and Windows mount drives themselves; Files lists their
+volumes among the places.
+
 ## The console
 
 | Keys | |
@@ -151,6 +235,8 @@ Check `/dev/sdX` twice: everything on it is replaced.
 | Ctrl+0 | the configured size again |
 | Ctrl+Shift+V / Shift+Insert | paste the text last copied in TermOS |
 | Ctrl+Alt+F1…F12 | another virtual terminal (TermOS is on tty1) |
+| brightness keys | the screen's backlight |
+| the lock key | lock the screen |
 
 Everything else is the desktop's (`C-b` is the prefix, Ctrl+Space the
 palette; see [getting-started.md](getting-started.md)).
@@ -196,14 +282,27 @@ logind) to build and run.
 
 ## Inside the image
 
+PCs and Arm UEFI machines have GPT disks; Raspberry Pis have MBR, which
+their firmware needs. The partitions, by name (GPT) or number (MBR):
+
 ```
+   bios      (x86_64 only) GRUB's core image, for BIOS starts
 1  boot      FAT: GRUB, its configuration and its A/B state (a Pi: its firmware, config.txt,
              and each slot's kernel and device trees under slot-a/ and slot-b/)
 2  rootfs-a  system copy A, read-only (squashfs), with its kernel in /boot
 3  rootfs-b  system copy B, written by updates
 4  data      ext4, label termos-data: /home (with the dev rootfs), Wi-Fi networks, update
-             records, and later models and containers; grown to the end of the disk on first boot
+             records, passwords, the time zone, and later models and containers; grown to
+             the end of the disk on first boot
 ```
+
+- The system finds the partitions on the disk it started from, so two
+  TermOS disks can share a machine once each has its own ids:
+  `termos install` gives an installed disk new ones. Two disks written
+  from the same image file with `dd` share theirs: keep one of them in
+  the machine.
+- Disks installed before GPT (M13d) keep their MBR partition tables and
+  boot menus; updates change neither.
 
 - The system partition is read-only; what you keep lives on the data
   partition, mounted on `/data`, with `/home`, iwd's networks, D-Bus's
@@ -222,11 +321,12 @@ logind) to build and run.
 
 ## Limits
 
-- The disks use an MBR partition table, so the data partition stops at
-  2 TiB, and every TermOS disk has the same partition IDs: keep only one in
-  a machine.
-- AMD graphics cards need firmware the images do not carry yet; they get
-  the UEFI framebuffer (simpledrm) instead.
+- Raspberry Pi disks (and disks installed before M13d) use MBR, so their
+  data partition stops at 2 TiB.
+- The x86_64 image carries AMD's graphics firmware (tens of MB); other
+  vendors' cards that need firmware (NVIDIA) get the UEFI framebuffer
+  (simpledrm).
+- Some old BIOSes do not start GPT disks; UEFI machines and QEMU's BIOS do.
 - The Raspberry Pi images are built on request and have not been tested on
   hardware by CI, nor have their updates.
 - How fast keys reach the screen is measured by the console itself: every

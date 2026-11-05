@@ -140,6 +140,8 @@ enum Event {
     /// A WASM widget drew something new or stopped.
     #[cfg(feature = "wasm-widgets")]
     Widgets,
+    /// udev: a block device came or went (USB drives, D-124).
+    Drive(termos_hw::drives::Uevent),
 }
 
 /// An admitted plugin connection: its name, connection id, and the lines
@@ -718,6 +720,9 @@ impl Server {
             termos_exe: None,
             launcher: self.opts.launcher.clone(),
             server_socket: Some(self.opts.socket_path.clone()),
+            // The real server reads the machine's battery; test servers do
+            // not, so a laptop's tests see what CI sees.
+            power: self.opts.handle_signals,
             // Lets `termos msg`, `ls` and `detach` inside a pane find us
             // (D-029; supersedes D-027's pid-only value).
             pane_env: std::iter::once((
@@ -1077,6 +1082,14 @@ impl Server {
         } else {
             None
         };
+        // USB drives coming and going (D-124): the real server only, as
+        // with signals; elsewhere than Linux there is nothing to hear.
+        if self.opts.handle_signals && cfg!(target_os = "linux") {
+            let tx = self.events_tx.clone();
+            if let Err(e) = termos_hw::drives::listen(move |ev| tx.send(Event::Drive(ev)).is_ok()) {
+                tracing::info!("no USB drive events: {e}");
+            }
+        }
         let reason = loop {
             self.pump();
             if let Some(r) = self.shutdown.take() {
@@ -1627,6 +1640,11 @@ impl Server {
             }
             #[cfg(feature = "wasm-widgets")]
             Event::Widgets => self.push_widgets(),
+            Event::Drive(ev) => {
+                for e in self.sessions.values_mut() {
+                    e.desktop.drive_event(&ev);
+                }
+            }
             Event::PluginGone { plugin, conn } => {
                 let closed = self.plugins.disconnected(&plugin, conn);
                 self.close_windows(&closed);
@@ -1841,6 +1859,17 @@ impl Server {
                 if let Some(e) = self.sessions.get_mut(&origin) {
                     e.desktop.open_search_for(client, texts);
                 }
+            }
+            SessionRequest::PowerOff(what) => {
+                // Every session is saved first: the machine's restart ends
+                // the server like any other program.
+                let keys: Vec<SessionKey> = self.sessions.keys().copied().collect();
+                for k in keys {
+                    if self.ask != Ask::Asked(k) {
+                        self.save_snapshot(k);
+                    }
+                }
+                crate::desktop::power::run_system(&[what.verb()]);
             }
             SessionRequest::Reveal { client, hit } => match self.find_session(&hit.session) {
                 Some(k) => {

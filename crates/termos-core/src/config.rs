@@ -85,6 +85,12 @@ pub struct Config {
     pub files: FilesConfig,
     /// The process manager (M13c, D-122).
     pub processes: ProcessesConfig,
+    /// The lock screen on TermOS images (M13d, D-124).
+    pub lock: LockConfig,
+    /// Battery, brightness, the lid and idle suspend (M13d, D-124).
+    pub power: PowerConfig,
+    /// Time sync and the status clock's format (M13d, D-124).
+    pub clock: ClockConfig,
     /// The coding harness (M11c, D-099).
     pub harness: HarnessConfig,
     /// A git worktree per task (M12a, D-113).
@@ -124,6 +130,9 @@ impl Default for Config {
             snippets: Vec::new(),
             files: FilesConfig::default(),
             processes: ProcessesConfig::default(),
+            lock: LockConfig::default(),
+            power: PowerConfig::default(),
+            clock: ClockConfig::default(),
             harness: HarnessConfig::default(),
             worktrees: WorktreesConfig::default(),
         }
@@ -426,6 +435,115 @@ impl Default for ProcessesConfig {
     fn default() -> Self {
         Self { confirm: true }
     }
+}
+
+/// The lock screen (`[lock]`, D-124). Only TermOS images lock: in a
+/// terminal, the host system's lock does (D-123).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(default, deny_unknown_fields, rename_all = "kebab-case")]
+pub struct LockConfig {
+    /// Lock after this many minutes without input (0: never).
+    pub after_minutes: u32,
+    /// Start locked, so the console asks for the password like a login.
+    pub at_start: bool,
+}
+
+impl Default for LockConfig {
+    fn default() -> Self {
+        Self {
+            after_minutes: 10,
+            at_start: false,
+        }
+    }
+}
+
+/// What closing a laptop's lid does (`[power] lid`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum LidAction {
+    /// Lock, then suspend.
+    #[default]
+    Suspend,
+    Lock,
+    Nothing,
+}
+
+/// Battery, brightness, the lid and idle (`[power]`, D-124).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(default, deny_unknown_fields, rename_all = "kebab-case")]
+pub struct PowerConfig {
+    pub lid: LidAction,
+    /// On battery, suspend after this many minutes without input (0:
+    /// never).
+    pub suspend_after_minutes: u32,
+    /// At this charge (percent) the image suspends, after a 30-second
+    /// countdown (0: never). A toast comes at 20% and a notification at
+    /// 10% before it.
+    pub critical: u8,
+    /// The screen's brightness at start, in percent (none: as it was).
+    pub brightness: Option<u8>,
+}
+
+impl Default for PowerConfig {
+    fn default() -> Self {
+        Self {
+            lid: LidAction::Suspend,
+            suspend_after_minutes: 20,
+            critical: 5,
+            brightness: None,
+        }
+    }
+}
+
+/// How the status clock shows the time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+pub enum TimeFormat {
+    /// `14:05`.
+    #[default]
+    #[serde(rename = "24h")]
+    H24,
+    /// `2:05 PM`.
+    #[serde(rename = "12h")]
+    H12,
+}
+
+impl TimeFormat {
+    /// The `strftime` pattern for the status clock.
+    pub fn pattern(self) -> &'static str {
+        match self {
+            TimeFormat::H24 => "%H:%M",
+            TimeFormat::H12 => "%-I:%M %p",
+        }
+    }
+}
+
+/// Time sync and the clock (`[clock]`, D-124).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(default, deny_unknown_fields, rename_all = "kebab-case")]
+pub struct ClockConfig {
+    /// NTP servers the image's time sync asks (BusyBox `ntpd`).
+    pub ntp_servers: Vec<String>,
+    pub time_format: TimeFormat,
+}
+
+impl Default for ClockConfig {
+    fn default() -> Self {
+        Self {
+            ntp_servers: vec!["pool.ntp.org".into()],
+            time_format: TimeFormat::H24,
+        }
+    }
+}
+
+/// Whether `name` can be an NTP server's name or address: letters,
+/// digits, dots, hyphens and colons (IPv6), as `ntpd -p` takes them.
+pub fn valid_ntp_server(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 253
+        && !name.starts_with('-')
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | ':'))
 }
 
 /// The drop-down terminal (`[quick]`, D-120).
@@ -898,6 +1016,22 @@ two-pane = false         # open Files with two panes (Tab switches, F5 copies, F
 [processes]
 confirm = true           # ask before ending, killing, pausing or renicing a process
 
+# TermOS images only (docs/bare-metal.md); in a terminal, the host system
+# locks, sleeps and keeps time.
+[lock]
+after-minutes = 10       # lock after this long without input (0: never)
+at-start = false         # start locked, like a login
+
+[power]
+lid = "suspend"          # suspend | lock | nothing, when a laptop's lid closes
+suspend-after-minutes = 20   # on battery, suspend after this long without input (0: never)
+critical = 5             # percent: suspend after a 30-second countdown (0: never)
+# brightness = 70        # percent, at start
+
+[clock]
+ntp-servers = ["pool.ntp.org"]   # the image's time sync
+time-format = "24h"      # 24h | 12h, for the status clock
+
 # Saved commands, in the palette as "snippet: NAME". {param} and
 # {param:default} are asked for. Do not put secrets in them.
 # [[snippets]]
@@ -1236,5 +1370,30 @@ position = "top"
     fn line_col_math() {
         assert_eq!(line_col("abc\ndef", 0), (1, 1));
         assert_eq!(line_col("abc\ndef", 5), (2, 2));
+    }
+
+    #[test]
+    fn lock_power_and_clock() {
+        let c = parse(
+            "[lock]\nafter-minutes = 0\nat-start = true\n\
+             [power]\nlid = \"lock\"\ncritical = 0\nbrightness = 40\n\
+             [clock]\nntp-servers = [\"time.example.org\"]\ntime-format = \"12h\"\n",
+        )
+        .expect("valid");
+        assert_eq!(c.lock.after_minutes, 0);
+        assert!(c.lock.at_start);
+        assert_eq!(c.power.lid, LidAction::Lock);
+        assert_eq!(c.power.suspend_after_minutes, 20);
+        assert_eq!(c.power.critical, 0);
+        assert_eq!(c.power.brightness, Some(40));
+        assert_eq!(c.clock.ntp_servers, ["time.example.org"]);
+        assert_eq!(c.clock.time_format.pattern(), "%-I:%M %p");
+        assert!(parse("[power]\nlid = \"hibernate\"\n").is_err());
+        assert!(parse("[clock]\ntime-format = \"25h\"\n").is_err());
+        assert!(valid_ntp_server("pool.ntp.org"));
+        assert!(valid_ntp_server("2001:db8::1"));
+        assert!(!valid_ntp_server("-q"));
+        assert!(!valid_ntp_server("a b"));
+        assert!(!valid_ntp_server(""));
     }
 }

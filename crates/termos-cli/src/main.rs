@@ -22,8 +22,10 @@ mod install;
 mod kms;
 mod launcher;
 mod layout_cmd;
+mod machine;
 mod models;
 mod opener;
+mod password;
 mod pkg_cmd;
 mod probe;
 #[cfg(any(windows, test))]
@@ -284,6 +286,13 @@ enum Cmd {
         #[command(subcommand)]
         action: update::UpdateCmd,
     },
+    /// On a TermOS image: the lock screen's password (the user's system
+    /// password, D-124).
+    Password {
+        /// Have no password: anyone at the keyboard can unlock.
+        #[arg(long)]
+        remove: bool,
+    },
     /// The root side of updates and installs, run through sudo (D-078).
     #[command(hide = true)]
     System {
@@ -499,7 +508,8 @@ fn run_cli(args: impl IntoIterator<Item = String>) -> anyhow::Result<ExitCode> {
         Some(Cmd::Models { action }) => models::models_command(action, &paths, &config_path),
         Some(Cmd::Install(args)) => install::install_command(args),
         Some(Cmd::Update { action }) => update::update_command(action, &paths),
-        Some(Cmd::System { action }) => update::system_command(action),
+        Some(Cmd::System { action }) => update::system_command(action, &config_path),
+        Some(Cmd::Password { remove }) => password::password_command(*remove),
         Some(Cmd::Debug {
             what: DebugCmd::Caps { raw },
         }) => debug_caps(*raw),
@@ -1433,7 +1443,7 @@ fn attach_kms(paths: &Paths, config_path: &Path, t: &Target) -> anyhow::Result<E
         .block_on(connect_frontend(&t.socket, &hello))
         .map_err(|e| explain(t, e))?;
     let ended = runtime
-        .block_on(kms::run(end, &config.kms))
+        .block_on(kms::run(end, &config, &paths.state_dir))
         .inspect_err(|e| tracing::error!("the console stopped: {e:#}"))?;
     match ended {
         client::Ended::Detached(session) => println!("[detached (from session {session})]"),

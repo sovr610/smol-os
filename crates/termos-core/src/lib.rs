@@ -40,6 +40,7 @@ pub mod proto;
 pub mod secret_env;
 pub mod snippets;
 pub mod ssh_config;
+pub mod timezones;
 pub mod transport;
 pub mod watch;
 pub mod widgets;

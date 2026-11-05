@@ -103,6 +103,7 @@ pub fn default_prefix_bindings() -> Vec<Binding> {
         b("`", C::QuickToggle),
         b("S", C::WorkspaceSync),
         b("R", C::PaneRecord),
+        b("L", C::SessionLock),
         b("Enter", C::Menu),
         b(":", C::Palette),
         b("?", C::Keys),

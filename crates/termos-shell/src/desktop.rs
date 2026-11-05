@@ -54,6 +54,7 @@ use crate::whichkey;
 mod attend;
 mod find;
 mod menus;
+pub(crate) mod power;
 mod tools;
 mod wall;
 
@@ -269,6 +270,9 @@ pub struct DesktopOptions {
     pub launcher: Option<std::sync::Arc<dyn termos_core::app::Launcher>>,
     /// The server's socket (windows that use the control API get it).
     pub server_socket: Option<PathBuf>,
+    /// Read the machine's battery for the status line (D-124); off in
+    /// tests.
+    pub power: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -463,6 +467,8 @@ pub enum SessionRequest {
         client: ClientId,
         hit: crate::search::Hit,
     },
+    /// Save every session, then restart or shut down the image (D-124).
+    PowerOff(crate::prompt::PowerOff),
 }
 
 /// All state of one session: its workspaces and panes, plus the UI state of
@@ -541,6 +547,14 @@ pub struct Desktop {
     sync: std::collections::BTreeSet<PaneId>,
     /// Panes being recorded.
     recordings: BTreeMap<PaneId, tools::Recording>,
+    /// The battery in the status line, and whether it is low (D-124).
+    battery: Option<(String, bool)>,
+    /// The machine has a battery to read (once a minute).
+    battery_present: bool,
+    battery_deadline: Option<Instant>,
+    low: power::Low,
+    /// The critical battery's countdown to suspend.
+    critical_at: Option<Instant>,
 }
 
 impl std::fmt::Debug for Desktop {
@@ -687,10 +701,19 @@ impl Desktop {
             quick_back: None,
             sync: std::collections::BTreeSet::new(),
             recordings: BTreeMap::new(),
+            battery: None,
+            battery_present: false,
+            battery_deadline: None,
+            low: power::Low::Fine,
+            critical_at: None,
             config,
         };
         if d.config.status.clock {
             d.clock_deadline = Some(next_minute(Instant::now()));
+        }
+        if d.opts.power {
+            d.battery_present = !termos_hw::power::read().batteries.is_empty();
+            d.read_battery(Instant::now());
         }
         for e in key_errors {
             d.notify(Level::Warn, e);
@@ -1347,6 +1370,7 @@ impl Desktop {
                         two_pane: self.config.files.two_pane,
                         config_path: Some(self.opts.config_path.clone()),
                         state_dir: Some(self.opts.paths.state_dir.clone()),
+                        drives: self.opts.power,
                     },
                 ))
             }
@@ -2709,6 +2733,7 @@ impl Desktop {
                 }
                 self.quit = Some("quit".into());
             }
+            PromptKind::Confirm(Confirmed::Power(what)) => self.power_off(what),
             PromptKind::Confirm(Confirmed::Restore) => {
                 self.requests.push(SessionRequest::RestoreSaved {
                     from_question: true,
@@ -3145,6 +3170,12 @@ impl Desktop {
             Command::SnippetRun(name) => self.run_snippet(&name),
             Command::SshOpen(host) => self.open_ssh(&host),
             Command::PaneRecord => self.toggle_record(),
+            Command::SessionLock => self.lock_screen(),
+            Command::SystemSuspend => self.suspend(),
+            Command::SystemRestart => self.ask_power_off(crate::prompt::PowerOff::Restart),
+            Command::SystemPowerOff => self.ask_power_off(crate::prompt::PowerOff::PowerOff),
+            Command::DisplayBrightness(d) => self.change_brightness(d),
+            Command::ClockZone(z) => self.set_time_zone(&z),
             Command::WorktreeReview(name) => {
                 // A review of it already open comes forward instead.
                 let open = (!name.is_empty())
@@ -4026,6 +4057,8 @@ impl Desktop {
         if let Some(d) = self.clock_deadline {
             t.push(d);
         }
+        t.extend(self.battery_deadline);
+        t.extend(self.critical_at);
         if let Some(d) = self.armed_deadline() {
             t.push(d);
         }
@@ -4125,6 +4158,10 @@ impl Desktop {
             self.clock_deadline = Some(next_minute(now));
             self.dirty = true;
         }
+        if self.battery_deadline.is_some_and(|d| d <= now) {
+            self.read_battery(now);
+        }
+        self.critical_timer(now);
         if self.armed_deadline().is_some_and(|d| d <= now) {
             self.armed_timer(now);
             self.dirty = true;
@@ -4276,11 +4313,12 @@ impl Desktop {
             copy_mode: self.copy.is_some(),
             message: self.notes.toast(),
             message_reveal: None,
-            clock: self
-                .config
-                .status
-                .clock
-                .then(|| jiff::Zoned::now().strftime("%H:%M").to_string()),
+            clock: self.config.status.clock.then(|| {
+                jiff::Zoned::now()
+                    .strftime(self.config.clock.time_format.pattern())
+                    .to_string()
+            }),
+            battery: self.battery.clone(),
             widgets: &self.status_widgets,
             prompt: self
                 .ui

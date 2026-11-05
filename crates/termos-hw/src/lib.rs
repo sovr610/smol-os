@@ -23,10 +23,12 @@
 use std::time::{Duration, Instant};
 
 pub mod accel;
+pub mod drives;
 mod gpu;
 pub mod net;
 #[cfg(any(target_os = "linux", windows))]
 mod nvidia;
+pub mod power;
 pub mod procs;
 pub mod sysfs;
 

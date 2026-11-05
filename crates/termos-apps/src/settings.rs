@@ -27,6 +27,9 @@ enum Kind {
     },
     /// Not a setting: Enter runs this desktop command.
     Action(&'static str),
+    /// The image's time zone (`/etc/localtime`): Enter opens a list to
+    /// search (D-124).
+    Zone,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -256,6 +259,74 @@ const SETTINGS: &[Setting] = &[
         Kind::Bool,
     ),
     s(
+        "Lock and power",
+        "lock",
+        "after-minutes",
+        "Lock after (minutes)",
+        "without input; 0 never (TermOS images)",
+        Kind::Number {
+            min: 0,
+            max: 120,
+            step: 5,
+        },
+    ),
+    s(
+        "Lock and power",
+        "lock",
+        "at-start",
+        "Lock at start",
+        "the console asks for the password like a login",
+        Kind::Bool,
+    ),
+    s(
+        "Lock and power",
+        "power",
+        "lid",
+        "Closing the lid",
+        "lock, then suspend; or only lock",
+        Kind::Choice(&["suspend", "lock", "nothing"]),
+    ),
+    s(
+        "Lock and power",
+        "power",
+        "suspend-after-minutes",
+        "Suspend after (minutes)",
+        "on battery, without input; 0 never",
+        Kind::Number {
+            min: 0,
+            max: 240,
+            step: 5,
+        },
+    ),
+    s(
+        "Lock and power",
+        "power",
+        "critical",
+        "Suspend at (battery %)",
+        "after a 30-second countdown; 0 never",
+        Kind::Number {
+            min: 0,
+            max: 20,
+            step: 1,
+        },
+    ),
+    s(
+        "Clock",
+        "clock",
+        "time-format",
+        "Time format",
+        "the status line's clock",
+        Kind::Choice(&["24h", "12h"]),
+    ),
+    s(
+        "Clock",
+        "",
+        "",
+        "Time zone",
+        "type to search the zones (TermOS images)",
+        Kind::Zone,
+    ),
+    s(
         "System",
         "",
         "",
@@ -291,6 +362,43 @@ pub struct Settings {
     defaults: DocumentMut,
     selected: usize,
     message: Option<(String, bool)>,
+    /// The time zone list, while it is open.
+    zones: Option<ZonePicker>,
+    /// Where the zones are (the image's zoneinfo; tests use their own).
+    zoneinfo: PathBuf,
+}
+
+/// The time zone list: every zone, a search, a choice.
+#[derive(Debug, Clone, Default)]
+struct ZonePicker {
+    all: Vec<String>,
+    query: String,
+    selected: usize,
+}
+
+impl ZonePicker {
+    /// The zones the search matches: every word of it, ignoring case, `_`
+    /// and `/` read as spaces.
+    fn shown(&self) -> Vec<&str> {
+        let words: Vec<String> = self
+            .query
+            .split_whitespace()
+            .map(str::to_lowercase)
+            .collect();
+        self.all
+            .iter()
+            .map(String::as_str)
+            .filter(|z| {
+                let z = z.to_lowercase().replace(['_', '/'], " ");
+                words.iter().all(|w| z.contains(w.as_str()))
+            })
+            .collect()
+    }
+}
+
+/// Whether this is a TermOS image (where TermOS sets the time zone).
+fn on_image() -> bool {
+    Path::new("/etc/termos/board").exists()
 }
 
 impl std::fmt::Debug for Settings {
@@ -317,7 +425,63 @@ impl Settings {
             defaults: DEFAULT_CONFIG.parse().unwrap_or_default(),
             selected: 0,
             message: None,
+            zones: None,
+            zoneinfo: PathBuf::from(termos_core::timezones::ZONEINFO),
         }
+    }
+
+    /// Opens the time zone list (TermOS images: elsewhere the host system
+    /// keeps the time).
+    fn open_zones(&mut self, image: bool) -> AppEffect {
+        if !image {
+            self.message = Some((
+                "the time zone is the host system's: TermOS sets it on its own images".into(),
+                false,
+            ));
+            return AppEffect::Redraw;
+        }
+        let all = termos_core::timezones::zones(&self.zoneinfo);
+        if all.is_empty() {
+            self.message = Some((format!("no zones in {}", self.zoneinfo.display()), true));
+            return AppEffect::Redraw;
+        }
+        self.zones = Some(ZonePicker {
+            all,
+            ..ZonePicker::default()
+        });
+        AppEffect::Redraw
+    }
+
+    /// A key while the time zone list is open.
+    fn zone_key(&mut self, key: KeyEvent) -> AppEffect {
+        let Some(p) = self.zones.as_mut() else {
+            return AppEffect::None;
+        };
+        match key.code {
+            KeyCode::Esc => self.zones = None,
+            KeyCode::Up => p.selected = p.selected.saturating_sub(1),
+            KeyCode::Down => p.selected = (p.selected + 1).min(p.shown().len().saturating_sub(1)),
+            KeyCode::Backspace => {
+                p.query.pop();
+                p.selected = 0;
+            }
+            KeyCode::Char(c)
+                if key.mods.is_empty() || key.mods == termos_core::input::Mods::SHIFT =>
+            {
+                p.query.push(c);
+                p.selected = 0;
+            }
+            KeyCode::Enter => {
+                let Some(zone) = p.shown().get(p.selected).map(|z| (*z).to_owned()) else {
+                    return AppEffect::None;
+                };
+                self.zones = None;
+                self.message = Some((format!("time zone: {zone}"), false));
+                return AppEffect::Command(format!("clock.zone {zone}"));
+            }
+            _ => return AppEffect::None,
+        }
+        AppEffect::Redraw
     }
 
     /// The current value of a setting: the file's, else the default.
@@ -334,6 +498,13 @@ impl Settings {
     /// Steps the selected setting forward or back.
     fn change(&mut self, forward: bool) -> AppEffect {
         let s = SETTINGS[self.selected];
+        if s.kind == Kind::Zone {
+            return if forward {
+                self.open_zones(on_image())
+            } else {
+                AppEffect::None
+            };
+        }
         if let Kind::Action(command) = s.kind {
             return if forward {
                 AppEffect::Command(command.to_owned())
@@ -359,7 +530,7 @@ impl Settings {
                 let v = if forward { v + step } else { v - step };
                 Value::from(v.clamp(min, max))
             }
-            Kind::Action(_) => return AppEffect::None,
+            Kind::Action(_) | Kind::Zone => return AppEffect::None,
         };
         self.save(&s, new)
     }
@@ -429,6 +600,48 @@ impl Settings {
     }
 }
 
+/// The time zone list: the search on top, the matching zones below.
+fn render_zones(p: &ZonePicker, area: TuiRect, buf: &mut Buffer, theme: &Theme) {
+    let c = &theme.colors;
+    let w = usize::from(area.width.saturating_sub(2));
+    buf.set_stringn(
+        area.x + 1,
+        area.y,
+        format!("Time zone: {}▏", p.query),
+        w,
+        tui_style(Style::new().fg(c.fg).attrs(Attrs::BOLD)),
+    );
+    let shown = p.shown();
+    let body = usize::from(area.height.saturating_sub(3));
+    let first = p.selected.saturating_sub(body.saturating_sub(1));
+    for (i, z) in shown.iter().enumerate().skip(first).take(body) {
+        let Ok(y) = u16::try_from(i - first) else {
+            break;
+        };
+        let y = area.y + 1 + y;
+        let style = if i == p.selected {
+            c.selected(Style::new().bg(c.selection_bg))
+        } else {
+            Style::new().fg(c.fg)
+        };
+        if i == p.selected {
+            buf.set_style(TuiRect::new(area.x, y, area.width, 1), tui_style(style));
+        }
+        buf.set_stringn(area.x + 3, y, z, w.saturating_sub(2), tui_style(style));
+    }
+    buf.set_stringn(
+        area.x + 1,
+        area.bottom() - 1,
+        format!(
+            "{} of {} zones · type to search · ↑↓ choose · Enter sets it · Esc back",
+            shown.len(),
+            p.all.len()
+        ),
+        w,
+        tui_style(Style::new().fg(c.muted)),
+    );
+}
+
 fn write_atomically(path: &Path, text: &str) -> std::io::Result<()> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
@@ -452,6 +665,9 @@ impl App for Settings {
     }
 
     fn handle_key(&mut self, key: KeyEvent) -> AppEffect {
+        if self.zones.is_some() {
+            return self.zone_key(key);
+        }
         if !key.mods.is_empty() {
             return AppEffect::None;
         }
@@ -510,6 +726,10 @@ impl App for Settings {
             );
             return;
         }
+        if let Some(p) = &self.zones {
+            render_zones(p, area, buf, theme);
+            return;
+        }
         let label_w = SETTINGS
             .iter()
             .map(|s| UnicodeWidthStr::width(s.label))
@@ -557,6 +777,8 @@ impl App for Settings {
                 Kind::Bool if self.value(s) == "true" => "on".to_owned(),
                 Kind::Bool => "off".to_owned(),
                 Kind::Action(_) => "open".to_owned(),
+                Kind::Zone => termos_core::timezones::current_zone(Path::new("/etc/localtime"))
+                    .unwrap_or_else(|| "the system's".to_owned()),
                 _ => self.value(s),
             };
             let value = if selected {
@@ -622,6 +844,9 @@ mod tests {
                 assert!(!command.is_empty());
                 continue;
             }
+            if setting.kind == Kind::Zone {
+                continue;
+            }
             let v = s.value(setting);
             assert!(!v.is_empty(), "{} has no default", setting.key);
             match setting.kind {
@@ -631,9 +856,54 @@ mod tests {
                     let n: i64 = v.parse().expect("a number");
                     assert!((min..=max).contains(&n));
                 }
-                Kind::Action(_) => {}
+                Kind::Action(_) | Kind::Zone => {}
             }
         }
+    }
+
+    #[test]
+    fn the_time_zone_list_searches_and_sets() {
+        let dir = tempfile::tempdir().expect("dir");
+        for z in [
+            "Europe/Paris",
+            "America/New_York",
+            "America/Argentina/Buenos_Aires",
+            "Etc/UTC",
+        ] {
+            let f = dir.path().join(z);
+            std::fs::create_dir_all(f.parent().expect("parent")).expect("mkdir");
+            std::fs::write(f, "TZif2").expect("write");
+        }
+        let mut s = Settings::open(PathBuf::from("/nonexistent/config.toml"));
+        s.zoneinfo = dir.path().to_owned();
+        let key = |c| KeyEvent::new(c, termos_core::input::Mods::empty());
+        // Elsewhere than an image, the host system keeps the time.
+        assert_eq!(s.open_zones(false), AppEffect::Redraw);
+        assert!(s.zones.is_none());
+        s.open_zones(true);
+        assert_eq!(s.zones.as_ref().map(|p| p.shown().len()), Some(4));
+        for c in "new york".chars() {
+            s.handle_key(key(KeyCode::Char(c)));
+        }
+        assert_eq!(
+            s.zones.as_ref().map(ZonePicker::shown),
+            Some(vec!["America/New_York"])
+        );
+        assert_eq!(
+            s.handle_key(key(KeyCode::Enter)),
+            AppEffect::Command("clock.zone America/New_York".into())
+        );
+        assert!(s.zones.is_none());
+        s.open_zones(true);
+        for c in "AIRES".chars() {
+            s.handle_key(key(KeyCode::Char(c)));
+        }
+        assert_eq!(
+            s.zones.as_ref().map(ZonePicker::shown),
+            Some(vec!["America/Argentina/Buenos_Aires"])
+        );
+        s.handle_key(key(KeyCode::Esc));
+        assert!(s.zones.is_none());
     }
 
     #[test]

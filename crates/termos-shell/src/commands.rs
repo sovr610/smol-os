@@ -180,6 +180,18 @@ pub enum Command {
     WorktreeReview(String),
     /// `termos worktree ARGS` in a window: "merge fix-login".
     WorktreeRun(String),
+    /// Lock the screen (a TermOS image's console, D-124).
+    SessionLock,
+    /// Lock, then suspend the machine (an image).
+    SystemSuspend,
+    /// Save the sessions and restart the machine (an image; asks first).
+    SystemRestart,
+    /// Save the sessions and turn the machine off (an image; asks first).
+    SystemPowerOff,
+    /// The screen's backlight up or down, in percent (an image).
+    DisplayBrightness(i8),
+    /// The image's time zone (`Europe/Paris`).
+    ClockZone(String),
 }
 
 /// Static description of a command name.
@@ -498,6 +510,23 @@ pub const COMMANDS: &[CommandInfo] = &[
     },
     info("pane.record", "Record this pane, or stop recording"),
     info("processes.open", "Processes: see, end, pause and renice"),
+    info("session.lock", "Lock the screen (TermOS images)"),
+    info(
+        "system.suspend",
+        "Lock and suspend the computer (TermOS images)",
+    ),
+    info("system.restart", "Restart the computer (TermOS images)"),
+    info("system.power-off", "Shut the computer down (TermOS images)"),
+    CommandInfo {
+        name: "clock.zone",
+        description: "Set the time zone (TermOS images)",
+        arg: Some("Europe/Paris"),
+    },
+    CommandInfo {
+        name: "display.brightness",
+        description: "Change the screen's brightness, in percent (TermOS images)",
+        arg: Some("+10"),
+    },
     CommandInfo {
         name: "file.open",
         description: "Open a file",
@@ -846,6 +875,23 @@ impl FromStr for Command {
                 None => Err(CommandError("`ssh.open` needs a host".into())),
             },
             "pane.record" => no_arg(Command::PaneRecord),
+            "session.lock" => no_arg(Command::SessionLock),
+            "clock.zone" => match arg {
+                Some(z) if termos_core::timezones::valid_zone(z) => Ok(Command::ClockZone(z.to_owned())),
+                Some(z) => Err(CommandError(format!("`clock.zone`: `{z}` is not a time zone"))),
+                None => Err(CommandError("`clock.zone` needs a zone, like Europe/Paris".into())),
+            },
+            "system.suspend" => no_arg(Command::SystemSuspend),
+            "system.restart" => no_arg(Command::SystemRestart),
+            "system.power-off" => no_arg(Command::SystemPowerOff),
+            "display.brightness" => match arg.map(|a| a.trim_start_matches('+').parse::<i8>()) {
+                Some(Ok(d)) if (-100..=100).contains(&d) && d != 0 => {
+                    Ok(Command::DisplayBrightness(d))
+                }
+                _ => Err(CommandError(
+                    "`display.brightness` takes a change in percent: +10 or -10".into(),
+                )),
+            },
             "processes.open" => match arg {
                 None => Ok(Command::ProcessesOpen(String::new())),
                 Some(a) if a.parse::<u32>().is_ok() => Ok(Command::ProcessesOpen(a.to_owned())),
@@ -990,6 +1036,12 @@ impl fmt::Display for Command {
             Command::SnippetRun(a) => write!(f, "snippet.run {a}"),
             Command::SshOpen(a) => write!(f, "ssh.open {a}"),
             Command::PaneRecord => f.write_str("pane.record"),
+            Command::SessionLock => f.write_str("session.lock"),
+            Command::ClockZone(z) => write!(f, "clock.zone {z}"),
+            Command::SystemSuspend => f.write_str("system.suspend"),
+            Command::SystemRestart => f.write_str("system.restart"),
+            Command::SystemPowerOff => f.write_str("system.power-off"),
+            Command::DisplayBrightness(d) => write!(f, "display.brightness {d:+}"),
             Command::ProcessesOpen(a) if a.is_empty() => f.write_str("processes.open"),
             Command::ProcessesOpen(a) => write!(f, "processes.open {a}"),
             Command::PackagesOpen => f.write_str("packages.open"),
@@ -1107,6 +1159,38 @@ mod tests {
             Ok(Command::PackagesOpen)
         );
         assert!("devroot.enter now".parse::<Command>().is_err());
+    }
+
+    #[test]
+    fn power_commands() {
+        assert_eq!(
+            "display.brightness -10".parse::<Command>(),
+            Ok(Command::DisplayBrightness(-10))
+        );
+        assert_eq!(
+            "display.brightness 25".parse::<Command>(),
+            Ok(Command::DisplayBrightness(25))
+        );
+        assert_eq!(
+            Command::DisplayBrightness(10).to_string(),
+            "display.brightness +10"
+        );
+        for bad in [
+            "display.brightness",
+            "display.brightness 0",
+            "display.brightness up",
+            "display.brightness 200",
+        ] {
+            assert!(bad.parse::<Command>().is_err(), "{bad}");
+        }
+        assert_eq!("session.lock".parse::<Command>(), Ok(Command::SessionLock));
+        assert_eq!(
+            "clock.zone America/New_York".parse::<Command>(),
+            Ok(Command::ClockZone("America/New_York".into()))
+        );
+        assert!("clock.zone ../../etc/shadow".parse::<Command>().is_err());
+        assert!("clock.zone".parse::<Command>().is_err());
+        assert!("system.suspend now".parse::<Command>().is_err());
     }
 
     #[test]

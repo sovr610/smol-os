@@ -29,6 +29,15 @@ x86_64)
 	# GRUB's BIOS first stage, for the MBR; the package leaves it in its
 	# build folder (its core image, grub.img, is in the images already).
 	cp "$BUILD_DIR"/grub2-*/build-i386-pc/grub-core/boot.img "$BINARIES_DIR/boot.img"
+	# On GPT (D-124) the core image is in the BIOS boot partition, 1 MiB
+	# in (sector 2048), as grub-bios-setup would put it: boot.img reads it
+	# from the sector named at 0x5c, and the core image's first sector
+	# reads the rest from the sector its blocklist names at 0x1f4. Both
+	# are little-endian 64-bit sector numbers.
+	printf '\000\010\000\000\000\000\000\000' |
+		dd of="$BINARIES_DIR/boot.img" bs=1 seek=92 conv=notrunc 2>/dev/null
+	printf '\001\010\000\000\000\000\000\000' |
+		dd of="$BINARIES_DIR/grub.img" bs=1 seek=500 conv=notrunc 2>/dev/null
 	;;
 aarch64-virt)
 	mkdir -p "$ESP/EFI/BOOT"

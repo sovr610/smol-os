@@ -16,7 +16,7 @@ use termos_wm::hit::{Button, CLOSE_OFFSET, Hit, MINIMIZE_OFFSET};
 use termos_wm::layout::Preset;
 use termos_wm::workspace::{Placement, Snap, SplitHow};
 
-use super::{Desktop, Hover, PaneKind};
+use super::{Desktop, Hover, PaneKind, power};
 use crate::commands::Command;
 use crate::menu::{self, Entry, Menu, MenuAction};
 use crate::notify::Level;
@@ -211,8 +211,14 @@ impl Desktop {
             )
             .icon(Icon::Help),
             Entry::item("Detach", Command::Detach),
-            Entry::item("Quit this session", Command::Quit),
         ];
+        // On a TermOS image the last entry is the machine's power menu; in
+        // a terminal, the host system has its own (D-123).
+        if power::on_image() {
+            v.push(Entry::submenu("Power", self.power_entries()).icon(Icon::Quit));
+        } else {
+            v.push(Entry::item("Quit this session", Command::Quit));
+        }
         menu::with_hints(&mut v, &|c| self.keys.key_for(c));
         v
     }

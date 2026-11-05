@@ -1,0 +1,32 @@
+#!/bin/sh
+# Time sync (D-124): BusyBox's ntpd, asking the desktop user's `[clock]
+# ntp-servers` (default pool.ntp.org), stepping the clock when it is far
+# off, as at boot on a machine without a battery-backed clock.
+
+PIDFILE=/run/ntpd.pid
+
+case "$1" in
+start)
+	servers=$(HOME=/home/termos /usr/bin/termos system ntp-servers 2>/dev/null)
+	[ -n "$servers" ] || servers=pool.ntp.org
+	peers=
+	for s in $servers; do
+		peers="$peers -p $s"
+	done
+	printf "Starting ntpd: "
+	# shellcheck disable=SC2086 # one -p per server
+	start-stop-daemon -S -b -m -p "$PIDFILE" -x /usr/sbin/ntpd -- -n $peers && echo OK || echo FAIL
+	;;
+stop)
+	printf "Stopping ntpd: "
+	start-stop-daemon -K -p "$PIDFILE" && echo OK || echo FAIL
+	;;
+restart)
+	"$0" stop
+	"$0" start
+	;;
+*)
+	echo "Usage: $0 {start|stop|restart}"
+	exit 1
+	;;
+esac

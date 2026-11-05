@@ -401,6 +401,8 @@ mod tests {
             },
             ServerMsg::ImageFree { id: 3 },
             ServerMsg::KeyboardFlags(2 | 4),
+            ServerMsg::Lock,
+            ServerMsg::Suspend,
             ServerMsg::Bell,
             ServerMsg::Notify {
                 title: "claude needs you".into(),

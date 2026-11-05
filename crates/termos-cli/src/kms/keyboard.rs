@@ -21,6 +21,11 @@ pub(super) enum Action {
     /// Ctrl+Shift+V or Shift+Insert: the console's clipboard into the
     /// focused window (D-105).
     Paste,
+    /// The brightness keys: the backlight up or down by this many percent
+    /// (D-124).
+    Brightness(i8),
+    /// A keyboard's lock key (XF86ScreenSaver).
+    Lock,
 }
 
 pub(super) struct Keyboard {
@@ -102,7 +107,8 @@ impl Keyboard {
             return None;
         }
         let action = action(sym, utf32, mods)?;
-        let repeats = matches!(action, Action::Key(_)) && self.keymap.key_repeats(code);
+        let repeats = matches!(action, Action::Key(_) | Action::Brightness(_))
+            && self.keymap.key_repeats(code);
         Some((action, repeats))
     }
 }
@@ -120,6 +126,13 @@ pub(super) fn action(sym: Keysym, utf32: u32, mods: Mods) -> Option<Action> {
     // XF86Switch_VT_1..12: what Ctrl+Alt+F<n> gives.
     if (0x1008_fe01..=0x1008_fe0c).contains(&raw) {
         return Some(Action::SwitchVt((raw - 0x1008_fe00) as i32));
+    }
+    // XF86MonBrightnessUp, XF86MonBrightnessDown, XF86ScreenSaver.
+    match raw {
+        0x1008_ff02 => return Some(Action::Brightness(10)),
+        0x1008_ff03 => return Some(Action::Brightness(-10)),
+        0x1008_ff2d => return Some(Action::Lock),
+        _ => {}
     }
     let code = match sym {
         Keysym::Return | Keysym::KP_Enter => KeyCode::Enter,
@@ -254,6 +267,17 @@ mod tests {
         assert_eq!(
             press(&mut k, KEY_F2),
             Some(Action::Key(KeyEvent::plain(KeyCode::F(2))))
+        );
+        // A laptop's brightness keys.
+        const KEY_BRIGHTNESSDOWN: u32 = 224;
+        const KEY_BRIGHTNESSUP: u32 = 225;
+        assert_eq!(
+            press(&mut k, KEY_BRIGHTNESSUP),
+            Some(Action::Brightness(10))
+        );
+        assert_eq!(
+            press(&mut k, KEY_BRIGHTNESSDOWN),
+            Some(Action::Brightness(-10))
         );
     }
 

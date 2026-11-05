@@ -7,12 +7,31 @@ use termos_core::input::{KeyCode, KeyEvent};
 
 use crate::keys::{is_cancel, printable};
 
+/// Restart or shut down a TermOS image (D-124).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PowerOff {
+    Restart,
+    PowerOff,
+}
+
+impl PowerOff {
+    /// The `termos system` verb.
+    pub fn verb(self) -> &'static str {
+        match self {
+            PowerOff::Restart => "restart",
+            PowerOff::PowerOff => "power-off",
+        }
+    }
+}
+
 /// Actions that need a "y" first.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Confirmed {
     KillPane(PaneId),
     KillWorkspace(usize),
     Quit,
+    /// Restart or shut down the image.
+    Power(PowerOff),
     /// Restore the sessions saved by an earlier server.
     Restore,
 }

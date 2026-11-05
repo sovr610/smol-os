@@ -37,6 +37,7 @@ crossterm.workspace = true
 futures-util.workspace = true
 jiff.workspace = true
 secrecy.workspace = true
+sha-crypt.workspace = true
 serde_json.workspace = true
 termos-ai.workspace = true
 termos-center.workspace = true

@@ -1,15 +1,26 @@
 #!/bin/sh
 # RAUC's service (D-078): installs update bundles into the other root slot
 # and records which slots are good, for `termos system`. Not started when
-# the system runs from the live ISO, which has no slots.
+# the system runs from the live ISO, which has no slots. Its configuration
+# names the boot disk's slots (D-124).
 
 PIDFILE=/run/rauc.pid
 
 case "$1" in
 start)
 	grep -q 'rauc\.slot=' /proc/cmdline || exit 0
-	printf "Starting rauc: "
 	mkdir -p /data/rauc /run/rauc
+	# The slots are the boot disk's partitions, as S11termos-data found
+	# them (D-124).
+	ROOTFS_A= ROOTFS_B=
+	[ -r /run/termos/disk ] && . /run/termos/disk
+	if [ -z "$ROOTFS_A" ] || [ -z "$ROOTFS_B" ]; then
+		echo "rauc: the root slots were not found on the boot disk; updates are off"
+		exit 0
+	fi
+	sed -e "s|@ROOTFS_A@|$ROOTFS_A|" -e "s|@ROOTFS_B@|$ROOTFS_B|" \
+		/etc/rauc/system.conf.in >/run/rauc/system.conf
+	printf "Starting rauc: "
 	start-stop-daemon -S -b -m -p "$PIDFILE" -x /usr/bin/rauc -- service && echo OK || echo FAIL
 	;;
 stop)

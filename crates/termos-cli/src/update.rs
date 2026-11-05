@@ -84,6 +84,30 @@ pub(crate) enum SystemCmd {
     /// RAUC's post-install handler on a Raspberry Pi: the new slot's boot
     /// files onto the boot partition.
     RaucTrybootInstall,
+    /// The lock screen (D-124): the user's new password, read from standard
+    /// input (an empty line removes it).
+    SetPassword,
+    /// The password on standard input against the user's; exits 1 when
+    /// wrong.
+    CheckPassword,
+    /// Exits 0 when the user has a password, 1 when not.
+    HasPassword,
+    /// Keep the console's virtual terminal (`on`) while locked, or let
+    /// Ctrl+Alt+F<n> switch again (`off`).
+    VtLock {
+        #[arg(value_parser = ["on", "off"])]
+        state: String,
+    },
+    /// Suspend to RAM (or to idle where the machine has no deeper sleep).
+    Suspend,
+    /// Point /etc/localtime at a zone (`Europe/Paris`).
+    SetTimeZone { zone: String },
+    /// Mount a USB drive on /media/LABEL; prints where.
+    Mount { device: PathBuf },
+    /// Write out and unmount a drive mounted under /media.
+    Unmount { what: PathBuf },
+    /// The time sync's servers, one per line, from the user's `[clock]`.
+    NtpServers,
 }
 
 /// The boot partition, where S11termos-data mounts it.
@@ -394,15 +418,16 @@ fn run_update(cmd: &UpdateCmd, paths: &Paths) -> anyhow::Result<ExitCode> {
     Ok(ExitCode::SUCCESS)
 }
 
-/// `termos system`: the root side, run through sudo.
-pub(crate) fn system_command(cmd: &SystemCmd) -> anyhow::Result<ExitCode> {
+/// `termos system`: the root side, run through sudo. `config` is the
+/// config file of the user it runs for (`ntp-servers` reads it).
+pub(crate) fn system_command(cmd: &SystemCmd, config: &Path) -> anyhow::Result<ExitCode> {
     #[cfg(unix)]
     if !rustix::process::geteuid().is_root() {
         bail!("`termos system` runs as root, through sudo; use `termos update`");
     }
     #[cfg(not(target_os = "linux"))]
     {
-        let _ = cmd;
+        let _ = (cmd, config);
         bail!("`termos system` exists on TermOS images (Linux)");
     }
     #[cfg(target_os = "linux")]
@@ -420,7 +445,55 @@ pub(crate) fn system_command(cmd: &SystemCmd) -> anyhow::Result<ExitCode> {
         };
         let boot = crate::tryboot::Boot::new(ESP);
         let on_pi = || Image::detect().is_ok_and(|i| i.board.starts_with("rpi"));
+        // The machine verbs (D-124) are the image's: on another Linux they
+        // would change a system TermOS does not own.
+        let image_only = matches!(
+            cmd,
+            SystemCmd::SetPassword
+                | SystemCmd::CheckPassword
+                | SystemCmd::HasPassword
+                | SystemCmd::VtLock { .. }
+                | SystemCmd::Suspend
+                | SystemCmd::SetTimeZone { .. }
+                | SystemCmd::Mount { .. }
+                | SystemCmd::Unmount { .. }
+                | SystemCmd::NtpServers
+        );
+        if image_only {
+            Image::detect()?;
+        }
+        let shadow = Path::new(crate::password::SHADOW);
         match cmd {
+            SystemCmd::SetPassword => crate::password::set_password(shadow),
+            SystemCmd::CheckPassword => crate::password::check_password(shadow),
+            SystemCmd::HasPassword => crate::password::has_password(shadow),
+            SystemCmd::VtLock { state } => {
+                crate::machine::vt_lock(state == "on")?;
+                Ok(ExitCode::SUCCESS)
+            }
+            SystemCmd::Suspend => {
+                crate::machine::suspend(Path::new("/sys/power"))?;
+                Ok(ExitCode::SUCCESS)
+            }
+            SystemCmd::SetTimeZone { zone } => {
+                let zi = Path::new(crate::machine::ZONEINFO);
+                crate::machine::set_time_zone(zi, zi, Path::new(crate::machine::LOCALTIME), zone)?;
+                Ok(ExitCode::SUCCESS)
+            }
+            SystemCmd::Mount { device } => {
+                crate::machine::mount_drive(device)?;
+                Ok(ExitCode::SUCCESS)
+            }
+            SystemCmd::Unmount { what } => {
+                crate::machine::unmount_drive(what)?;
+                Ok(ExitCode::SUCCESS)
+            }
+            SystemCmd::NtpServers => {
+                for s in crate::machine::ntp_servers(config) {
+                    out!("{s}");
+                }
+                Ok(ExitCode::SUCCESS)
+            }
             SystemCmd::InstallBundle { bundle } => {
                 check_bundle_path(bundle)?;
                 run("rauc", &["install".as_ref(), bundle.as_os_str()])

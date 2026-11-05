@@ -27,6 +27,8 @@ ratatui-core.workspace = true
 termos-apps.workspace = true
 ratatui-widgets.workspace = true
 termos-core.workspace = true
+# Battery, brightness and USB drives on the image (D-124).
+termos-hw.workspace = true
 termos-plugin.workspace = true
 termos-render.workspace = true
 termos-term.workspace = true

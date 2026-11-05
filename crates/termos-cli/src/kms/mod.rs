@@ -13,11 +13,17 @@
 //! would (D-105): it keeps the last copied text (Ctrl+Shift+V or
 //! Shift+Insert pastes it), flashes for the bell, and draws pictures as
 //! pixels.
+//!
+//! It is also the image's lock screen (M13d, D-124): it locks after idle,
+//! on the lid, before suspending and when the desktop asks, and while
+//! locked it sends the server nothing ([`lock`], [`locking`]).
 
 mod damage;
 mod display;
 mod keyboard;
 mod latency;
+mod lock;
+mod locking;
 mod pointer;
 mod screen;
 mod seat;
@@ -30,14 +36,16 @@ use std::time::{Duration, Instant};
 use anyhow::{Context as _, bail};
 use input::event::keyboard::{KeyState, KeyboardEventTrait as _};
 use input::event::pointer::{Axis, ButtonState, PointerScrollEvent as _};
+use input::event::switch::{Switch, SwitchEvent, SwitchState};
 use input::event::{KeyboardEvent, PointerEvent};
 use input::{Event as InputEvent, Libinput};
 use libseat::SeatEvent;
-use termos_core::config::KmsConfig;
+use termos_core::config::{Config, KmsConfig};
 use termos_core::proto::{ClientMsg, PROTOCOL_VERSION, ServerMsg};
 use termos_core::transport::ClientEnd;
 use termos_render::caps::{Caps, Graphics, PxSize};
 use termos_render::color::{ColorDepth, Palette, Rgb, XTERM_ANSI};
+use termos_render::grid::Grid;
 use termos_render::raster::{FontData, FontSet, Rasterizer};
 use tokio::io::unix::AsyncFd;
 
@@ -171,6 +179,31 @@ struct Console {
     visual_bell: bool,
     /// While the bell's frame shows: when it goes.
     flash_until: Option<Instant>,
+    /// The lock screen, while it shows (D-124).
+    lock: Option<lock::Lock>,
+    lock_grid: Grid,
+    /// The lock screen's own pixels: the desktop's stay out of sight.
+    lock_pixels: Vec<u32>,
+    lock_dirty: bool,
+    /// When the lock screen's clock changes.
+    lock_minute: Option<Instant>,
+    settings: locking::Settings,
+    /// The last key, click or move (the lock screen's keys count).
+    last_input: Instant,
+    /// When idle suspend last looked.
+    suspend_checked: Instant,
+    suspending: bool,
+    /// Where root jobs (`sudo termos system …`) answer.
+    root_tx: tokio::sync::mpsc::UnboundedSender<locking::Done>,
+}
+
+/// The start of the next wall-clock minute.
+fn next_minute() -> Instant {
+    let z = jiff::Zoned::now();
+    let into = u64::try_from(z.second()).unwrap_or(0);
+    let nanos = u64::try_from(z.subsec_nanosecond()).unwrap_or(0);
+    let wait = Duration::from_secs(60 - into.min(59)).saturating_sub(Duration::from_nanos(nanos));
+    Instant::now() + wait.max(Duration::from_millis(10))
 }
 
 /// How long the bell's frame shows.
@@ -184,12 +217,18 @@ impl Console {
             .map_err(|_| io::Error::other("the desktop server stopped"))
     }
 
-    /// Puts the screen's changes on the display.
+    /// Puts the screen's changes on the display (the lock screen's, while
+    /// locked).
     fn show(&mut self) -> io::Result<()> {
         let damage = self.screen.take_damage();
         if !self.active {
             // Shown in full when the seat comes back.
             return Ok(());
+        }
+        if self.lock.is_some() {
+            // The desktop's frames go on in the background, unseen; they
+            // are all drawn again on unlocking.
+            return self.show_lock();
         }
         if self.display.present(&self.screen.pixels, &damage)? {
             self.latency.flushed(Instant::now());
@@ -205,6 +244,17 @@ impl Console {
     }
 
     fn act(&mut self, a: Action) -> io::Result<()> {
+        if self.lock.is_some() {
+            // Locked: keys are the lock screen's, and nothing leaves it.
+            return match a {
+                Action::Key(k) => self.lock_key(k),
+                Action::Brightness(d) => {
+                    self.brightness(d);
+                    Ok(())
+                }
+                _ => Ok(()),
+            };
+        }
         match a {
             Action::Key(k) => {
                 self.latency.key(Instant::now());
@@ -223,6 +273,11 @@ impl Console {
                 Some(text) => self.send(ClientMsg::Paste(text.clone())),
                 None => Ok(()),
             },
+            Action::Brightness(d) => {
+                self.brightness(d);
+                Ok(())
+            }
+            Action::Lock => self.lock_now(),
         }
     }
 
@@ -230,6 +285,9 @@ impl Console {
         self.input.dispatch()?;
         let size = (self.display.width, self.display.height);
         while let Some(ev) = self.input.next() {
+            if !matches!(ev, InputEvent::Switch(_)) {
+                self.last_input = Instant::now();
+            }
             let metrics = self.screen.raster.metrics();
             let layout = self.screen.layout;
             let mods = self.keyboard.mods();
@@ -245,11 +303,16 @@ impl Console {
                         self.repeat = None;
                     }
                     if let Some((action, repeats)) = self.keyboard.key(code, pressed) {
-                        if repeats {
+                        if repeats && self.lock.is_none() {
                             self.repeat =
                                 Some((action.clone(), code, Instant::now() + self.keyboard.delay));
                         }
                         self.act(action)?;
+                    }
+                }
+                InputEvent::Switch(SwitchEvent::Toggle(t)) => {
+                    if t.switch() == Some(Switch::Lid) {
+                        self.lid(t.switch_state() == SwitchState::On)?;
                     }
                 }
                 InputEvent::Pointer(p) => {
@@ -298,6 +361,9 @@ impl Console {
                     };
                     self.display
                         .move_cursor(self.pointer.x as i32, self.pointer.y as i32);
+                    if self.lock.is_some() {
+                        continue;
+                    }
                     for e in events {
                         self.send(ClientMsg::Mouse(e))?;
                     }
@@ -326,6 +392,7 @@ impl Console {
                     }
                     self.display.modeset()?;
                     self.screen.repaint();
+                    self.lock_dirty = true;
                     self.show()?;
                 }
             }
@@ -345,8 +412,12 @@ impl Console {
             ServerMsg::Clipboard(text) => self.clipboard = Some(text),
             ServerMsg::Bell => {
                 // A bell while the frame shows (a loop of them) adds
-                // nothing.
-                if self.visual_bell && self.active && self.flash_until.is_none() {
+                // nothing; the lock screen shows none.
+                if self.visual_bell
+                    && self.active
+                    && self.lock.is_none()
+                    && self.flash_until.is_none()
+                {
                     self.screen.flash(self.screen.raster.palette.ansi[11]);
                     self.flash_until = Some(Instant::now() + FLASH);
                     self.show()?;
@@ -368,6 +439,8 @@ impl Console {
             // The desktop copies addresses for a console instead: there
             // is no browser to open them in (D-118).
             ServerMsg::Open { .. } => {}
+            ServerMsg::Lock => self.lock_now()?,
+            ServerMsg::Suspend => self.suspend_now()?,
         }
         Ok(None)
     }
@@ -400,8 +473,20 @@ impl Console {
     }
 }
 
-/// Runs the console until the session ends or detaches it.
-pub(crate) async fn run(end: ClientEnd, cfg: &KmsConfig) -> anyhow::Result<Ended> {
+/// Runs the console until the session ends or detaches it. `state_dir`
+/// keeps whether the first boot asked for a password.
+pub(crate) async fn run(
+    end: ClientEnd,
+    config: &Config,
+    state_dir: &Path,
+) -> anyhow::Result<Ended> {
+    let cfg = &config.kms;
+    if let Some(p) = config.power.brightness
+        && let Err(e) =
+            termos_hw::power::set_brightness(Path::new(termos_hw::power::BACKLIGHT_DIR), p)
+    {
+        tracing::info!("brightness at start: {e}");
+    }
     let seat = SeatHandle::open()?;
     let display = open_display(&seat)?;
     let size = scaled_size(cfg.font_size, display.width, display.size_mm);
@@ -444,6 +529,7 @@ pub(crate) async fn run(end: ClientEnd, cfg: &KmsConfig) -> anyhow::Result<Ended
         terminal: Some(format!("TermOS console {}", env!("CARGO_PKG_VERSION"))),
         ..Caps::default()
     };
+    let (root_tx, mut root_rx) = tokio::sync::mpsc::unbounded_channel();
     let mut c = Console {
         seat: seat.clone(),
         display,
@@ -460,7 +546,31 @@ pub(crate) async fn run(end: ClientEnd, cfg: &KmsConfig) -> anyhow::Result<Ended
         clipboard: None,
         visual_bell: cfg.visual_bell,
         flash_until: None,
+        lock: None,
+        lock_grid: Grid::new(1, 1),
+        lock_pixels: Vec::new(),
+        lock_dirty: false,
+        lock_minute: None,
+        settings: locking::Settings::new(config, state_dir),
+        last_input: Instant::now(),
+        suspend_checked: Instant::now(),
+        suspending: false,
+        root_tx,
     };
+    // Locked before (the console restarted) or locked at start: the first
+    // frame is the lock screen. Otherwise, at first boot, ask for a
+    // password.
+    let was_locked = c.settings.locked_file.as_ref().is_some_and(|f| f.exists());
+    if was_locked || config.lock.at_start {
+        c.lock_now()?;
+    } else if !c.settings.boottest && !c.settings.nolock && !c.settings.asked_file.exists() {
+        locking::root(
+            &c.root_tx,
+            locking::Job::HasPassword { first_boot: true },
+            &["has-password"],
+            None,
+        );
+    }
     c.send(ClientMsg::Hello {
         version: PROTOCOL_VERSION,
         caps,
@@ -477,7 +587,15 @@ pub(crate) async fn run(end: ClientEnd, cfg: &KmsConfig) -> anyhow::Result<Ended
             .as_ref()
             .map(|(_, _, at)| tokio::time::Instant::from_std(*at));
         let flash_at = c.flash_until.map(tokio::time::Instant::from_std);
+        let power_at = c.power_deadline().map(tokio::time::Instant::from_std);
         tokio::select! {
+            Some(done) = root_rx.recv() => c.root_done(done)?,
+            () = async {
+                match power_at {
+                    Some(at) => tokio::time::sleep_until(at).await,
+                    None => std::future::pending().await,
+                }
+            } => c.on_power_timer(Instant::now())?,
             msg = c.end.rx.recv() => match msg {
                 Some(m) => if let Some(ended) = c.server(m)? {
                     return Ok(ended);

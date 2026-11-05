@@ -3,8 +3,9 @@
 //!
 //! The desktop's user picks the disk by typing its name; `termos system
 //! install-disk` (root, through sudo, D-078) then writes the disk image the
-//! ISO carries onto it. The installed system grows its data partition to
-//! the end of the disk on its first boot.
+//! ISO carries onto it, and gives a GPT disk new ids (D-124). The installed
+//! system grows its data partition to the end of the disk on its first
+//! boot.
 // Only Linux runs it; the tests run everywhere.
 #![cfg_attr(not(target_os = "linux"), allow(dead_code))]
 
@@ -249,13 +250,96 @@ pub(crate) fn install_disk(arg: &Path) -> anyhow::Result<()> {
     })();
     let _ = std::process::Command::new("umount").arg(iso).status();
     result?;
+    new_ids(&format!("/dev/{name}"))?;
     out!("TERMOS-INSTALL done /dev/{name}");
+    Ok(())
+}
+
+/// The partition numbers in `sfdisk --dump` output (`/dev/sda1 : start=…`,
+/// `/dev/nvme0n1p3 : …`).
+pub(crate) fn dumped_partitions(dump: &str) -> Vec<u32> {
+    dump.lines()
+        .filter_map(|l| {
+            let (dev, rest) = l.split_once(" : ")?;
+            if !dev.starts_with("/dev/") || !rest.contains("start=") {
+                return None;
+            }
+            let digits: String = dev
+                .chars()
+                .rev()
+                .take_while(char::is_ascii_digit)
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+                .collect();
+            digits.parse().ok()
+        })
+        .collect()
+}
+
+/// A random UUID from the kernel.
+#[cfg(target_os = "linux")]
+fn kernel_uuid() -> anyhow::Result<String> {
+    Ok(std::fs::read_to_string("/proc/sys/kernel/random/uuid")
+        .context("/proc/sys/kernel/random/uuid")?
+        .trim()
+        .to_owned())
+}
+
+/// Gives a GPT disk just written new ids, its own and each partition's
+/// (D-124), so two TermOS disks can share a machine; and moves the backup
+/// table to the disk's end, where it belongs on a disk bigger than the
+/// image. An MBR disk keeps its ids.
+#[cfg(target_os = "linux")]
+fn new_ids(disk: &str) -> anyhow::Result<()> {
+    use std::process::Command;
+    let mut header = [0u8; 8];
+    {
+        use std::os::unix::fs::FileExt as _;
+        let f = std::fs::File::open(disk).with_context(|| disk.to_owned())?;
+        f.read_exact_at(&mut header, 512)?;
+    }
+    if &header != b"EFI PART" {
+        return Ok(());
+    }
+    let sfdisk = |args: &[&str]| -> anyhow::Result<std::process::Output> {
+        let out = Command::new("sfdisk")
+            .args(args)
+            .output()
+            .context("running sfdisk")?;
+        if !out.status.success() {
+            bail!(
+                "sfdisk {}: {}",
+                args.join(" "),
+                String::from_utf8_lossy(&out.stderr).trim()
+            );
+        }
+        Ok(out)
+    };
+    sfdisk(&["--relocate", "gpt-bak-std", disk])?;
+    sfdisk(&["--disk-id", disk, &kernel_uuid()?])?;
+    let dump = sfdisk(&["--dump", disk])?;
+    for n in dumped_partitions(&String::from_utf8_lossy(&dump.stdout)) {
+        sfdisk(&["--part-uuid", disk, &n.to_string(), &kernel_uuid()?])?;
+    }
+    let _ = Command::new("partx").args(["--update", disk]).status();
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn partitions_in_a_dump() {
+        let dump = "label: gpt\nlabel-id: 7E57C0DE-0000-4000-8000-000000000000\n\
+device: /dev/nvme0n1\nunit: sectors\n\n\
+/dev/nvme0n1p1 : start=        2048, size=        2048, type=21686148-6449-6E6F-744E-656564454649, name=\"bios\"\n\
+/dev/nvme0n1p2 : start=        4096, size=      131072, type=C12A7328-F81F-11D2-BA4B-00A0C93EC93B, name=\"boot\"\n\
+/dev/sda10 : start=  1, size= 2\n";
+        assert_eq!(dumped_partitions(dump), [1, 2, 10]);
+        assert!(dumped_partitions("").is_empty());
+    }
 
     fn block(sys: &Path, name: &str, sectors: u64, model: &str, removable: bool) {
         let d = sys.join(name);

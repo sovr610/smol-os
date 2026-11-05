@@ -10,6 +10,10 @@
 [ "$1" = start ] || exit 0
 cfg=/sys/firmware/qemu_fw_cfg/by_name/opt/termos
 [ -r "$cfg/boottest/raw" ] || exit 0
+# The console neither locks after idle nor asks for a first password while
+# a test looks at the desktop (D-124); the lock test locks it by its key.
+mkdir -p /run/termos
+: >/run/termos/boottest
 (
 	sleep "$(cat "$cfg/boottest/raw")"
 	awk '/^MemTotal:/ { t = $2 } /^MemAvailable:/ { a = $2 }

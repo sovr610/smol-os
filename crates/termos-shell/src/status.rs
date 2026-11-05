@@ -43,6 +43,8 @@ pub struct StatusInfo<'a> {
     /// `None` is all of it).
     pub message_reveal: Option<f32>,
     pub clock: Option<String>,
+    /// The battery (`▮ 84%`, `⚡ 62%`), and whether it is low (D-124).
+    pub battery: Option<(String, bool)>,
     /// Plugin widgets (styled runs; default colours mean the status line's).
     pub widgets: &'a [Vec<(String, termos_render::cell::Style)>],
     /// An open prompt: (label, input). Replaces the whole line, like tmux.
@@ -227,6 +229,14 @@ pub fn draw(
         }
         widget_spans.push((first, right.len()));
         right.push((" ".into(), theme.status));
+    }
+    if let Some((battery, low)) = &info.battery {
+        let style = if *low {
+            theme.status_prefix
+        } else {
+            theme.status
+        };
+        right.push((format!(" {battery} "), style));
     }
     if let Some(clock) = &info.clock {
         right.push((format!(" {clock} "), theme.status));
@@ -490,6 +500,23 @@ mod tests {
         assert_eq!(regions.tab_at(20, 0), Some(1));
         assert_eq!(regions.minimized_at(30, 0), Some(PaneId(4)));
         assert_eq!(regions.tab_at(9, 1), None);
+    }
+
+    #[test]
+    fn the_battery_sits_before_the_clock() {
+        let mut g = Grid::new(40, 1);
+        let info = StatusInfo {
+            session: "main",
+            clock: Some("12:34".into()),
+            battery: Some(("▮ 15%".into(), true)),
+            ..StatusInfo::default()
+        };
+        draw(&mut g, 0, &Theme::default(), &info);
+        assert!(
+            g.row_text(0).trim_end().ends_with("▮ 15%  12:34"),
+            "{:?}",
+            g.row_text(0)
+        );
     }
 
     #[test]

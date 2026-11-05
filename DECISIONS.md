@@ -1519,6 +1519,67 @@ rewrite history.
 
 ---
 
+## D-123: M13d owner answers: the system user's password, no hosted lock, AMD firmware everywhere, 10 and 20 minutes
+- **Status:** Accepted · 2026-11-05
+- **Context:** M13d's "Ask first" questions (D-117, docs/plans/m13-os.md).
+- **Decision:** the plan's answers, chosen by the owner:
+  - **The lock's password** is the system user's (`/etc/shadow`), not a TermOS passphrase of its own.
+  - **Hosted mode** has no TermOS lock: the host system's lock and power menu apply, and the commands say so.
+  - **AMD graphics firmware** goes in every x86_64 image, not a separate image.
+  - **Defaults:** lock after 10 minutes without input; on battery, suspend after 20.
+- **Alternatives:** a TermOS passphrase (a second secret to keep and recover); a lock in terminals (it would only hide the desktop, the terminal around it stays open); an x86_64 image without AMD firmware (smaller, two images to test).
+
+---
+
+## D-124: The image as a computer: lock, power, laptops, clock, drives, GPT
+- **Status:** Accepted · 2026-11-05
+- **Context:** M13d (D-117) with D-123's answers. Supersedes D-075's MBR layout and fixed partition ids for x86_64 and aarch64-virt.
+- **Decision:**
+  - **The lock screen is the console's (`kms/lock.rs`, `kms/locking.rs`).** It draws the clock, the date and a password field into pixels of its own, so nothing of the desktop shows; frames from the server keep coming and are drawn again on unlocking. While locked the console sends the server no keys or mouse events and does not switch virtual terminals.
+    - **When it locks:** the desktop's `session.lock` (prefix `L`, ◆ Menu → Power → Lock) sends the new `ServerMsg::Lock`; also the keyboard's lock key, `[lock] after-minutes` without input (one deadline, not a poll), the lid, and every suspend. `[lock] at-start` starts locked.
+    - **Restarts:** a file in the runtime folder (`$XDG_RUNTIME_DIR/termos-locked`) marks the screen locked, so a console that init starts again comes back locked.
+    - **The password check:** `sudo termos system check-password` reads the password on standard input and checks it against the user's `/etc/shadow` hash with RustCrypto's `sha-crypt` (sha512crypt and sha256crypt only). A wrong one waits a second in the verb; after three failures the lock waits 5 s, doubling up to five minutes. With no password set, Enter unlocks and the screen says so. The check runs on a thread; its answer comes back to the console's loop through a channel.
+    - **Virtual terminals:** `termos system vt-lock on|off` (`VT_LOCKSWITCH`, which needs root) keeps the console's terminal while locked. The image has no getty, so the other terminals have no shell anyway.
+    - **Not locked:** agents, servers, SSH sessions and other clients keep running and attached; the docs say so.
+    - **Recovery:** the boot menu's "without the lock" entries add `termos.nolock`: nothing locks, and `termos password` sets a new password.
+  - **Passwords:** `/etc/shadow` links to `/data/etc/shadow` (the root is read-only). A post-fakeroot script moves the built shadow to `/usr/share/termos/shadow`, and S11termos-data copies it to the data partition on first boot, adding entries for users a newer image brings.
+    - **Setting one:** `termos system set-password` hashes with sha-crypt and replaces the file (written beside it, then renamed): `chpasswd` would write next to the link on the read-only root, so the plan's `chpasswd` is not used.
+    - **First boot:** when no password is set, the console's lock screen asks for one (typed twice; Esc has none) before the desktop. A file in the state folder records that it asked. `termos password [--remove]` changes it later. The installer does not ask: the installed system's first boot does.
+    - **Boot tests:** the QEMU tests' boot script leaves `/run/termos/boottest`, which turns off the idle lock and the first-boot question.
+  - **Power (`desktop/power.rs`):** on an image, the TermOS menu's last entry is a Power submenu: Lock, Suspend, Restart, Shut down, Quit this session. Elsewhere the menu is unchanged and the commands say the host system has its own.
+    - **Suspend:** the new `ServerMsg::Suspend` makes the console lock and then run `sudo termos system suspend`, which writes `mem` (or `freeze`) to `/sys/power/state`; the console sets its mode again when it wakes. With no console attached the server suspends directly.
+    - **Restart and shut down** ask first; then the server saves every session's snapshot and runs `termos system restart` or `power-off`.
+  - **Laptops:**
+    - **Battery:** `termos_hw::power` reads `/sys/class/power_supply` (capacity, status, energy or charge, power or current, mains). It takes a directory for tests and skips devices' batteries (`scope` `Device`). macOS and Windows use `starship-battery` (new, ISC).
+    - **The status line** shows `▮ 84%` or `⚡ 62%` before the clock, coloured when at 20% or less on battery. Only the real server reads it (`DesktopOptions::power`), so tests on a laptop match CI. It is read once a minute, and only on a machine with a battery.
+    - **Low battery:** a toast at 20%, a system notification at 10%, and at `[power] critical` (5) a 30-second countdown to suspend (images only); plugging in starts again. The steps are a pure function, tested on readings.
+    - **Brightness:** the console's brightness keys and `display.brightness ±N` write `/sys/class/backlight/*/brightness` (firmware, then platform, then raw; never below one step). A udev rule lets the group `video` write it. `[power] brightness` sets it at start.
+    - **Lid and idle:** libinput's lid switch does `[power] lid` (`suspend`, `lock`, `nothing`). On battery the console suspends after `[power] suspend-after-minutes` without input; a machine without a battery never arms it, and on mains power it looks again after the same time.
+  - **Clock:**
+    - **Time zones:** the image carries tzdata. `/etc/localtime` links to `/data/etc/localtime` (UTC at first), which `termos system set-time-zone ZONE` replaces after checking the name and that the file is a compiled zone (`termos_core::timezones`).
+    - **Settings:** the Clock group has the time format (`[clock] time-format`, 24h or 12h, also used by the lock screen) and a time zone list to search, which runs `clock.zone ZONE`.
+    - **Time sync:** BusyBox `ntpd` from init (S48termos-ntpd), with the servers `termos system ntp-servers` reads from the user's `[clock] ntp-servers`, each checked.
+  - **USB drives:**
+    - **Listing them:** `termos_hw::drives` lists removable or USB block devices from sysfs, with labels and file systems from udev's database and mount points from `/proc/mounts`.
+    - **Hearing them come and go:** a thread listens on udev's netlink group (rustix sockets; any user may), and the server posts a toast for a drive with a file system. The plan's udisks2 D-Bus API is not used; on another Linux, Files runs `udisksctl`.
+    - **In Files:** drives are among the places; Enter mounts and goes there, `e` ejects (leaving the folder first). On the image `termos system mount DEV` mounts a listed drive at `/media/LABEL` (a tmpfs) with the user's ids, for vfat, exFAT, ext4 and NTFS (`ntfs3`), never set-user-id or devices; `unmount` syncs and unmounts only under `/media`. macOS's `/Volumes` and Windows's drive letters are places too.
+  - **Disks:** x86_64 and aarch64-virt images are GPT, named `boot`, `rootfs-a`, `rootfs-b`, `data` (x86_64 adds `bios`, a BIOS boot partition for GRUB's core image). post-image.sh points boot.img and the core image at sector 2048, as grub-bios-setup would.
+    - **Finding the partitions:** GRUB passes `root=PARTUUID=` of the slot on its own disk (`probe --part-uuid`). S11termos-data finds that disk's partitions by name, or on MBR disks (Pis, disks installed before) by number, and writes them to `/run/termos/disk`. S80rauc writes RAUC's configuration from a template with those devices.
+    - **Ids:** fixed in the image, for reproducible builds. `termos system install-disk` gives a GPT disk new disk and partition GUIDs (`sfdisk --disk-id`, `--part-uuid`) after moving the backup table to the disk's end. The data partition grows as the last partition, whatever its number.
+    - **Old disks:** existing installs keep their MBR disks and boot menus; updates change neither, and the new scripts find their partitions by number.
+  - **AMD graphics:** the x86_64 kernel builds amdgpu as a module (its firmware is on the root, which a built-in driver would start before), with linux-firmware's amdgpu files and kmod, plus ACPI's battery, mains, lid and video. Every board's kernel adds suspend, the backlight class, exFAT, NTFS3 and GPT partitions.
+  - **Protocol:** `ServerMsg::Lock` and `Suspend` join protocol 6 (M13a–M13d ship together); a terminal client ignores both.
+  - **Settings:** `[lock] after-minutes`, `at-start`; `[power] lid`, `suspend-after-minutes`, `critical`, `brightness`; `[clock] ntp-servers`, `time-format`.
+- **Alternatives:**
+  - **The lock in the server:** the server would draw it, but keys would already have reached it, and another client could see the desktop.
+  - **`chpasswd`:** it cannot write through the link on a read-only root.
+  - **Kernel uevents instead of udev's:** they arrive before udev has read the label.
+  - **udisks2 over D-Bus (`zbus`):** more code for what `udisksctl` already does, and not on the image.
+  - **Partitions by `PARTLABEL` alone:** two TermOS disks in one machine would both match.
+  - **grub-bios-setup at build time:** it wants a block device.
+
+---
+
 ## Open questions (the owner will be asked before the milestone that needs each one)
 
 | ID | Question | Needed by | Current lean |
