@@ -34,7 +34,7 @@ questions (DECISIONS.md, "Open questions").
 | M11b | Skills that teach Claude Code, Codex and other CLIs to use TermOS, and `termos agent ask` (D-096, D-098) | 🔍 |
 | M11c | The harness: one coding tool over Claude Code, Codex and API models, routing each task to the model that suits it (D-096, D-099, D-100) | 🔍 |
 | M11d | AI accounts: sign-in from TermOS through each vendor's own flow, API keys per account, Gemini CLI (D-111, D-112) | 🔍 |
-| M12a | Parallel agents in git worktrees, a review window that answers the agent, best-of-N (D-111) | ⏳ |
+| M12a | Parallel agents in git worktrees, a review window that answers the agent, best-of-N (D-111, D-113) | 🚧 |
 | M12b | Agent attention and resume: "needs you" badges, jump to the waiting agent, agent panes resumed after restore, command blocks (D-111) | ⏳ |
 | M12c | Remote access: a web client with share links, remote attach with local rendering, approvals on the phone (D-111) | ⏳ |
 | M12d | Hardening: pinned Actions, seccomp, a macOS sandbox, a network allowlist for agent CLIs (D-111) | ⏳ |
@@ -1083,13 +1083,13 @@ Nothing M11a adds runs while idle: the shims run only when `claude` or `codex` s
 ---
 
 ## M12a — Parallel agents in worktrees
-**Status:** ⏳ planned (D-111) · Ask first: how far a task's workspace goes (worktree only, or a container too); how ports are handed out.
+**Status:** 🚧 in progress · Owner answers (D-113): the worktree only, no container; a block of ports per workspace; in a git repository the harness's editing tasks run in parallel worktrees and its result lands on a branch for review; pull requests through `gh` or `glab`.
 
 **Deliverables**
-- A workspace per task: a branch and a git worktree, a setup script, ignored files copied in (`.env`), a block of ports, panes for the agent, a shell and servers; archived after the merge.
-- The harness edits in parallel, each task in its own worktree.
-- A review window per workspace: the diff, comments sent to the agent as its next message, then commit, pull request, merge or discard.
-- Best-of-N: one prompt to several backends (`claude:2,codex:1`), their diffs and test results side by side, one kept.
+- **Workspaces:** [ ] a workspace per task: a branch and a git worktree, a setup script, ignored files copied in (`.env`), a block of ports, panes for the agent, a shell and servers; archived after the merge.
+- **The harness in parallel:** [ ] its editing tasks each in their own worktree, merged into the plan's branch as they finish.
+- **Review:** [ ] a review window per workspace: the diff, comments sent to the agent as its next message, then commit, pull request, merge or discard.
+- **Best-of-N:** [ ] one prompt to several backends (`claude:2,codex:1`), their diffs and test results side by side, one kept.
 
 ---
 

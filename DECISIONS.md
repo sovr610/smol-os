@@ -1215,6 +1215,17 @@ rewrite history.
   - **The desktop:** `account.key CLI NAME` (palette, the usage window's **[API key]**) opens a window running `termos account key`; the usage window's account rows shorten "signed in as …" to fit before their buttons.
 - **Alternatives:** pre-approving the key in Claude Code's `.claude.json` (an undocumented field holding part of the key); `gemini mcp add` (its `-e` drops values with `=`, and its scope depends on the folder); installing Gemini CLI with mise's npm backend (it needs a global Node.js choice and leaves updates to npm); reading the CLIs' login files for status (their formats are undocumented, and they are credentials).
 
+
+## D-113: M12a owner answers: worktree workspaces, port blocks, harness results on a branch, pull requests through gh and glab
+- **Status:** Accepted (owner, 2026-11-05) · 2026-11-05
+- **Context:** M12a (D-111) gives each task a workspace of its own: a branch and a git worktree, its setup, ports, and panes for the agent, a shell and servers, reviewed before it is merged. D-100 runs the harness's editing tasks one at a time in the project and named worktrees as the alternative. The owner was asked four questions.
+- **Decision:**
+  - **Isolation: the worktree only.** A workspace's panes run on the host in its worktree; the agent CLIs keep their own sandboxes (and TermOS's agent its, D-061). No container per workspace; the dev rootfs (D-109) stays a separate choice.
+  - **Ports: a block per workspace.** Each workspace reserves a block of consecutive ports from a configurable range, checked free when it is made and recorded so no two workspaces share one, and passed to its panes as `PORT` and numbered variables. It keeps its ports across restarts.
+  - **The harness's result lands on a branch, then review.** In a git repository each editing task runs in its own worktree, branched from the plan's branch, and is merged into that branch when it finishes; a conflict reruns the task once on top of the branch as it is, then stops for the user. The plan ends in the review window (commit, pull request, merge or discard). Outside git the harness edits in place, one task at a time, as before. This supersedes D-100's "edits one at a time in the project" for git repositories.
+  - **Pull requests through `gh` or `glab`** when installed: the branch is pushed and `gh pr create` or `glab mr create` runs with the title and body filled in; without them TermOS pushes and shows the compare link. TermOS stores no forge token.
+- **Alternatives:** the dev rootfs or a Podman container per workspace (isolated, but slower, Linux-centred or needing Podman, and the CLIs and their accounts would have to be mounted in); a free port at each start (changes after a restart) or a network namespace per workspace (Linux only); harness edits in place as now, or chosen per run; GitHub's API with a token in TermOS's secret store, or no pull requests.
+
 ---
 
 ## Open questions (the owner will be asked before the milestone that needs each one)
