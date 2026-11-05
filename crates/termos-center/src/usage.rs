@@ -344,12 +344,12 @@ impl UsageApp {
         ui.buttons
             .push((TuiRect::new(x, y, end - x, 1), Button::Select(i)));
         let who_x = (x + 34).max(end + 2);
-        ui.text(who_x, y, &a.who, ui.muted());
         // Buttons at the right.
         let labels: Vec<(&str, String)> = [
             (!a.active).then(|| ("Use", format!("account.use {} {}", a.cli, a.name))),
             Some(("Open", format!("agent.external {}@{}", a.cli, a.name))),
             Some(("Sign in", format!("account.sign-in {} {}", a.cli, a.name))),
+            Some(("API key", format!("account.key {} {}", a.cli, a.name))),
             (a.cli == "claude").then(|| ("Budget", format!("account.budget {} {}", a.cli, a.name))),
         ]
         .into_iter()
@@ -357,6 +357,11 @@ impl UsageApp {
         .collect();
         let total: u16 = labels.iter().map(|(l, _)| width(l) + 3).sum();
         let mut bx = area.right().saturating_sub(total + 1);
+        // Who it is, cut short before the buttons.
+        let room = bx.saturating_sub(who_x + 1);
+        if room > 0 {
+            ui.text(who_x, y, &crate::app::fit(&a.who, room), ui.muted());
+        }
         for (label, cmd) in labels {
             bx = ui.button(bx, y, label, Button::Run(cmd));
         }

@@ -36,8 +36,40 @@ pub(crate) enum AccountCmd {
     /// Use this account: new windows, and `claude` or `codex` in every
     /// TermOS window, follow it.
     Use { cli: String, name: String },
-    /// Sign in to an account (the CLI's own sign-in, in its folder).
-    SignIn { cli: String, name: String },
+    /// Sign in to an account through the CLI's own sign-in, in its folder:
+    /// Claude Code shows a link and takes the code it gives back; Codex
+    /// opens a browser, or shows a device code where it cannot.
+    SignIn {
+        cli: String,
+        name: String,
+        /// Claude Code: an Anthropic Console account instead of a Claude
+        /// subscription.
+        #[arg(long)]
+        console: bool,
+        /// Claude Code: single sign-on.
+        #[arg(long, conflicts_with = "console")]
+        sso: bool,
+        /// Codex: a device code instead of a browser on this machine.
+        #[arg(long)]
+        device: bool,
+    },
+    /// Use an API key for this account instead of a sign-in (asked for, or
+    /// read from standard input). Claude Code's is kept in TermOS's secret
+    /// store and given to it when it starts; Codex keeps its own.
+    Key {
+        cli: String,
+        name: String,
+        /// Stop using the key (Claude Code's is deleted from the store;
+        /// Codex is signed out).
+        #[arg(long)]
+        remove: bool,
+    },
+    /// Who each account is signed in as, asked of the CLIs themselves
+    /// (`claude auth status`, `codex login status`).
+    Status {
+        cli: Option<String>,
+        name: Option<String>,
+    },
     /// Show a label instead of the name.
     Label {
         cli: String,
@@ -90,7 +122,9 @@ fn tool(cli: &str) -> anyhow::Result<Tool> {
     match Tool::from_name(cli) {
         Some(t) => Ok(t),
         None => {
-            bail!("accounts are for `claude` (Claude Code) and `codex` (Codex CLI), not {cli:?}")
+            bail!(
+                "accounts are for `claude` (Claude Code), `codex` (Codex CLI) and `gemini` (Gemini CLI), not {cli:?}"
+            )
         }
     }
 }
@@ -224,11 +258,52 @@ pub(crate) fn account_command(
                 describe(&a)
             );
         }
-        AccountCmd::SignIn { cli, name } => {
+        AccountCmd::SignIn {
+            cli,
+            name,
+            console,
+            sso,
+            device,
+        } => {
             let a = all
                 .get(tool(cli)?, name)
                 .map_err(|e| anyhow::anyhow!("{e}"))?;
-            return sign_in(paths, &a);
+            let how = How {
+                console: *console,
+                sso: *sso,
+                device: *device,
+            };
+            return sign_in_how(paths, &a, how);
+        }
+        AccountCmd::Status { cli, name } => {
+            let tools = match cli {
+                Some(c) => vec![tool(c)?],
+                None => Tool::ALL.to_vec(),
+            };
+            for t in tools {
+                let program = program_of(paths, t);
+                println!("{}", t.title());
+                for a in all.list(t) {
+                    if name.as_ref().is_some_and(|n| *n != a.name) {
+                        continue;
+                    }
+                    let line = match &program {
+                        Some(p) => status_line(&auth_status(p, &a)),
+                        None => "not installed".to_owned(),
+                    };
+                    println!("  {:<12} {line}", a.name);
+                }
+            }
+        }
+        AccountCmd::Key { cli, name, remove } => {
+            let t = tool(cli)?;
+            let a = all.get(t, name).map_err(|e| anyhow::anyhow!("{e}"))?;
+            let config = Config::load(config_path).unwrap_or_default();
+            return if *remove {
+                forget_key(paths, &config, &mut all, &a)
+            } else {
+                set_key(paths, &config, &mut all, &a)
+            };
         }
         AccountCmd::Label { cli, name, label } => {
             let t = tool(cli)?;
@@ -303,34 +378,271 @@ pub(crate) fn account_command(
 
 /// The CLI's own sign-in, in `a`'s folder: Claude Code asks on its first
 /// start; Codex has `codex login`.
+/// Which of a CLI's sign-ins to use.
+#[derive(Debug, Clone, Copy, Default)]
+struct How {
+    console: bool,
+    sso: bool,
+    device: bool,
+}
+
 fn sign_in(paths: &Paths, a: &Account) -> anyhow::Result<ExitCode> {
-    let Some(program) = program_of(paths, a.tool) else {
-        bail!(
-            "{} is not installed (`termos agent install {}`)",
-            a.tool.title(),
-            a.tool.name()
-        );
-    };
+    sign_in_how(paths, a, How::default())
+}
+
+/// The CLI as the account, with credentials inherited from the environment
+/// dropped (the sign-in is the account's own).
+fn as_account(program: &std::path::Path, a: &Account) -> std::process::Command {
     let mut cmd = std::process::Command::new(program);
+    for v in accounts::credential_variables(a.tool) {
+        cmd.env_remove(v);
+    }
     cmd.envs(a.env());
+    cmd
+}
+
+fn installed_program(paths: &Paths, t: Tool) -> anyhow::Result<std::path::PathBuf> {
+    program_of(paths, t).ok_or_else(|| {
+        anyhow::anyhow!(
+            "{} is not installed (`termos agent install {}`)",
+            t.title(),
+            t.name()
+        )
+    })
+}
+
+/// Runs the CLI's own sign-in in the account's folder (D-111): TermOS
+/// never sees the login; the CLI keeps it.
+fn sign_in_how(paths: &Paths, a: &Account, how: How) -> anyhow::Result<ExitCode> {
+    if a.meta.api_key.is_some() {
+        bail!(
+            "{} uses an API key, which comes before a sign-in: `termos account key {} {} --remove` first",
+            describe(a),
+            a.tool.name(),
+            a.name
+        );
+    }
+    let program = installed_program(paths, a.tool)?;
+    let mut cmd = as_account(&program, a);
     match a.tool {
         Tool::Claude => {
+            cmd.args(["auth", "login"]);
+            if how.console {
+                cmd.arg("--console");
+            }
+            if how.sso {
+                cmd.arg("--sso");
+            }
+            cmd.env("DISABLE_AUTOUPDATER", "1");
             println!(
-                "termos: starting Claude Code for {}; it asks you to sign in (or type /login)",
+                "termos: Claude Code's sign-in for {}. Open the link it shows in any browser, sign in, and paste the code you get back here.",
                 describe(a)
             );
-            cmd.env("DISABLE_AUTOUPDATER", "1");
         }
         Tool::Codex => {
             cmd.arg("login");
+            let device = how.device || !accounts::browser_here(&env);
+            if device {
+                cmd.arg("--device-auth");
+                println!(
+                    "termos: Codex's sign-in for {} with a device code: open the link it shows on any device and enter the code. (A ChatGPT workspace may have to allow device codes first.)",
+                    describe(a)
+                );
+            } else {
+                println!(
+                    "termos: Codex's sign-in for {}: it opens your browser (`--device` for a code instead).",
+                    describe(a)
+                );
+            }
+        }
+        Tool::Gemini => {
+            // Its own sign-in starts with the CLI: the Google account
+            // chosen in advance, so it goes straight there.
+            set_gemini_auth(a, "oauth-personal")?;
+            if !accounts::browser_here(&env) {
+                cmd.env("NO_BROWSER", "true");
+            }
+            println!(
+                "termos: Gemini CLI's sign-in for {}: it signs you in with your Google account (where no browser opens, it shows a link and asks for the code you get). Type /quit once it is done.",
+                describe(a)
+            );
         }
     }
     let status = cmd.status()?;
-    Ok(if status.success() {
-        ExitCode::SUCCESS
+    if !status.success() {
+        bail!("the sign-in did not finish ({status})");
+    }
+    println!("termos: {}", status_line(&auth_status(&program, a)));
+    Ok(ExitCode::SUCCESS)
+}
+
+/// What the CLI says about `a`'s sign-in. An account with a key in TermOS's
+/// store is not asked (that would mean reading the key).
+fn auth_status(program: &std::path::Path, a: &Account) -> accounts::AuthStatus {
+    if a.meta.api_key.is_some() {
+        return accounts::AuthStatus {
+            signed_in: true,
+            method: "API key (TermOS's secret store)".into(),
+            who: None,
+        };
+    }
+    let mut cmd = as_account(program, a);
+    match a.tool {
+        Tool::Claude => cmd.args(["auth", "status"]),
+        Tool::Codex => cmd.args(["login", "status"]),
+        // No status command: its folder says.
+        Tool::Gemini => {
+            return accounts::gemini_status(a.home(&env, home().as_deref()).as_deref());
+        }
+    };
+    let Ok(out) = crate::coding_agents::output_within(cmd, std::time::Duration::from_secs(30))
+    else {
+        return accounts::AuthStatus {
+            method: "no answer".into(),
+            ..Default::default()
+        };
+    };
+    let ok = out.status.success();
+    match a.tool {
+        Tool::Claude => accounts::claude_status(&String::from_utf8_lossy(&out.stdout), ok),
+        Tool::Gemini => accounts::AuthStatus::default(),
+        // It reports on standard error.
+        Tool::Codex => accounts::codex_status(
+            &format!(
+                "{}{}",
+                String::from_utf8_lossy(&out.stderr),
+                String::from_utf8_lossy(&out.stdout)
+            ),
+            ok,
+        ),
+    }
+}
+
+fn status_line(s: &accounts::AuthStatus) -> String {
+    if s.method == "no answer" {
+        return "did not answer".into();
+    }
+    s.line()
+}
+
+/// Chooses Gemini CLI's sign-in method in the account's settings.
+fn set_gemini_auth(a: &Account, kind: &str) -> anyhow::Result<()> {
+    let dir = a
+        .home(&env, home().as_deref())
+        .ok_or_else(|| anyhow::anyhow!("cannot find your home folder"))?;
+    let file = dir.join("settings.json");
+    let before = std::fs::read_to_string(&file).unwrap_or_default();
+    let after = termos_devkit::cli_agents::gemini_auth(&before, kind)?;
+    std::fs::create_dir_all(&dir)?;
+    std::fs::write(&file, after)?;
+    Ok(())
+}
+
+/// The key, typed without echo in a terminal or read from standard input.
+fn read_key(a: &Account) -> anyhow::Result<secrecy::SecretString> {
+    use secrecy::ExposeSecret as _;
+    let key = if std::io::stdin().is_terminal() {
+        crate::agents::read_hidden(&format!("API key for {}", describe(a)))?
     } else {
-        ExitCode::FAILURE
-    })
+        let mut s = String::new();
+        std::io::Read::read_to_string(&mut std::io::stdin(), &mut s)?;
+        secrecy::SecretString::from(s.trim().to_owned())
+    };
+    if key.expose_secret().is_empty() {
+        bail!("the key is empty");
+    }
+    Ok(key)
+}
+
+fn set_key(
+    paths: &Paths,
+    config: &Config,
+    all: &mut accounts::Accounts,
+    a: &Account,
+) -> anyhow::Result<ExitCode> {
+    let key = read_key(a)?;
+    match accounts::key_variable(a.tool) {
+        Some(var) => {
+            let name = accounts::key_secret(a.tool, &a.name);
+            let store = crate::agents::open_store(config, paths, true)?;
+            store.set(&name, key)?;
+            let mut meta = a.meta.clone();
+            meta.api_key = Some(name.clone());
+            all.set_meta(a.tool, &a.name, meta)
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
+            println!(
+                "termos: {} now uses this API key ({name} in {}), given to {} as {var} when it starts.",
+                describe(a),
+                store.backend(),
+                a.tool.title()
+            );
+            if a.tool == Tool::Claude {
+                println!(
+                    "Claude Code asks once whether to use it: choose Yes (its suggestion is No)."
+                );
+            }
+            if a.tool == Tool::Gemini {
+                set_gemini_auth(a, "gemini-api-key")?;
+            }
+        }
+        None => {
+            // Codex keeps the key itself, in the account's folder.
+            use secrecy::ExposeSecret as _;
+            use std::io::Write as _;
+            let program = installed_program(paths, a.tool)?;
+            let mut cmd = as_account(&program, a);
+            cmd.args(["login", "--with-api-key"])
+                .stdin(std::process::Stdio::piped());
+            let mut child = cmd.spawn()?;
+            if let Some(mut stdin) = child.stdin.take() {
+                stdin.write_all(key.expose_secret().as_bytes())?;
+                stdin.write_all(b"\n")?;
+            }
+            let status = child.wait()?;
+            if !status.success() {
+                bail!("`codex login --with-api-key` failed ({status})");
+            }
+            println!("termos: {}", status_line(&auth_status(&program, a)));
+        }
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+fn forget_key(
+    paths: &Paths,
+    config: &Config,
+    all: &mut accounts::Accounts,
+    a: &Account,
+) -> anyhow::Result<ExitCode> {
+    match accounts::key_variable(a.tool) {
+        Some(_) => {
+            let Some(name) = a.meta.api_key.clone() else {
+                println!("termos: {} has no API key", describe(a));
+                return Ok(ExitCode::SUCCESS);
+            };
+            let store = crate::agents::open_store(config, paths, true)?;
+            store.remove(&name)?;
+            let mut meta = a.meta.clone();
+            meta.api_key = None;
+            all.set_meta(a.tool, &a.name, meta)
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
+            println!(
+                "termos: {} no longer uses an API key; `termos account sign-in {} {}` signs in.",
+                describe(a),
+                a.tool.name(),
+                a.name
+            );
+        }
+        None => {
+            let program = installed_program(paths, a.tool)?;
+            let status = as_account(&program, a).arg("logout").status()?;
+            if !status.success() {
+                bail!("`codex logout` failed ({status})");
+            }
+            println!("termos: {} is signed out", describe(a));
+        }
+    }
+    Ok(ExitCode::SUCCESS)
 }
 
 #[cfg(test)]
@@ -346,6 +658,7 @@ mod tests {
         assert_eq!(tokens("0").expect("ok"), None);
         assert!(tokens("lots").is_err());
         assert!(tokens("-5").is_err());
-        assert!(tool("gemini").is_err());
+        assert_eq!(tool("gemini").expect("ok"), Tool::Gemini);
+        assert!(tool("aider").is_err());
     }
 }

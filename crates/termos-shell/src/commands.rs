@@ -335,12 +335,17 @@ pub const COMMANDS: &[CommandInfo] = &[
     },
     CommandInfo {
         name: "account.add",
-        description: "Add a Claude Code or Codex account",
+        description: "Add a Claude Code, Codex or Gemini CLI account",
         arg: Some("claude"),
     },
     CommandInfo {
         name: "account.sign-in",
-        description: "Sign in to an account",
+        description: "Sign in to an account (the CLI's own sign-in)",
+        arg: Some("claude work"),
+    },
+    CommandInfo {
+        name: "account.key",
+        description: "Use an API key for a Claude Code, Codex or Gemini CLI account",
         arg: Some("claude work"),
     },
     CommandInfo {
@@ -437,6 +442,7 @@ impl FromStr for Command {
             ("account.use", 2, "claude work"),
             ("account.add", 1, "claude"),
             ("account.sign-in", 2, "claude work"),
+            ("account.key", 2, "claude work"),
             ("account.budget", 2, "claude work"),
             ("account.statusline", 2, "claude on"),
         ] {

@@ -13,6 +13,11 @@
 //!   events carry the session's running totals, so a turn's use is the
 //!   difference.
 //!
+//! - Gemini CLI: `~/.gemini/tmp/<project>/chats/session-*.jsonl` (or under
+//!   `$GEMINI_CLI_HOME/.gemini`), one line per message, a message written
+//!   again once its tokens are known: a `gemini` message with `tokens` and
+//!   `model` is counted once, by its id (D-112).
+//!
 //! These are the CLIs' own files, not documented interfaces: a line this
 //! reader does not understand is skipped. Text fields (prompts, replies,
 //! tool output) are skipped by the deserializer, never held or kept.
@@ -29,6 +34,7 @@ use termos_core::journal::{Event, Record};
 /// The provider name their records carry.
 pub const CLAUDE: &str = "claude-code";
 pub const CODEX: &str = "codex";
+pub const GEMINI: &str = "gemini-cli";
 
 /// The most read from one file at a time (a huge first read is spread
 /// over refreshes).
@@ -39,6 +45,7 @@ const MAX_READ: u64 = 32 * 1024 * 1024;
 pub struct Dirs {
     pub claude: Vec<PathBuf>,
     pub codex: Vec<PathBuf>,
+    pub gemini: Vec<PathBuf>,
 }
 
 impl Dirs {
@@ -60,7 +67,15 @@ impl Dirs {
             .or_else(|| home.map(|h| h.join(".codex")))
             .map(|d| vec![d.join("sessions")])
             .unwrap_or_default();
-        Self { claude, codex }
+        let gemini = set("GEMINI_CLI_HOME")
+            .or_else(|| home.map(Path::to_owned))
+            .map(|d| vec![d.join(".gemini").join("tmp")])
+            .unwrap_or_default();
+        Self {
+            claude,
+            codex,
+            gemini,
+        }
     }
 
     /// As the `default` account of each CLI.
@@ -75,6 +90,11 @@ impl Dirs {
                 cli: "codex",
                 account: "default".into(),
                 dirs: self.codex,
+            },
+            Source {
+                cli: "gemini",
+                account: "default".into(),
+                dirs: self.gemini,
             },
         ]
     }
@@ -91,13 +111,13 @@ pub struct Source {
 }
 
 impl Source {
-    /// An account's logs, from its folder (`CLAUDE_CONFIG_DIR` or
-    /// `CODEX_HOME`).
+    /// An account's logs, from its folder (`CLAUDE_CONFIG_DIR`,
+    /// `CODEX_HOME`, or Gemini CLI's `.gemini`).
     pub fn of(cli: &'static str, account: &str, home: &Path) -> Self {
-        let dir = if cli == "claude" {
-            "projects"
-        } else {
-            "sessions"
+        let dir = match cli {
+            "claude" => "projects",
+            "gemini" => "tmp",
+            _ => "sessions",
         };
         Self {
             cli,
@@ -113,6 +133,7 @@ pub use termos_devkit::accounts::{LimitWindow, Limits};
 enum Kind {
     Claude,
     Codex,
+    Gemini,
 }
 
 /// What is known of one file.
@@ -189,16 +210,21 @@ impl Reader {
     pub fn read_by_source(&mut self, since: i64) -> Vec<(usize, Record)> {
         let mut found = Vec::new();
         for (i, src) in self.sources.iter().enumerate() {
-            let (kind, depth) = if src.cli == "claude" {
-                (Kind::Claude, 3)
-            } else {
-                (Kind::Codex, 4)
+            let (kind, depth) = match src.cli {
+                "claude" => (Kind::Claude, 3),
+                // tmp/<project>/chats/<parent>/<sub-agent>.jsonl
+                "gemini" => (Kind::Gemini, 4),
+                _ => (Kind::Codex, 4),
             };
             for d in &src.dirs {
                 walk(d, depth, &mut found, kind, i);
             }
         }
         for (path, kind, source) in found {
+            // Gemini CLI's folder holds more than its chats.
+            if kind == Kind::Gemini && !path.components().any(|c| c.as_os_str() == "chats") {
+                continue;
+            }
             let Ok(meta) = std::fs::metadata(&path) else {
                 continue;
             };
@@ -239,6 +265,11 @@ impl Reader {
                 match kind {
                     Kind::Claude => {
                         if let Some(r) = claude_line(line, &session, &mut self.seen) {
+                            self.records.push((source, r));
+                        }
+                    }
+                    Kind::Gemini => {
+                        if let Some(r) = gemini_line(line, &session, &mut self.seen) {
                             self.records.push((source, r));
                         }
                     }
@@ -365,6 +396,61 @@ fn claude_line(line: &str, session: &str, seen: &mut HashSet<u64>) -> Option<Rec
             output: u.output_tokens,
             cache_read: u.cache_read_input_tokens,
             cache_write: u.cache_creation_input_tokens,
+            cost: None,
+        },
+    })
+}
+
+#[derive(Deserialize)]
+struct GeminiLine {
+    id: Option<String>,
+    timestamp: Option<String>,
+    #[serde(rename = "type")]
+    kind: Option<String>,
+    tokens: Option<GeminiTokens>,
+    model: Option<String>,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct GeminiTokens {
+    input: u64,
+    output: u64,
+    cached: u64,
+    thoughts: u64,
+}
+
+/// A Gemini CLI message with its tokens: the prompt's uncached part as
+/// input, thinking counted as output (as it is billed), cached reads apart.
+fn gemini_line(line: &str, session: &str, seen: &mut HashSet<u64>) -> Option<Record> {
+    if !line.contains("\"tokens\"") {
+        return None;
+    }
+    let l: GeminiLine = serde_json::from_str(line).ok()?;
+    if l.kind.as_deref() != Some("gemini") {
+        return None;
+    }
+    let t = l.tokens?;
+    let output = t.output + t.thoughts;
+    if t.input + output == 0 {
+        return None;
+    }
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    session.hash(&mut h);
+    l.id?.hash(&mut h);
+    if !seen.insert(h.finish()) {
+        return None;
+    }
+    Some(Record {
+        time: time(l.timestamp.as_deref())?,
+        event: Event::Usage {
+            session: session.to_owned(),
+            provider: GEMINI.into(),
+            model: l.model.unwrap_or_default(),
+            input: t.input.saturating_sub(t.cached),
+            output,
+            cache_read: t.cached,
+            cache_write: 0,
             cost: None,
         },
     })
@@ -538,6 +624,56 @@ fn codex_usage(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn gemini_messages_count_once_when_their_tokens_arrive() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let home = dir.path().join(".gemini");
+        let chats = home.join("tmp/work/chats");
+        std::fs::create_dir_all(&chats).expect("mkdir");
+        // Not a chat: never read.
+        std::fs::write(home.join("tmp/work/logs.jsonl"), "{\"tokens\":{}}\n").expect("write");
+        let lines = [
+            r#"{"sessionId":"s1","projectHash":"h","startTime":"2026-11-05T10:00:00.000Z"}"#,
+            r#"{"id":"u1","timestamp":"2026-11-05T10:00:01.000Z","type":"user","content":"PRIVATE PROMPT"}"#,
+            r#"{"id":"g1","timestamp":"2026-11-05T10:00:02.000Z","type":"gemini","content":"PRIVATE REPLY","model":"fixture-gemini"}"#,
+            r#"{"id":"g1","timestamp":"2026-11-05T10:00:02.000Z","type":"gemini","content":"PRIVATE REPLY","model":"fixture-gemini","tokens":{"input":1200,"output":80,"cached":1000,"thoughts":20,"tool":0,"total":1300}}"#,
+            r#"{"$set":{"lastUpdated":"2026-11-05T10:00:03.000Z"}}"#,
+            r#"{"id":"g1","timestamp":"2026-11-05T10:00:02.000Z","type":"gemini","model":"fixture-gemini","tokens":{"input":1200,"output":80,"cached":1000,"thoughts":20,"tool":0,"total":1300}}"#,
+        ];
+        std::fs::write(
+            chats.join("session-2026-11-05T10-00-s1.jsonl"),
+            lines.join("\n") + "\n",
+        )
+        .expect("write");
+        let mut r = Reader::with_sources(vec![Source::of("gemini", "default", &home)]);
+        let got = r.read(0);
+        assert_eq!(got.len(), 1, "{got:?}");
+        let Event::Usage {
+            provider,
+            model,
+            input,
+            output,
+            cache_read,
+            ..
+        } = &got[0].event
+        else {
+            panic!("usage");
+        };
+        assert_eq!(
+            (
+                provider.as_str(),
+                model.as_str(),
+                *input,
+                *output,
+                *cache_read
+            ),
+            (GEMINI, "fixture-gemini", 200, 100, 1000)
+        );
+        assert!(!format!("{got:?}").contains("PRIVATE"));
+        let d = Dirs::find(&|k| (k == "GEMINI_CLI_HOME").then(|| "/g".to_owned()), None);
+        assert_eq!(d.gemini, [PathBuf::from("/g/.gemini/tmp")]);
+    }
 
     // Fixtures written from the formats as they are known (2026); they are
     // not copied from anyone's logs. The text fields hold markers that

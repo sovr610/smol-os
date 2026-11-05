@@ -85,6 +85,8 @@ impl Programs for StandIns {
                 "STAND_IN_ACCOUNT".into(),
                 account.unwrap_or("default").into(),
             )],
+            unset: Vec::new(),
+            secrets: Default::default(),
             account: account.map(str::to_owned),
         })
     }

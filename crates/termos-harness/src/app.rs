@@ -1084,6 +1084,8 @@ mod tests {
                 BackendKind::Claude => Ok(Program {
                     path: "/opt/claude".into(),
                     env: Vec::new(),
+                    unset: Vec::new(),
+                    secrets: Default::default(),
                     account: None,
                 }),
                 _ => Err("not installed".into()),

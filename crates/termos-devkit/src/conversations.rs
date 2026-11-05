@@ -12,6 +12,11 @@
 //!   whose first line (`session_meta`) names the folder and the id; it
 //!   finds one by id (`codex resume <id>`), looking through `sessions/`.
 //!
+//! - Gemini CLI keeps `<.gemini>/tmp/<project>/chats/session-…-<id>.jsonl`,
+//!   the project's folder named in `projects.json` (with a
+//!   `.project_root` file beside its chats), whose first line names the
+//!   session; it resumes one by id (`gemini --resume <id>`).
+//!
 //! The files are copied, never moved: the first account keeps its copy.
 //! These are the CLIs' own formats, not interfaces; only the names and
 //! the first line are read.
@@ -93,6 +98,26 @@ pub fn latest(tool: Tool, home: &Path, cwd: &Path) -> Option<Conversation> {
                 relative,
             })
         }
+        Tool::Gemini => {
+            let slug = gemini_project(home, cwd)?;
+            let path = newest_jsonl(&home.join("tmp").join(&slug).join("chats"))
+                .into_iter()
+                .find(|p| {
+                    p.file_name()
+                        .is_some_and(|n| n.to_string_lossy().starts_with("session-"))
+                })?;
+            let id = first_line(&path)?
+                .get("sessionId")
+                .and_then(|i| i.as_str())?
+                .to_owned();
+            let relative = path.strip_prefix(home).ok()?.to_owned();
+            Some(Conversation {
+                tool,
+                id,
+                path,
+                relative,
+            })
+        }
         Tool::Codex => {
             let mut files = Vec::new();
             walk(&home.join("sessions"), 4, &mut files);
@@ -135,6 +160,82 @@ fn walk(dir: &Path, depth: u32, out: &mut Vec<PathBuf>) {
     }
 }
 
+fn first_line(path: &Path) -> Option<serde_json::Value> {
+    let file = std::fs::File::open(path).ok()?;
+    let mut line = String::new();
+    io::BufReader::new(file).read_line(&mut line).ok()?;
+    serde_json::from_str(&line).ok()
+}
+
+/// Gemini CLI's `projects.json`: folders and their project names.
+fn gemini_projects(home: &Path) -> serde_json::Map<String, serde_json::Value> {
+    std::fs::read_to_string(home.join("projects.json"))
+        .ok()
+        .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+        .and_then(|v| v.get("projects").and_then(|p| p.as_object()).cloned())
+        .unwrap_or_default()
+}
+
+/// Gemini CLI's project name for `cwd`.
+fn gemini_project(home: &Path, cwd: &Path) -> Option<String> {
+    let projects = gemini_projects(home);
+    let real = cwd.canonicalize().unwrap_or_else(|_| cwd.to_owned());
+    [cwd, real.as_path()].iter().find_map(|p| {
+        projects
+            .get(&p.display().to_string())
+            .and_then(|v| v.as_str())
+            .map(str::to_owned)
+    })
+}
+
+/// Copies a Gemini CLI session into another account's folder, under the
+/// project name that account uses for the folder (recording one when it
+/// has none).
+fn carry_gemini(c: &Conversation, to: &Path) -> io::Result<Conversation> {
+    let project_dir = c.path.parent().and_then(Path::parent);
+    let slug = project_dir
+        .and_then(Path::file_name)
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "project".into());
+    let root = project_dir
+        .and_then(|d| std::fs::read_to_string(d.join(".project_root")).ok())
+        .map(|t| t.trim().to_owned())
+        .filter(|t| !t.is_empty());
+    let mut projects = gemini_projects(to);
+    let slug = match &root {
+        Some(r) => match projects.get(r).and_then(|v| v.as_str()) {
+            Some(theirs) => theirs.to_owned(),
+            None => {
+                projects.insert(r.clone(), serde_json::Value::String(slug.clone()));
+                let body = serde_json::json!({ "projects": projects });
+                std::fs::create_dir_all(to)?;
+                std::fs::write(
+                    to.join("projects.json"),
+                    serde_json::to_string_pretty(&body).map_err(io::Error::other)?,
+                )?;
+                slug
+            }
+        },
+        None => slug,
+    };
+    let dir = to.join("tmp").join(&slug);
+    std::fs::create_dir_all(dir.join("chats"))?;
+    if let Some(r) = &root
+        && !dir.join(".project_root").exists()
+    {
+        std::fs::write(dir.join(".project_root"), r)?;
+    }
+    let name = c.path.file_name().unwrap_or_default();
+    let dest = dir.join("chats").join(name);
+    std::fs::copy(&c.path, &dest)?;
+    Ok(Conversation {
+        tool: c.tool,
+        id: c.id.clone(),
+        relative: dest.strip_prefix(to).unwrap_or(&dest).to_owned(),
+        path: dest,
+    })
+}
+
 /// A Codex session's id and folder, from its first line.
 fn codex_meta(path: &Path) -> Option<(String, String)> {
     let file = std::fs::File::open(path).ok()?;
@@ -168,6 +269,9 @@ fn copy_tree(src: &Path, dst: &Path) -> io::Result<()> {
 /// Copies `c` (from the account folder `from`) into the account folder
 /// `to`; the copy, to resume.
 pub fn carry(c: &Conversation, from: &Path, to: &Path) -> io::Result<Conversation> {
+    if c.tool == Tool::Gemini {
+        return carry_gemini(c, to);
+    }
     let dest = to.join(&c.relative);
     copy_tree(&c.path, &dest)?;
     if c.tool == Tool::Claude {
@@ -194,12 +298,53 @@ pub fn resume_args(c: &Conversation) -> Vec<String> {
     match c.tool {
         Tool::Claude => vec!["--resume".into(), c.path.display().to_string()],
         Tool::Codex => vec!["resume".into(), c.id.clone()],
+        Tool::Gemini => vec!["--resume".into(), c.id.clone()],
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_gemini_session_moves_to_the_other_accounts_project() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (a, b) = (dir.path().join("a/.gemini"), dir.path().join("b/.gemini"));
+        let work = dir.path().join("work");
+        std::fs::create_dir_all(&work).expect("mkdir");
+        let w = work.display().to_string();
+        let chats = a.join("tmp/work/chats");
+        std::fs::create_dir_all(&chats).expect("mkdir");
+        std::fs::write(
+            a.join("projects.json"),
+            format!("{{\"projects\":{{{:?}:\"work\"}}}}", w),
+        )
+        .expect("write");
+        std::fs::write(a.join("tmp/work/.project_root"), &w).expect("write");
+        std::fs::write(
+            chats.join("session-2026-11-05T10-00-abcd1234.jsonl"),
+            "{\"sessionId\":\"abcd1234-0000\",\"projectHash\":\"x\"}\n{\"id\":\"m1\",\"type\":\"user\"}\n",
+        )
+        .expect("write");
+        let c = latest(Tool::Gemini, &a, &work).expect("found");
+        assert_eq!(c.id, "abcd1234-0000");
+        // The other account already calls the folder something else.
+        std::fs::create_dir_all(&b).expect("mkdir");
+        std::fs::write(
+            b.join("projects.json"),
+            format!("{{\"projects\":{{{:?}:\"work-1\"}}}}", w),
+        )
+        .expect("write");
+        let copied = carry(&c, &a, &b).expect("carry");
+        assert!(copied.path.starts_with(b.join("tmp/work-1/chats")));
+        assert!(c.path.exists(), "copied, not moved");
+        assert_eq!(latest(Tool::Gemini, &b, &work).expect("there").id, c.id);
+        assert_eq!(resume_args(&copied), ["--resume", "abcd1234-0000"]);
+        // One that has never seen the folder learns its name.
+        let fresh = dir.path().join("c/.gemini");
+        carry(&c, &a, &fresh).expect("carry");
+        assert_eq!(latest(Tool::Gemini, &fresh, &work).expect("there").id, c.id);
+    }
 
     #[test]
     fn claude_names_folders_after_the_working_directory() {

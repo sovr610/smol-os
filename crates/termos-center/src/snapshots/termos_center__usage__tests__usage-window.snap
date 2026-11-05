@@ -5,16 +5,16 @@ expression: screen
  Usage and accounts                                                                ↻ 12:00 [Refresh]
 ────────────────────────────────────────────────────────────────────────────────────────────────────
  Claude Code                                                       [Add account]
- ▸ ● Work (Max) (work)             signed in as fixture@example.com      [Open] [Sign in] [Budget]
+ ▸ ● Work (Max) (work)             signed in as fixture@examp… [Open] [Sign in] [API key] [Budget]
      5 hours  █████████████▌·················· 42% · resets 14:00
      week     ██▋······················· 10% · resets Nov 6 12:00
      today 1.2M · 7 days 8.4M · cache reads 120.0M · fixture-model 80%  ▁▂▃ ▅█▄
-     default                                                       [Use] [Open] [Sign in] [Budget]
+     default                                             [Use] [Open] [Sign in] [API key] [Budget]
      5 hours  ██▎·················· 220.0k of 2.0M · resets 16:00
      today 0 · 7 days 2.1M
 
  Codex CLI                                                                           [Add account]
-   ● default  plan pro             signed in                                      [Open] [Sign in]
+   ● default  plan pro             signed in                            [Open] [Sign in] [API key]
      5 hours  ████████████▊··················· 40% · resets 13:00
      today 0 · 7 days 0
 

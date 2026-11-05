@@ -358,7 +358,7 @@ fn home() -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
-fn load_config(path: &Path) -> anyhow::Result<Config> {
+pub(crate) fn load_config(path: &Path) -> anyhow::Result<Config> {
     Config::load(path).map_err(|e| anyhow::anyhow!("{e}"))
 }
 
@@ -398,7 +398,11 @@ pub(crate) fn read_hidden(prompt: &str) -> anyhow::Result<SecretString> {
 
 /// Opens the configured store, unlocking (or creating) the secrets file
 /// when `need_open` says so.
-fn open_store(config: &Config, paths: &Paths, need_open: bool) -> anyhow::Result<SecretStore> {
+pub(crate) fn open_store(
+    config: &Config,
+    paths: &Paths,
+    need_open: bool,
+) -> anyhow::Result<SecretStore> {
     let store = SecretStore::open(config.secrets.store, &paths.data_dir);
     if store.backend() == Backend::File && need_open {
         if store.file_exists() {
@@ -715,7 +719,7 @@ fn external_command(
     // Claude Code and Codex: TermOS's own install, or offered when there
     // is none (D-094).
     let mut preset = preset.clone();
-    let mut env = Vec::new();
+    let mut chosen = None;
     if let Some(program) = preset.command.first()
         && let Some(launch) =
             crate::coding_agents::resolve_external(paths, config, program, account)?
@@ -727,7 +731,7 @@ fn external_command(
             )?);
         }
         preset.command[0] = launch.program.display().to_string();
-        env = launch.env;
+        chosen = Some(launch);
     }
     let preset = &preset;
     let here = std::env::current_dir()?;
@@ -750,7 +754,10 @@ fn external_command(
         );
     }
     let mut cmd = std::process::Command::new(&argv[0]);
-    cmd.args(&argv[1..]).envs(env);
+    cmd.args(&argv[1..]);
+    if let Some(launch) = &chosen {
+        launch.apply(&mut cmd);
+    }
     match cmd.status() {
         Ok(s) => Ok(if s.success() {
             ExitCode::SUCCESS

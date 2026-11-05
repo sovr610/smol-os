@@ -345,10 +345,10 @@ pub fn account_sources(
                 Source {
                     cli: tool.name(),
                     account: a.name.clone(),
-                    dirs: if tool == Tool::Claude {
-                        d.claude
-                    } else {
-                        d.codex
+                    dirs: match tool {
+                        Tool::Claude => d.claude,
+                        Tool::Codex => d.codex,
+                        Tool::Gemini => d.gemini,
                     },
                 }
             } else {
@@ -576,7 +576,8 @@ mod tests {
             [
                 ("claude", "default", false),
                 ("claude", "work", true),
-                ("codex", "default", true)
+                ("codex", "default", true),
+                ("gemini", "default", true)
             ]
         );
         assert_eq!(u.accounts[0].today.tokens, 42);

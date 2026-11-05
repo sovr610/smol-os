@@ -32,6 +32,7 @@ pub mod log;
 pub mod models_endpoint;
 pub mod paths;
 pub mod proto;
+pub mod secret_env;
 pub mod transport;
 pub mod watch;
 pub mod widgets;

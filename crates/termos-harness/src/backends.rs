@@ -38,6 +38,11 @@ use crate::route::Choice;
 pub struct Program {
     pub path: PathBuf,
     pub env: Vec<(String, String)>,
+    /// Variables removed from the inherited environment (credentials that
+    /// would override the account's own sign-in, D-112).
+    pub unset: Vec<String>,
+    /// The account's API key, when it uses one.
+    pub secrets: termos_core::secret_env::SecretEnv,
     /// The account it runs as, for showing (`work`; `None`: the default).
     pub account: Option<String>,
 }
@@ -247,10 +252,14 @@ async fn run_cli(
     cmd.args(args)
         .current_dir(&a.project)
         .envs(program.env.iter().map(|(k, v)| (k, v)))
+        .envs(program.secrets.exposed())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
+    for v in &program.unset {
+        cmd.env_remove(v);
+    }
     // Its own process group (Unix) or job (Windows, started suspended
     // until it is in the job), so stopping it stops what it started.
     #[cfg(unix)]

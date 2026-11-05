@@ -468,3 +468,252 @@ fn the_skills_follow_the_clis_and_their_accounts() {
     assert!(shown.contains("tos run -p"), "{shown}");
     run(env, &["kill-server"]);
 }
+
+/// Sign-in and API keys (M11d, D-112): the CLIs' own sign-in commands run
+/// in the account's folder with inherited credentials dropped; Codex keeps
+/// its key itself; Claude Code's goes to TermOS's secrets file and is
+/// named, never shown.
+#[test]
+fn sign_in_and_keys_go_through_the_clis_own_commands() {
+    use termos_ai::secrets::{Backend, SecretStore};
+    let bin = tempfile::tempdir().expect("tempdir");
+    let calls = bin.path().join("calls");
+    let write = |name: &str, body: String| {
+        let p = bin.path().join(name);
+        std::fs::write(&p, body).expect("write");
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+    };
+    let c = calls.display();
+    write(
+        "claude",
+        format!(
+            "#!/bin/sh\ncase \"$1 $2\" in\n\
+             \"auth login\") echo \"claude ${{CLAUDE_CONFIG_DIR:-default}} auth login $3 key=${{ANTHROPIC_API_KEY:-none}} oauth=${{CLAUDE_CODE_OAUTH_TOKEN:-none}}\" >> '{c}'; echo 'Login successful.'; exit 0;;\n\
+             \"auth status\") echo '{{\"loggedIn\":true,\"authMethod\":\"claude.ai\",\"email\":\"work@example.com\",\"subscriptionType\":\"max\"}}'; exit 0;;\n\
+             esac\necho \"claude $*\" >> '{c}'\n"
+        ),
+    );
+    write(
+        "codex",
+        format!(
+            "#!/bin/sh\ncase \"$1 $2\" in\n\
+             \"login --with-api-key\") read k; echo \"codex ${{CODEX_HOME:-default}} with-api-key $k\" >> '{c}'; echo 'API key saved.' >&2; exit 0;;\n\
+             \"login --device-auth\") echo \"codex ${{CODEX_HOME:-default}} device-auth\" >> '{c}'; exit 0;;\n\
+             \"login status\") echo 'API key configured - sk-proj-***abcde' >&2; exit 0;;\n\
+             \"logout \") echo \"codex ${{CODEX_HOME:-default}} logout\" >> '{c}'; exit 0;;\n\
+             esac\necho \"codex $*\" >> '{c}'\n"
+        ),
+    );
+    let path = std::env::join_paths(std::iter::once(bin.path().to_owned()).chain(
+        std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
+    ))
+    .expect("PATH");
+    let env = common::Env::with_vars(
+        "[secrets]\nstore = \"file\"\n",
+        vec![
+            ("PATH", path.into()),
+            // Inherited credentials that must not reach a TermOS account.
+            ("ANTHROPIC_API_KEY", "sk-ant-inherited".into()),
+            ("CLAUDE_CODE_OAUTH_TOKEN", "inherited-token".into()),
+        ],
+    );
+    let data = env.paths().data_dir;
+    let log = || std::fs::read_to_string(&calls).unwrap_or_default();
+
+    run(&env, &["account", "add", "claude", "work", "--no-sign-in"]);
+    let out = run(&env, &["account", "sign-in", "claude", "work"]);
+    assert!(
+        out.contains("signed in: Claude Max · work@example.com"),
+        "{out}"
+    );
+    let work = data.join("accounts/claude/work");
+    assert!(
+        log().contains(&format!(
+            "claude {} auth login  key=none oauth=none",
+            work.display()
+        )),
+        "{}",
+        log()
+    );
+    run(&env, &["account", "sign-in", "claude", "work", "--console"]);
+    assert!(log().contains("auth login --console"), "{}", log());
+
+    run(&env, &["account", "add", "codex", "work", "--no-sign-in"]);
+    let codex_work = data.join("accounts/codex/work");
+    run(&env, &["account", "sign-in", "codex", "work", "--device"]);
+    assert!(log().contains(&format!("codex {} device-auth", codex_work.display())));
+    // Codex's key: piped to `codex login --with-api-key`, and only named.
+    let mut cmd = env.command_in(env.path(), &["account", "key", "codex", "work"]);
+    cmd.stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped());
+    let mut child = cmd.spawn().expect("spawn");
+    {
+        use std::io::Write as _;
+        let mut stdin = child.stdin.take().expect("stdin");
+        stdin.write_all(b"sk-proj-fixture\n").expect("write");
+    }
+    let out = child.wait_with_output().expect("wait");
+    let shown = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "{shown}");
+    assert!(
+        shown.contains("signed in: API key") && !shown.contains("sk-proj"),
+        "{shown}"
+    );
+    assert!(log().contains(&format!(
+        "codex {} with-api-key sk-proj-fixture",
+        codex_work.display()
+    )));
+    let status = run(&env, &["account", "status", "codex"]);
+    assert!(
+        status.contains("work         signed in: API key"),
+        "{status}"
+    );
+
+    // Claude Code's key: typed into a terminal, kept in the secrets file.
+    let store = SecretStore::with_backend(Backend::File, termos_ai::secrets::file_path(&data))
+        .with_work_factor(4);
+    store
+        .create(secrecy::SecretString::from("pass phrase".to_owned()))
+        .expect("create");
+    let t = common::Termos::start_in(std::sync::Arc::clone(&env));
+    t.wait_ready();
+    let k = t.client(&["account", "key", "claude", "work"]);
+    k.wait_for("the key prompt", std::time::Duration::from_secs(20), |s| {
+        s.contains("API key for Claude Code · work")
+    });
+    k.send(b"sk-ant-fixture-key\r");
+    k.wait_for(
+        "the passphrase prompt",
+        std::time::Duration::from_secs(20),
+        |s| s.contains("Passphrase for"),
+    );
+    k.send(b"pass phrase\r");
+    let screen = k.wait_for("the key stored", std::time::Duration::from_secs(20), |s| {
+        s.contains("now uses this API key")
+    });
+    assert!(screen.contains("account.claude.work") && screen.contains("choose Yes"));
+    assert!(!screen.contains("sk-ant-fixture-key"), "{screen}");
+    let reopened = SecretStore::with_backend(Backend::File, termos_ai::secrets::file_path(&data));
+    reopened
+        .unlock(secrecy::SecretString::from("pass phrase".to_owned()))
+        .expect("unlock");
+    {
+        use secrecy::ExposeSecret as _;
+        assert_eq!(
+            reopened
+                .get("account.claude.work")
+                .expect("kept")
+                .expose_secret(),
+            "sk-ant-fixture-key"
+        );
+    }
+    let index = std::fs::read_to_string(data.join("accounts/accounts.toml")).expect("index");
+    assert!(
+        index.contains("api-key = \"account.claude.work\""),
+        "{index}"
+    );
+    assert!(!index.contains("sk-ant"), "{index}");
+    let status = run(&env, &["account", "status", "claude", "work"]);
+    assert!(
+        status.contains("API key (TermOS's secret store)"),
+        "{status}"
+    );
+    // A sign-in would be shadowed by the key: refused until it is removed.
+    let refused = env.run(&["account", "sign-in", "claude", "work"]);
+    assert!(!refused.status.success());
+    assert!(String::from_utf8_lossy(&refused.stderr).contains("--remove"));
+}
+
+/// Gemini CLI's accounts (M11d, D-112): a home of its own (`.gemini` in
+/// it), settings copied with TermOS's server registered, file logins, and
+/// its sign-in chosen in advance.
+#[test]
+fn gemini_accounts_have_homes_of_their_own() {
+    let bin = tempfile::tempdir().expect("tempdir");
+    let calls = bin.path().join("calls");
+    let gemini = bin.path().join("gemini");
+    std::fs::write(
+        &gemini,
+        format!(
+            "#!/bin/sh\necho \"gemini home=${{GEMINI_CLI_HOME:-default}} files=${{GEMINI_FORCE_FILE_STORAGE:-no}} browser=${{NO_BROWSER:-yes}} key=${{GEMINI_API_KEY:-none}} $*\" >> '{}'\n",
+            calls.display()
+        ),
+    )
+    .expect("write");
+    std::fs::set_permissions(&gemini, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+    let path = std::env::join_paths(std::iter::once(bin.path().to_owned()).chain(
+        std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
+    ))
+    .expect("PATH");
+    let env = common::Env::with_vars(
+        "",
+        vec![
+            ("PATH", path.into()),
+            ("GEMINI_API_KEY", "inherited-key".into()),
+        ],
+    );
+    let user = env.path().join(".gemini");
+    std::fs::create_dir_all(&user).expect("mkdir");
+    std::fs::write(
+        user.join("settings.json"),
+        "{\"ui\":{\"theme\":\"Dracula\"}}",
+    )
+    .expect("write");
+    std::fs::write(user.join("GEMINI.md"), "be brief").expect("write");
+    std::fs::write(user.join("oauth_creds.json"), "LOGIN").expect("write");
+
+    let added = run(&env, &["account", "add", "gemini", "work", "--no-sign-in"]);
+    assert!(added.contains("Gemini CLI · work"), "{added}");
+    let data = env.paths().data_dir;
+    let home = data.join("accounts/gemini/work");
+    let settings = std::fs::read_to_string(home.join(".gemini/settings.json")).expect("settings");
+    assert!(settings.contains("Dracula"), "copied: {settings}");
+    assert!(
+        settings.contains("\"termos\""),
+        "TermOS's server: {settings}"
+    );
+    assert!(
+        home.join(".gemini/GEMINI.md").exists(),
+        "instructions shared"
+    );
+    assert!(
+        !home.join(".gemini/oauth_creds.json").exists(),
+        "never the login"
+    );
+    assert!(
+        home.join(".agents").exists(),
+        "Agent Skills from the user's home"
+    );
+    let status = run(&env, &["account", "status", "gemini"]);
+    assert!(
+        status.contains("default      signed in: Google account"),
+        "{status}"
+    );
+    assert!(status.contains("work         not signed in"), "{status}");
+
+    // Its sign-in: the Google account chosen in advance, in its home.
+    run(&env, &["account", "sign-in", "gemini", "work"]);
+    let settings = std::fs::read_to_string(home.join(".gemini/settings.json")).expect("settings");
+    assert!(
+        settings.contains("\"selectedType\": \"oauth-personal\""),
+        "{settings}"
+    );
+    let log = std::fs::read_to_string(&calls).expect("calls");
+    assert!(
+        log.contains(&format!(
+            "gemini home={} files=true browser=true key=none",
+            home.display()
+        )),
+        "inherited key dropped, no browser here: {log}"
+    );
+    std::fs::write(
+        home.join(".gemini/google_accounts.json"),
+        "{\"active\":\"work@example.com\",\"old\":[]}",
+    )
+    .expect("write");
+    let status = run(&env, &["account", "status", "gemini", "work"]);
+    assert!(
+        status.contains("signed in: Google account · work@example.com"),
+        "{status}"
+    );
+}

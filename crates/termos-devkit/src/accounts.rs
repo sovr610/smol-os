@@ -56,6 +56,10 @@ pub struct Meta {
     /// Tokens the user allows in 7 days.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub budget_week: Option<u64>,
+    /// The account signs in with an API key kept in TermOS's secret store
+    /// under this name, given to the CLI when it starts (Claude Code; D-112).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub api_key: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -65,6 +69,185 @@ struct Index {
     active: BTreeMap<String, String>,
     /// Accounts by CLI, then name (`default` may be listed for its label).
     accounts: BTreeMap<String, BTreeMap<String, Meta>>,
+}
+
+/// Variables that would override an account's own sign-in when inherited
+/// from the environment; the shims drop them for TermOS's accounts and for
+/// an account that uses an API key (D-112). Only the ones each CLI signs in
+/// with: a project's own `OPENAI_API_KEY`, say, is left alone.
+pub fn credential_variables(tool: Tool) -> &'static [&'static str] {
+    match tool {
+        Tool::Claude => &[
+            "ANTHROPIC_API_KEY",
+            "ANTHROPIC_AUTH_TOKEN",
+            "CLAUDE_CODE_OAUTH_TOKEN",
+            "CLAUDE_CODE_OAUTH_REFRESH_TOKEN",
+            "CLAUDE_CODE_USE_BEDROCK",
+            "CLAUDE_CODE_USE_VERTEX",
+            "CLAUDE_CODE_USE_FOUNDRY",
+        ],
+        Tool::Codex => &["CODEX_API_KEY", "CODEX_ACCESS_TOKEN"],
+        Tool::Gemini => &[
+            "GEMINI_API_KEY",
+            "GOOGLE_API_KEY",
+            "GOOGLE_GENAI_USE_VERTEXAI",
+            "GOOGLE_GENAI_USE_GCA",
+            "GOOGLE_GEMINI_BASE_URL",
+        ],
+    }
+}
+
+/// The variable an account's API key is given to the CLI in; `None` for
+/// Codex, which keeps the key itself (`codex login --with-api-key`).
+pub fn key_variable(tool: Tool) -> Option<&'static str> {
+    match tool {
+        Tool::Claude => Some("ANTHROPIC_API_KEY"),
+        Tool::Codex => None,
+        Tool::Gemini => Some("GEMINI_API_KEY"),
+    }
+}
+
+/// The secret an account's API key is kept under: `account.claude.work`.
+pub fn key_secret(tool: Tool, name: &str) -> String {
+    format!("account.{}.{name}", tool.name())
+}
+
+/// Whether a sign-in here can open a browser: not over SSH, and on Linux
+/// not without a graphical session (the bare-metal console, a server).
+/// Where it cannot, the CLIs' code and device sign-ins are used.
+pub fn browser_here(get: &dyn Fn(&str) -> Option<String>) -> bool {
+    let set = |k: &str| get(k).is_some_and(|v| !v.is_empty());
+    if set("SSH_CONNECTION") || set("SSH_TTY") {
+        return false;
+    }
+    if cfg!(target_os = "linux") {
+        return set("DISPLAY") || set("WAYLAND_DISPLAY");
+    }
+    true
+}
+
+/// What a CLI says about an account's sign-in, from its own status command
+/// (`claude auth status`, `codex login status`), never from its login files
+/// (D-112).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct AuthStatus {
+    pub signed_in: bool,
+    /// How: "Claude Max", "Anthropic Console", "API key", "ChatGPT".
+    pub method: String,
+    /// The email or organisation it is signed in as.
+    pub who: Option<String>,
+}
+
+impl AuthStatus {
+    /// [`AuthStatus::line`], or nothing when not signed in (where a
+    /// missing file cannot tell).
+    pub fn line_or_empty(&self) -> String {
+        if self.signed_in {
+            self.line()
+        } else {
+            String::new()
+        }
+    }
+
+    /// "signed in: Claude Max · you@example.com", "not signed in".
+    pub fn line(&self) -> String {
+        if !self.signed_in {
+            return "not signed in".to_owned();
+        }
+        let mut parts = vec![format!("signed in: {}", self.method)];
+        parts.extend(self.who.clone());
+        parts.join(" · ")
+    }
+}
+
+/// `claude auth status`'s JSON (and whether it exited with 0).
+pub fn claude_status(json: &str, ok: bool) -> AuthStatus {
+    let v: serde_json::Value = serde_json::from_str(json.trim()).unwrap_or_default();
+    let text = |k: &str| {
+        v.get(k)
+            .and_then(|x| x.as_str())
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned)
+    };
+    let signed_in = v
+        .get("loggedIn")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(ok);
+    let method = match text("authMethod").as_deref() {
+        Some("claude.ai") => match text("subscriptionType") {
+            Some(plan) => {
+                let mut c = plan.chars();
+                let plan: String = c
+                    .next()
+                    .map(|f| f.to_uppercase().chain(c).collect())
+                    .unwrap_or_default();
+                format!("Claude {plan}")
+            }
+            None => "Claude subscription".to_owned(),
+        },
+        Some("api_key" | "api_key_helper") => "API key".to_owned(),
+        Some("oauth_token") => "OAuth token".to_owned(),
+        Some("third_party") => text("apiProvider").unwrap_or_else(|| "a cloud provider".into()),
+        Some(other) if other != "none" => other.to_owned(),
+        _ => String::new(),
+    };
+    AuthStatus {
+        signed_in,
+        method,
+        who: text("email").or_else(|| text("orgName")),
+    }
+}
+
+/// `codex login status`'s report (it writes to standard error) and whether
+/// it exited with 0. A configured key is only named, never echoed.
+pub fn codex_status(text: &str, ok: bool) -> AuthStatus {
+    let line = text
+        .lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty())
+        .unwrap_or("");
+    if !ok || line.starts_with("Not logged in") || line.starts_with("Error") {
+        return AuthStatus::default();
+    }
+    let method = if line.starts_with("API key") {
+        "API key".to_owned()
+    } else if let Some(how) = line.strip_prefix("Logged in using ") {
+        how.trim_start_matches("an ")
+            .trim_start_matches("a ")
+            .to_owned()
+    } else {
+        "signed in".to_owned()
+    };
+    AuthStatus {
+        signed_in: true,
+        method,
+        who: None,
+    }
+}
+
+/// Gemini CLI's folder in its home.
+pub const GEMINI_DIR: &str = ".gemini";
+
+/// Gemini CLI's sign-in, from its folder (`.gemini`): it has no status
+/// command. `google_accounts.json` names the Google account and holds no
+/// token; the login files are only checked for, never read.
+pub fn gemini_status(dir: Option<&Path>) -> AuthStatus {
+    let Some(dir) = dir else {
+        return AuthStatus::default();
+    };
+    let who = std::fs::read_to_string(dir.join("google_accounts.json"))
+        .ok()
+        .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+        .and_then(|v| v.get("active").and_then(|a| a.as_str()).map(str::to_owned))
+        .filter(|e| !e.is_empty());
+    let login = ["oauth_creds.json", "gemini-credentials.json"]
+        .iter()
+        .any(|f| dir.join(f).exists());
+    AuthStatus {
+        signed_in: login || who.is_some(),
+        method: "Google account".into(),
+        who,
+    }
 }
 
 /// One account.
@@ -93,21 +276,27 @@ impl Account {
         match tool {
             Tool::Claude => "CLAUDE_CONFIG_DIR",
             Tool::Codex => "CODEX_HOME",
+            // A home folder: Gemini CLI keeps its files in `.gemini` in it.
+            Tool::Gemini => "GEMINI_CLI_HOME",
         }
     }
 
     /// The environment the CLI runs with for this account (empty for
     /// `default`, which the CLI finds itself).
     pub fn env(&self) -> Vec<(String, String)> {
-        self.dir
-            .iter()
-            .map(|d| {
-                (
-                    Self::variable(self.tool).to_owned(),
-                    d.display().to_string(),
-                )
-            })
-            .collect()
+        let Some(d) = &self.dir else {
+            return Vec::new();
+        };
+        let mut env = vec![(
+            Self::variable(self.tool).to_owned(),
+            d.display().to_string(),
+        )];
+        if self.tool == Tool::Gemini {
+            // Its keychain entries are the same for every home: logins in
+            // the account's folder instead (D-112).
+            env.push(("GEMINI_FORCE_FILE_STORAGE".to_owned(), "true".to_owned()));
+        }
+        env
     }
 
     /// The folder the CLI uses for this account: its own, or for
@@ -119,7 +308,10 @@ impl Account {
         home: Option<&Path>,
     ) -> Option<PathBuf> {
         if let Some(d) = &self.dir {
-            return Some(d.clone());
+            return Some(match self.tool {
+                Tool::Gemini => d.join(GEMINI_DIR),
+                _ => d.clone(),
+            });
         }
         default_home(self.tool, get, home)
     }
@@ -165,6 +357,7 @@ impl Account {
                     String::new()
                 }
             }
+            Tool::Gemini => gemini_status(self.home(get, home).as_deref()).line_or_empty(),
         }
     }
 
@@ -193,10 +386,15 @@ pub fn default_home(
     get(Account::variable(tool))
         .filter(|v| !v.is_empty())
         .map(PathBuf::from)
+        .map(|d| match tool {
+            Tool::Gemini => d.join(GEMINI_DIR),
+            _ => d,
+        })
         .or_else(|| {
             home.map(|h| match tool {
                 Tool::Claude => h.join(".claude"),
                 Tool::Codex => h.join(".codex"),
+                Tool::Gemini => h.join(GEMINI_DIR),
             })
         })
 }
@@ -232,6 +430,11 @@ const CLAUDE_SHARED: &[&str] = &[
 /// edits it per account).
 const CODEX_SHARED: &[&str] = &["AGENTS.md", "prompts", "skills"];
 const CODEX_COPIED: &[&str] = &["config.toml"];
+/// Gemini CLI's: its instructions, commands, skills and extensions are
+/// shared; its settings are the account's own (TermOS's server, the
+/// sign-in method).
+const GEMINI_SHARED: &[&str] = &["GEMINI.md", "commands", "skills", "extensions"];
+const GEMINI_COPIED: &[&str] = &["settings.json"];
 
 /// The accounts of every CLI.
 #[derive(Debug)]
@@ -370,8 +573,28 @@ impl Accounts {
         }
         let dir = self.dir_of(tool, name);
         create_private_dir(&dir)?;
+        // Gemini CLI's files go in `.gemini` in the account's folder.
+        let into = match tool {
+            Tool::Gemini => {
+                let g = dir.join(GEMINI_DIR);
+                create_private_dir(&g)?;
+                g
+            }
+            _ => dir.clone(),
+        };
         if let Some(from) = default_home.filter(|d| d.is_dir()) {
-            share(tool, from, &dir)?;
+            share(tool, from, &into)?;
+            // Agent Skills (D-098) are read from `~/.agents`, which for
+            // Gemini CLI is in its home: the user's, linked.
+            if tool == Tool::Gemini
+                && let Some(user_home) = from.parent()
+            {
+                let agents = user_home.join(".agents");
+                std::fs::create_dir_all(&agents)?;
+                if !dir.join(".agents").exists() {
+                    link_or_copy(&agents, &dir.join(".agents"))?;
+                }
+            }
         }
         self.index
             .accounts
@@ -452,6 +675,7 @@ fn share(tool: Tool, from: &Path, to: &Path) -> io::Result<()> {
     let (linked, copied): (&[&str], &[&str]) = match tool {
         Tool::Claude => (CLAUDE_SHARED, &[]),
         Tool::Codex => (CODEX_SHARED, CODEX_COPIED),
+        Tool::Gemini => (GEMINI_SHARED, GEMINI_COPIED),
     };
     for name in linked {
         let src = from.join(name);
@@ -647,6 +871,46 @@ pub fn without_statusline(settings: &mut serde_json::Value, previous: Option<&st
 mod tests {
     use super::*;
 
+    #[test]
+    fn sign_in_status_from_the_clis_own_commands() {
+        let max = r#"{"loggedIn":true,"authMethod":"claude.ai","apiProvider":"firstParty","email":"me@example.com","orgName":"Me","subscriptionType":"max","configDirectory":"/a"}"#;
+        assert_eq!(
+            claude_status(max, true).line(),
+            "signed in: Claude Max · me@example.com"
+        );
+        let out = r#"{"loggedIn":false,"authMethod":"none"}"#;
+        assert_eq!(claude_status(out, false).line(), "not signed in");
+        assert_eq!(claude_status("not json", false).line(), "not signed in");
+        let key = r#"{"loggedIn":true,"authMethod":"api_key"}"#;
+        assert_eq!(claude_status(key, true).line(), "signed in: API key");
+        assert_eq!(
+            codex_status("Logged in using ChatGPT\n", true).line(),
+            "signed in: ChatGPT"
+        );
+        let masked = "API key configured - sk-proj-***abcde\nAuthentication is checked when you send a request.\n";
+        let s = codex_status(masked, true);
+        assert_eq!(s.line(), "signed in: API key");
+        assert!(!s.line().contains("sk-"));
+        assert_eq!(
+            codex_status("Not logged in\n", false).line(),
+            "not signed in"
+        );
+        assert_eq!(
+            codex_status("Logged in using personal access token", true).method,
+            "personal access token"
+        );
+        let get = |k: &str| match k {
+            "SSH_CONNECTION" => Some("1.2.3.4 5 6.7.8.9 22".to_owned()),
+            _ => Some(":0".to_owned()),
+        };
+        assert!(!browser_here(&get));
+        let key = key_secret(Tool::Claude, "work");
+        assert_eq!(key, "account.claude.work");
+        assert!(termos_core::config::agents::valid_secret_name(&key));
+        assert!(credential_variables(Tool::Claude).contains(&"ANTHROPIC_API_KEY"));
+        assert!(!credential_variables(Tool::Codex).contains(&"OPENAI_API_KEY"));
+    }
+
     fn no_env(_: &str) -> Option<String> {
         None
     }
@@ -709,6 +973,7 @@ mod tests {
                 label: Some("Work".into()),
                 budget_5h: Some(2_000_000),
                 budget_week: None,
+                api_key: None,
             },
         )
         .expect("meta");

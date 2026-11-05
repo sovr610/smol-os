@@ -77,6 +77,8 @@ impl Programs for ShimPrograms {
         Ok(Program {
             path: l.program,
             env: l.env,
+            unset: l.unset,
+            secrets: l.secrets,
             account: l.account.filter(|a| !a.is_default()).map(|a| a.title()),
         })
     }

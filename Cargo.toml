@@ -45,6 +45,8 @@ base64 = "0.23.1"
 flate2 = "1.1.10"
 # The dev rootfs: unpacking the image's layer (D-110).
 tar = { version = "0.4.46", default-features = false }
+# Gemini CLI's release bundle (D-112).
+zip = { version = "9.3.0", default-features = false, features = ["deflate-flate2"] }
 bitflags = "2.13.2"
 clap = { version = "4.6.7", features = ["derive"] }
 compact_str = "0.10.0"

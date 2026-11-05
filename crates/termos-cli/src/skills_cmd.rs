@@ -36,7 +36,8 @@ pub(crate) enum SkillsCmd {
     Show { name: String },
 }
 
-/// The other CLIs that read `~/.agents/skills`.
+/// The other CLIs that read `~/.agents/skills` (Gemini CLI's accounts link
+/// it into their homes, D-112).
 const SHARED_CLIS: &[&str] = &["gemini", "opencode"];
 
 /// Whether a CLI that reads each kind of folder is here: Claude Code's,
@@ -45,6 +46,7 @@ fn present(paths: &Paths) -> (bool, bool) {
     let claude = program_of(paths, Tool::Claude).is_some();
     let path = std::env::var_os("PATH");
     let shared = program_of(paths, Tool::Codex).is_some()
+        || program_of(paths, Tool::Gemini).is_some()
         || SHARED_CLIS
             .iter()
             .any(|n| termos_devkit::mise::which(n, path.as_ref()).is_some());

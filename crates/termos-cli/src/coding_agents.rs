@@ -62,7 +62,18 @@ pub(crate) fn install_tool(
         say(&format!("{} {} is installed", tool.title(), have.version));
         return Ok(have.clone());
     }
-    let got = ca::install(&Curl, &paths.data_dir, &release, &mut |m| say(m))?;
+    let node = if tool == Tool::Gemini {
+        Some(gemini_node(paths)?)
+    } else {
+        None
+    };
+    let got = ca::install_with(
+        &Curl,
+        &paths.data_dir,
+        &release,
+        node.as_deref(),
+        &mut |m| say(m),
+    )?;
     crate::shim::ensure(paths);
     say(&format!(
         "installed {} {} in {}",
@@ -89,6 +100,45 @@ pub(crate) fn install_tool(
         }
     }
     Ok(got)
+}
+
+/// The Node.js that runs Gemini CLI: installed by mise (not made your
+/// default), its program found with `mise where`.
+fn gemini_node(paths: &Paths) -> anyhow::Result<PathBuf> {
+    let mise = termos_devkit::mise::ensure(&paths.data_dir, &mut |m| say(m))?;
+    say(&format!(
+        "installing Node.js ({}) with mise…",
+        ca::GEMINI_NODE
+    ));
+    let status = std::process::Command::new(&mise.path)
+        .args(["install", ca::GEMINI_NODE])
+        .status()
+        .context("cannot run mise")?;
+    if !status.success() {
+        bail!("mise could not install Node.js ({status})");
+    }
+    let out = std::process::Command::new(&mise.path)
+        .args(["where", ca::GEMINI_NODE])
+        .output()
+        .context("cannot run mise")?;
+    let dir = PathBuf::from(String::from_utf8_lossy(&out.stdout).trim());
+    let node = if cfg!(windows) {
+        dir.join("node.exe")
+    } else {
+        dir.join("bin").join("node")
+    };
+    if !out.status.success() || !node.is_file() {
+        bail!(
+            "mise installed Node.js, but {} is not there",
+            node.display()
+        );
+    }
+    Ok(node)
+}
+
+/// TermOS's data folder, as this process finds it.
+fn termos_data() -> PathBuf {
+    Paths::detect().data_dir
 }
 
 /// The accounts of every CLI (D-097).
@@ -138,7 +188,7 @@ const REGISTER_LIMIT: std::time::Duration = std::time::Duration::from_secs(60);
 
 /// Runs `cmd` without input, for at most `limit`: a CLI that waits for
 /// something (a prompt it cannot show) does not hold TermOS up.
-fn output_within(
+pub(crate) fn output_within(
     mut cmd: std::process::Command,
     limit: std::time::Duration,
 ) -> anyhow::Result<std::process::Output> {
@@ -192,13 +242,19 @@ pub(crate) fn register_tool(program: &Path, account: &Account) -> anyhow::Result
             let dir = account
                 .home(&env, home().as_deref())
                 .context("cannot find your home folder")?;
-            let file = dir.join("config.toml");
+            let file = dir.join(settings_file(tool));
             let before = match std::fs::read_to_string(&file) {
                 Ok(t) => t,
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
                 Err(e) => return Err(e).with_context(|| format!("cannot read {}", file.display())),
             };
-            let after = ca::codex_config(&before, &termos)?;
+            let after = if tool == Tool::Codex {
+                ca::codex_config(&before, &termos)?
+            } else {
+                // TermOS's own install updates through TermOS.
+                let managed = program.starts_with(ca::dir(&termos_data(), tool));
+                ca::gemini_settings(&before, &termos, managed)?
+            };
             std::fs::create_dir_all(&dir)?;
             write_replacing(&file, &after)?;
             Ok(format!(
@@ -299,16 +355,21 @@ pub(crate) fn unregister_tool(paths: &Paths, account: &Account) -> anyhow::Resul
                     ));
                 }
             }
-            Tool::Codex => {
+            Tool::Codex | Tool::Gemini => {
                 let Some(dir) = account.home(&env, home().as_deref()) else {
                     return Ok(());
                 };
-                let file = dir.join("config.toml");
+                let file = dir.join(settings_file(tool));
                 let Ok(before) = std::fs::read_to_string(&file) else {
                     return Ok(());
                 };
                 if ca::registered(tool, &before) {
-                    write_replacing(&file, &ca::codex_config_without(&before)?)?;
+                    let after = if tool == Tool::Codex {
+                        ca::codex_config_without(&before)?
+                    } else {
+                        ca::gemini_settings_without(&before)?
+                    };
+                    write_replacing(&file, &after)?;
                     say(&format!(
                         "removed TermOS's MCP server from {} ({})",
                         describe(account),
@@ -326,7 +387,9 @@ pub(crate) fn is_registered(account: &Account) -> Option<bool> {
     let tool = account.tool;
     let file = match tool {
         Tool::Claude => account.claude_settings(&env, home().as_deref())?,
-        Tool::Codex => account.home(&env, home().as_deref())?.join("config.toml"),
+        Tool::Codex | Tool::Gemini => account
+            .home(&env, home().as_deref())?
+            .join(settings_file(tool)),
     };
     let text = std::fs::read_to_string(file).ok()?;
     Some(ca::registered(tool, &text))
@@ -472,6 +535,18 @@ fn tool_supported(tool: Tool, p: Platform) -> bool {
     match tool {
         Tool::Claude => p.claude().is_some(),
         Tool::Codex => p.codex().is_some(),
+        Tool::Gemini => {
+            matches!(p.os, "linux" | "macos" | "windows") && matches!(p.arch, "x86_64" | "aarch64")
+        }
+    }
+}
+
+/// The settings file TermOS edits in a CLI's folder (Claude Code's is
+/// changed through `claude mcp`).
+fn settings_file(tool: Tool) -> &'static str {
+    match tool {
+        Tool::Codex => "config.toml",
+        _ => "settings.json",
     }
 }
 
@@ -722,6 +797,7 @@ pub(crate) fn resolve_external(
             match tool {
                 Tool::Claude => "Anthropic",
                 Tool::Codex => "OpenAI's GitHub releases",
+                Tool::Gemini => "Google's GitHub releases, run by Node.js from mise",
             }
         );
         let _ = std::io::stdout().flush();
@@ -785,6 +861,7 @@ mod tests {
             parse("codex@0.46.0").expect("ok"),
             (Tool::Codex, Some("0.46.0"))
         );
-        assert!(parse("gemini").is_err());
+        assert_eq!(parse("gemini").expect("ok"), (Tool::Gemini, None));
+        assert!(parse("aider").is_err());
     }
 }

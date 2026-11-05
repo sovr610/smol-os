@@ -29,6 +29,13 @@ pub const CLAUDE_RELEASES: &str = "https://downloads.claude.ai/claude-code-relea
 pub const CODEX_LATEST: &str = "https://api.github.com/repos/openai/codex/releases/latest";
 /// A tagged Codex release (`…/tags/rust-v0.46.0`).
 pub const CODEX_TAGS: &str = "https://api.github.com/repos/openai/codex/releases/tags";
+/// Gemini CLI's releases on GitHub (D-112).
+pub const GEMINI_LATEST: &str =
+    "https://api.github.com/repos/google-gemini/gemini-cli/releases/latest";
+pub const GEMINI_TAGS: &str = "https://api.github.com/repos/google-gemini/gemini-cli/releases/tags";
+/// The Node.js major version, from mise, that runs Gemini CLI (which needs
+/// 20 or newer).
+pub const GEMINI_NODE: &str = "node@22";
 
 #[derive(Debug, thiserror::Error)]
 pub enum AgentError {
@@ -53,16 +60,20 @@ pub enum AgentError {
 pub enum Tool {
     Claude,
     Codex,
+    /// Gemini CLI (M11d, D-112): Google's JavaScript bundle, run by the
+    /// Node.js mise installs.
+    Gemini,
 }
 
 impl Tool {
-    pub const ALL: [Tool; 2] = [Tool::Claude, Tool::Codex];
+    pub const ALL: [Tool; 3] = [Tool::Claude, Tool::Codex, Tool::Gemini];
 
     /// The name in commands (`termos agent install claude`).
     pub fn name(self) -> &'static str {
         match self {
             Tool::Claude => "claude",
             Tool::Codex => "codex",
+            Tool::Gemini => "gemini",
         }
     }
 
@@ -70,12 +81,18 @@ impl Tool {
         match self {
             Tool::Claude => "Claude Code",
             Tool::Codex => "Codex CLI",
+            Tool::Gemini => "Gemini CLI",
         }
     }
 
-    /// The program's file name.
+    /// The program's file name: Gemini CLI's is TermOS's launcher, a
+    /// script (`gemini.cmd` on Windows).
     pub fn program(self) -> String {
-        exe(self.name())
+        match self {
+            Tool::Gemini if cfg!(windows) => "gemini.cmd".to_owned(),
+            Tool::Gemini => "gemini".to_owned(),
+            _ => exe(self.name()),
+        }
     }
 
     pub fn from_name(name: &str) -> Option<Tool> {
@@ -348,6 +365,23 @@ pub fn codex_release(
         .ok_or_else(|| {
             AgentError::Unsupported("Codex CLI", format!("{triple}, not in release {tag}"))
         })?;
+    let (url, sha256) = github_download(asset)?;
+    Ok(Release {
+        tool: Tool::Codex,
+        version,
+        url,
+        sha256,
+        packing,
+        inner: Some(format!(
+            "codex-{triple}{}",
+            if platform.os == "windows" { ".exe" } else { "" }
+        )),
+    })
+}
+
+/// A GitHub release asset's HTTPS download and the SHA-256 GitHub gives
+/// for it (an asset without one is refused).
+fn github_download(asset: &Value) -> Result<(String, String), AgentError> {
     let url = asset
         .get("browser_download_url")
         .and_then(Value::as_str)
@@ -369,17 +403,77 @@ pub fn codex_release(
         })?
         .to_ascii_lowercase();
     check_hex(&sha256)?;
+    Ok((url, sha256))
+}
+
+/// Gemini CLI's release: its JavaScript bundle (`gemini-cli-bundle.zip`),
+/// the same on every computer, which Node.js runs (D-112).
+pub fn gemini_release(
+    fetch: &dyn Fetch,
+    platform: Platform,
+    version: Option<&str>,
+) -> Result<Release, AgentError> {
+    if !matches!(platform.os, "linux" | "macos" | "windows")
+        || !matches!(platform.arch, "x86_64" | "aarch64")
+    {
+        return Err(AgentError::Unsupported("Gemini CLI", platform.describe()));
+    }
+    let url = match version {
+        Some(v) => {
+            check_version(v)?;
+            format!("{GEMINI_TAGS}/v{v}")
+        }
+        None => GEMINI_LATEST.to_owned(),
+    };
+    let release: Value = serde_json::from_str(&fetch.text(&url)?)
+        .map_err(|e| AgentError::Release(format!("the release: {e}")))?;
+    let tag = release
+        .get("tag_name")
+        .and_then(Value::as_str)
+        .ok_or_else(|| AgentError::Release("no tag_name".into()))?;
+    let version = tag.trim_start_matches('v').to_owned();
+    check_version(&version)?;
+    let asset = release
+        .get("assets")
+        .and_then(Value::as_array)
+        .and_then(|a| {
+            a.iter()
+                .find(|a| a.get("name").and_then(Value::as_str) == Some("gemini-cli-bundle.zip"))
+        })
+        .ok_or_else(|| {
+            AgentError::Release(format!("release {tag} has no gemini-cli-bundle.zip"))
+        })?;
+    let (url, sha256) = github_download(asset)?;
     Ok(Release {
-        tool: Tool::Codex,
+        tool: Tool::Gemini,
         version,
         url,
         sha256,
-        packing,
-        inner: Some(format!(
-            "codex-{triple}{}",
-            if platform.os == "windows" { ".exe" } else { "" }
-        )),
+        packing: Packing::Zip,
+        inner: Some(GEMINI_SCRIPT.to_owned()),
     })
+}
+
+/// The bundle's entry point.
+pub const GEMINI_SCRIPT: &str = "gemini.js";
+
+/// TermOS's launcher for Gemini CLI: the Node.js mise installed, running
+/// the bundle (paths quoted for the shell, or for `cmd`).
+pub fn gemini_launcher(node: &Path, script: &Path) -> String {
+    if cfg!(windows) {
+        format!(
+            "@echo off\r\nrem Gemini CLI, installed by TermOS: Node.js from mise runs its bundle.\r\n\"{}\" \"{}\" %*\r\n",
+            node.display(),
+            script.display()
+        )
+    } else {
+        let q = |p: &Path| format!("'{}'", p.display().to_string().replace('\'', "'\\''"));
+        format!(
+            "#!/bin/sh\n# Gemini CLI, installed by TermOS: Node.js from mise runs its bundle.\nexec {} {} \"$@\"\n",
+            q(node),
+            q(script)
+        )
+    }
 }
 
 /// A version is a plain name: it becomes part of URLs and a folder.
@@ -414,6 +508,7 @@ pub fn release(
     match tool {
         Tool::Claude => claude_release(fetch, platform, version),
         Tool::Codex => codex_release(fetch, platform, version),
+        Tool::Gemini => gemini_release(fetch, platform, version),
     }
 }
 
@@ -464,7 +559,23 @@ pub fn install(
     release: &Release,
     say: &mut dyn FnMut(&str),
 ) -> Result<Installed, AgentError> {
+    install_with(fetch, data_dir, release, None, say)
+}
+
+/// [`install`], with the Node.js that runs Gemini CLI.
+pub fn install_with(
+    fetch: &dyn Fetch,
+    data_dir: &Path,
+    release: &Release,
+    node: Option<&Path>,
+    say: &mut dyn FnMut(&str),
+) -> Result<Installed, AgentError> {
     let tool = release.tool;
+    if tool == Tool::Gemini && node.is_none() {
+        return Err(AgentError::Setup(
+            "Gemini CLI needs Node.js (from mise)".into(),
+        ));
+    }
     let root = dir(data_dir, tool);
     std::fs::create_dir_all(&root)?;
     let work = root.join(format!(".{}.partial", release.version));
@@ -490,10 +601,29 @@ pub fn install(
     }
     say("checksum verified");
     let program = work.join(tool.program());
+    let target = root.join(&release.version);
     match release.packing {
+        Packing::Zip if tool == Tool::Gemini => {
+            unpack_zip(&download, &work)?;
+            let _ = std::fs::remove_file(&download);
+            let Some(script) = find_file(&work, GEMINI_SCRIPT, 3) else {
+                let _ = std::fs::remove_dir_all(&work);
+                return Err(AgentError::Release(format!(
+                    "the bundle has no {GEMINI_SCRIPT}; nothing was installed"
+                )));
+            };
+            // Where it will be once the folder is in place.
+            let relative = script.strip_prefix(&work).unwrap_or(&script).to_owned();
+            let node = node.unwrap_or(Path::new("node"));
+            std::fs::write(&program, gemini_launcher(node, &target.join(relative)))?;
+        }
         Packing::Plain => std::fs::rename(&download, &program)?,
         Packing::TarGz | Packing::Zip => {
-            unpack(&download, &work)?;
+            if release.packing == Packing::Zip {
+                unpack_zip(&download, &work)?;
+            } else {
+                unpack(&download, &work)?;
+            }
             let _ = std::fs::remove_file(&download);
             // The program by its exact name; helpers beside it stay.
             let inner = release.inner.as_deref().unwrap_or(tool.name());
@@ -513,7 +643,6 @@ pub fn install(
         use std::os::unix::fs::PermissionsExt as _;
         std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755))?;
     }
-    let target = root.join(&release.version);
     let _ = std::fs::remove_dir_all(&target);
     std::fs::rename(&work, &target)?;
     std::fs::write(root.join("current"), format!("{}\n", release.version))?;
@@ -555,6 +684,16 @@ fn find_file(dir: &Path, name: &str, depth: u32) -> Option<PathBuf> {
                 })
                 .flatten()
         })
+}
+
+/// Unpacks a zip file (names that would leave `into` are refused by the
+/// `zip` crate).
+fn unpack_zip(archive: &Path, into: &Path) -> Result<(), AgentError> {
+    let file = std::fs::File::open(archive)?;
+    let mut zip = zip::ZipArchive::new(file)
+        .map_err(|e| AgentError::Setup(format!("cannot read the download: {e}")))?;
+    zip.extract(into)
+        .map_err(|e| AgentError::Setup(format!("cannot unpack the download: {e}")))
 }
 
 fn unpack(archive: &Path, into: &Path) -> Result<(), AgentError> {
@@ -617,7 +756,7 @@ pub fn mcp_register(tool: Tool, program: &Path, termos: &Path) -> Option<Vec<Vec
                 "serve".into(),
             ],
         ]),
-        Tool::Codex => None,
+        Tool::Codex | Tool::Gemini => None,
     }
 }
 
@@ -698,7 +837,83 @@ pub fn registered(tool: Tool, settings: &str) -> bool {
             .parse::<toml_edit::DocumentMut>()
             .ok()
             .is_some_and(|d| d.get("mcp_servers").and_then(|s| s.get("termos")).is_some()),
+        Tool::Gemini => serde_json::from_str::<Value>(settings)
+            .ok()
+            .is_some_and(|v| v.pointer("/mcpServers/termos").is_some()),
     }
+}
+
+/// Gemini CLI's `settings.json` as an object (empty when there is none).
+fn gemini_object(existing: &str) -> Result<serde_json::Map<String, Value>, AgentError> {
+    if existing.trim().is_empty() {
+        return Ok(serde_json::Map::new());
+    }
+    match serde_json::from_str::<Value>(existing) {
+        Ok(Value::Object(m)) => Ok(m),
+        _ => Err(AgentError::Setup(
+            "Gemini CLI's settings.json does not parse as plain JSON (comments?); not changed"
+                .into(),
+        )),
+    }
+}
+
+fn object_at<'a>(
+    m: &'a mut serde_json::Map<String, Value>,
+    key: &str,
+) -> &'a mut serde_json::Map<String, Value> {
+    let v = m
+        .entry(key.to_owned())
+        .or_insert_with(|| Value::Object(serde_json::Map::new()));
+    if !v.is_object() {
+        *v = Value::Object(serde_json::Map::new());
+    }
+    v.as_object_mut().expect("made an object above")
+}
+
+/// Gemini CLI's `settings.json` with `mcpServers.termos` running `termos
+/// mcp serve` (the rest kept). With `managed` (TermOS's install), its own
+/// updates and update notices are turned off: `termos agent update`
+/// updates it.
+pub fn gemini_settings(existing: &str, termos: &Path, managed: bool) -> Result<String, AgentError> {
+    let mut m = gemini_object(existing)?;
+    object_at(&mut m, "mcpServers").insert(
+        "termos".into(),
+        serde_json::json!({
+            "command": termos.display().to_string(),
+            "args": ["mcp", "serve"],
+        }),
+    );
+    if managed {
+        let general = object_at(&mut m, "general");
+        general.insert("enableAutoUpdate".into(), Value::Bool(false));
+        general.insert("enableAutoUpdateNotification".into(), Value::Bool(false));
+    }
+    serde_json::to_string_pretty(&Value::Object(m))
+        .map(|t| t + "\n")
+        .map_err(|e| AgentError::Setup(e.to_string()))
+}
+
+/// Gemini CLI's `settings.json` without `mcpServers.termos`.
+pub fn gemini_settings_without(existing: &str) -> Result<String, AgentError> {
+    let mut m = gemini_object(existing)?;
+    if let Some(Value::Object(servers)) = m.get_mut("mcpServers") {
+        servers.remove("termos");
+    }
+    serde_json::to_string_pretty(&Value::Object(m))
+        .map(|t| t + "\n")
+        .map_err(|e| AgentError::Setup(e.to_string()))
+}
+
+/// Gemini CLI's `settings.json` signing in with `kind` (`oauth-personal`:
+/// a Google account; `gemini-api-key`: `GEMINI_API_KEY`), so it does not
+/// ask which.
+pub fn gemini_auth(existing: &str, kind: &str) -> Result<String, AgentError> {
+    let mut m = gemini_object(existing)?;
+    let security = object_at(&mut m, "security");
+    object_at(security, "auth").insert("selectedType".into(), Value::String(kind.into()));
+    serde_json::to_string_pretty(&Value::Object(m))
+        .map(|t| t + "\n")
+        .map_err(|e| AgentError::Setup(e.to_string()))
 }
 
 /// Codex's `config.toml` without `[mcp_servers.termos]`.
@@ -794,7 +1009,135 @@ mod tests {
             Some("aarch64-pc-windows-msvc")
         );
         assert_eq!(Tool::from_name("codex"), Some(Tool::Codex));
-        assert_eq!(Tool::from_name("gemini"), None);
+        assert_eq!(Tool::from_name("gemini"), Some(Tool::Gemini));
+        assert_eq!(Tool::from_name("aider"), None);
+    }
+
+    /// A zip of `files` (name, contents).
+    #[cfg(unix)]
+    fn zip_of(files: &[(&str, &[u8])]) -> Vec<u8> {
+        use std::io::Write as _;
+        let mut out = std::io::Cursor::new(Vec::new());
+        {
+            let mut z = zip::ZipWriter::new(&mut out);
+            for (name, body) in files {
+                z.start_file(*name, zip::write::SimpleFileOptions::default())
+                    .expect("start");
+                z.write_all(body).expect("write");
+            }
+            z.finish().expect("finish");
+        }
+        out.into_inner()
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn gemini_is_its_bundle_run_by_node() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let bytes = zip_of(&[
+            ("bundle/gemini.js", b"console.log('fixture')\n"),
+            ("bundle/policies/read-only.toml", b"x\n"),
+        ]);
+        let url = "https://github.com/google-gemini/gemini-cli/releases/download/v0.67.0/gemini-cli-bundle.zip";
+        let release_json = |digest: Option<String>| {
+            let mut asset = serde_json::json!({
+                "name": "gemini-cli-bundle.zip",
+                "browser_download_url": url,
+            });
+            if let Some(d) = digest {
+                asset["digest"] = serde_json::Value::String(d);
+            }
+            serde_json::json!({"tag_name": "v0.67.0", "assets": [asset]}).to_string()
+        };
+        let f = Fixture {
+            texts: BTreeMap::from([(
+                GEMINI_LATEST.to_owned(),
+                release_json(Some(format!("sha256:{}", sha(&bytes)))),
+            )]),
+            files: BTreeMap::from([(url.to_owned(), bytes.clone())]),
+            asked: Mutex::default(),
+        };
+        let r = latest(&f, Tool::Gemini, LINUX).expect("release");
+        assert_eq!((r.version.as_str(), r.packing), ("0.67.0", Packing::Zip));
+        let data = dir.path().join("data");
+        // No Node.js: nothing is installed.
+        assert!(install(&f, &data, &r, &mut |_| {}).is_err());
+        // A stand-in Node.js that says what it was asked to run.
+        let node = dir.path().join("node it");
+        std::fs::write(&node, b"#!/bin/sh\necho \"node $*\"\n").expect("write");
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::set_permissions(&node, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        }
+        let got = install_with(&f, &data, &r, Some(&node), &mut |_| {}).expect("installed");
+        assert!(got.path.ends_with("0.67.0/gemini"));
+        assert_eq!(
+            installed(&data, Tool::Gemini).map(|i| i.version).as_deref(),
+            Some("0.67.0")
+        );
+        let script = dir
+            .path()
+            .join("data/agents/gemini/0.67.0/bundle/gemini.js");
+        assert!(
+            script.is_file()
+                && dir
+                    .path()
+                    .join("data/agents/gemini/0.67.0/bundle/policies/read-only.toml")
+                    .is_file()
+        );
+        let out = (0..50)
+            .find_map(
+                |_| match Command::new(&got.path).arg("--version").output() {
+                    Err(e) if e.kind() == io::ErrorKind::ExecutableFileBusy => {
+                        std::thread::sleep(std::time::Duration::from_millis(20));
+                        None
+                    }
+                    other => Some(other),
+                },
+            )
+            .expect("settled")
+            .expect("runs");
+        assert_eq!(
+            String::from_utf8_lossy(&out.stdout).trim(),
+            format!("node {} --version", script.display())
+        );
+        // A bundle without its digest is refused.
+        let f = Fixture {
+            texts: BTreeMap::from([(GEMINI_LATEST.to_owned(), release_json(None))]),
+            files: BTreeMap::new(),
+            asked: Mutex::default(),
+        };
+        let err = latest(&f, Tool::Gemini, LINUX).expect_err("no digest");
+        assert!(err.to_string().contains("no SHA-256"), "{err}");
+    }
+
+    #[test]
+    fn gemini_settings_get_termos_and_their_sign_in_method() {
+        let before = r#"{"theme":"Dracula","mcpServers":{"mine":{"command":"x"}}}"#;
+        let after = gemini_settings(before, Path::new("/t/termos"), true).expect("edit");
+        let v: Value = serde_json::from_str(&after).expect("json");
+        assert_eq!(v["theme"], "Dracula");
+        assert_eq!(v["mcpServers"]["mine"]["command"], "x");
+        assert_eq!(v["mcpServers"]["termos"]["command"], "/t/termos");
+        assert_eq!(
+            v["mcpServers"]["termos"]["args"],
+            serde_json::json!(["mcp", "serve"])
+        );
+        assert_eq!(v["general"]["enableAutoUpdate"], false);
+        assert!(registered(Tool::Gemini, &after));
+        let removed = gemini_settings_without(&after).expect("remove");
+        assert!(!registered(Tool::Gemini, &removed));
+        assert!(removed.contains("mine"));
+        let keyed = gemini_auth("", "gemini-api-key").expect("auth");
+        assert!(
+            keyed.contains("\"selectedType\": \"gemini-api-key\""),
+            "{keyed}"
+        );
+        assert!(gemini_settings("// a comment\n{}", Path::new("/t"), false).is_err());
+        assert!(
+            gemini_launcher(Path::new("/n/o'de"), Path::new("/b/gemini.js"))
+                .contains("'/n/o'\\''de'")
+        );
     }
 
     fn claude_fixture(binary: &[u8], checksum: &str) -> Fixture {
